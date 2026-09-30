@@ -1,0 +1,61 @@
+/* 派活工作台界面变量：全应用唯一定义颜色、字号、间距、圆角、阴影的地方。规范见 docs/ui-spec.md。 */
+:root {
+  /* 中性色 */
+  --bg: #f5f5f2; --panel: #ffffff; --sunk: #efefeb; --line: #e3e3dd; --line-strong: #d3d3cb;
+  --text: #1c1c1a; --muted: #69695f; --faint: #a0a097;
+  /* 强调与语义色（每种配一个浅底） */
+  --accent: #2f6bd8; --accent-soft: #e6eefc;
+  --ok: #2c8a55; --ok-soft: #e3f2e8; --warn: #b3760a; --warn-soft: #fbf0d9; --bad: #c9423a; --bad-soft: #fbe6e3;
+  /* 状态色：状态圆点、看板列的主色、在跑卡片的进度条，只能从这里取 */
+  --state-queued: var(--faint); --state-running: var(--accent); --state-quiet: var(--warn);
+  --state-decide: #64748b; --state-failed: var(--bad); --state-lost: var(--faint); --state-done: var(--ok);
+  /* 批次色板：同一批的卡片顶部色带，按派出顺序轮换 */
+  --batch-1: #7c5cff; --batch-2: #0f9d9a; --batch-3: #d9468f; --batch-4: #4f5bd5; --batch-5: #6f8f1f; --batch-6: #8a5a9e;
+  /* 选手字母圆标（图标缺失时的兜底） */
+  --brand-codex: #4b5cf0; --brand-grok: #111111; --brand-cursor: #111111; --brand-claude: #d97757; --brand-other: #888888;
+  --on-brand: #ffffff; --on-accent: #ffffff; --icon-ring: transparent;
+  /* 开关：关着时的轨道、滑块 */
+  --switch-off: #cfcfc7; --knob: #ffffff;
+  /* 留言标记：卡片角上的小圆点，表示有主人的留言等负责人回复 */
+  --reply: #e0367a;
+  /* 分段切换：底槽、当前段浮起的滑块 */
+  --seg-track: #e8e8e3; --seg-thumb: #ffffff;
+  --scrim: rgba(20, 20, 15, .38);
+  --focus: var(--accent);
+  /* 字号 */
+  --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 18px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  /* 间距 */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-7: 32px;
+  /* 圆角 */
+  --r-sm: 4px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-pill: 999px;
+  /* 阴影 */
+  --shadow-card: 0 1px 2px rgba(20, 20, 15, .05), 0 1px 1px rgba(20, 20, 15, .03);
+  --shadow-modal: 0 24px 64px rgba(0, 0, 0, .22);
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, .14), 0 1px 3px rgba(0, 0, 0, .08);
+  --chart: #2f6bd8; /* 单系列图表的柱色（dataviz 校验：浅色底通过亮度带与 3:1 对比） */
+  /* 尺寸：图标、批次色带 */
+  --icon-sm: 16px; --icon-md: 22px; --icon-lg: 28px; --band: 3px; --hairline: 1px;
+  /* 标题栏给 macOS 左上角三个按钮留的宽度 */
+  --titlebar-inset: 86px;
+  /* 顶栏（就是标题栏）高度；额度圆环直径。红黄绿按钮的位置在 app/main/index.ts，随顶栏高度一起改 */
+  --topbar-h: 48px; --ring: 24px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131312; --panel: #1d1d1b; --sunk: #242422; --line: #2c2c29; --line-strong: #3a3a36;
+    --text: #ecebe7; --muted: #a09f97; --faint: #6b6a64;
+    --accent: #7ba8f6; --accent-soft: #1d283a;
+    --ok: #5cc28a; --ok-soft: #1a2d22; --warn: #e3ae4d; --warn-soft: #33291a; --bad: #ef7a70; --bad-soft: #3a211f;
+    --state-decide: #94a3b8;
+    --on-accent: #131312; --reply: #f0709e;
+    --seg-track: #1f1f1d; --seg-thumb: #3b3b37;
+    --icon-ring: rgba(255, 255, 255, .14);
+    --switch-off: #4a4a45; --knob: #f3f2ee;
+    --scrim: rgba(0, 0, 0, .55);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, .4);
+    --shadow-menu: 0 8px 24px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
+    --chart: #5f93ef; /* 深色底另取一档：主色 #7ba8f6 在深色亮度带之外 */
+  }
+}

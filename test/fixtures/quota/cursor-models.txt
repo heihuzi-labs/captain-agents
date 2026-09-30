@@ -1,0 +1,27 @@
+Available models
+ • claude-sonnet-5-5-low - Claude Sonnet 5.5 (Low)
+ • claude-sonnet-5-5-medium - Claude Sonnet 5.5 (Medium)
+ • claude-sonnet-5-5-high - Claude Sonnet 5.5 (High)
+ • claude-sonnet-5-5-xhigh - Claude Sonnet 5.5 (Extra High)
+ • claude-sonnet-5-5-max - Claude Sonnet 5.5 (Max)
+ • claude-opus-5-5-low - Claude Opus 5.5 (Low)
+ • claude-opus-5-5-low-fast - Claude Opus 5.5 (Low) Fast
+ • claude-opus-5-5-medium - Claude Opus 5.5 (Medium)
+ • claude-opus-5-5-medium-fast - Claude Opus 5.5 (Medium) Fast
+ • claude-opus-5-5-high - Claude Opus 5.5 (High)
+ • claude-opus-5-5-high-fast - Claude Opus 5.5 (High) Fast
+ • claude-opus-5-5-xhigh - Claude Opus 5.5 (Extra High)
+ • claude-opus-5-5-xhigh-fast - Claude Opus 5.5 (Extra High) Fast
+ • claude-opus-5-5-max - Claude Opus 5.5 (Max)
+ • claude-opus-5-5-max-fast - Claude Opus 5.5 (Max) Fast
+ • grok-4.7-low - Grok 4.7 (Low)
+ • grok-4.7-low-fast - Grok 4.7 (Low) Fast
+ • grok-4.7-medium - Grok 4.7 (Medium)
+ • grok-4.7-medium-fast - Grok 4.7 (Medium) Fast
+ • grok-4.7-high - Grok 4.7 (High)
+ • grok-4.7-high-fast - Grok 4.7 (High) Fast
+ • grok-4.7-xhigh - Grok 4.7 (Extra High)
+ • grok-4.7-xhigh-fast - Grok 4.7 (Extra High) Fast
+ • gpt-6-astra - GPT-6 Astra
+ • gemini-3-pro - Gemini 3 Pro
+ • auto - Auto

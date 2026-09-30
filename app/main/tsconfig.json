@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "lib": ["ES2023", "DOM"] },
+  "include": ["./**/*.ts", "../shared/**/*.ts", "../../electron.vite.config.ts"]
+}

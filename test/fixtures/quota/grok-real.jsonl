@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[{"id":"cached_token","name":"cached_token","description":"Cached token from ~/.grok/auth.json"}],"_meta":{"grokShell":true,"agentVersion":"1.0.41"}}}
+{"jsonrpc":"2.0","method":"_x.ai/mcp/servers_updated","params":{"mcpServers":[]}}
+{"jsonrpc":"2.0","id":2,"result":{"config":{"creditUsagePercent":12.0,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2030-01-01T00:00:00+00:00","end":"2030-01-08T00:00:00+00:00"},"onDemandCap":{"val":0},"onDemandUsed":{"val":0},"prepaidBalance":{"val":0},"isUnifiedBillingUser":false,"billingPeriodStart":"2030-01-01T00:00:00+00:00","billingPeriodEnd":"2030-01-08T00:00:00+00:00"},"subscription_tier":"Example Plan"}}
+{"jsonrpc":"2.0","method":"_x.ai/announcements/update","params":{"gen":1234567890,"announcements":[]}}
+{"jsonrpc":"2.0","id":"skills-reload","result":{"result":{"reloaded":0}}}

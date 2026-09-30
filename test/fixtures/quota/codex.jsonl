@@ -1,0 +1,1 @@
+{"payload": {"rate_limits": {"plan_type": "pro", "primary": {"used_percent": 12.5, "window_minutes": 300, "resets_at": 1790683200}, "secondary": {"used_percent": 63.2, "window_minutes": 10080, "resets_at": 1791201600}, "rate_limit_reached_type": null}}}

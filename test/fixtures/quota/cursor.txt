@@ -1,0 +1,15 @@
+[?25l[2J[1;1HWelcome
+───────
+[36mUltra[0m
+Resets Oct 15
+Usage
+Category Current
+Included
+████░░ 36.2% used
+Auto
+12.3% used
+API
+84.7% used
+On-Demand $0.00 / $20.00
+View in cursor.com
+Esc to close[?25h

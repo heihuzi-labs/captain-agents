@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b2f38"/>
+      <stop offset="1" stop-color="#15171c"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".10"/>
+      <stop offset=".45" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000" flood-opacity=".45"/>
+    </filter>
+    <filter id="outer" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <!-- 圆角方块（macOS 图标网格：四周留 100） -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)" filter="url(#outer)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#sheen)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184.5" fill="none" stroke="#ffffff" stroke-opacity=".08" stroke-width="3"/>
+  <!-- 三张错开的卡片：验收中（石板灰）在后，进行中（蓝）居中，已完成（绿）在前 -->
+  <g filter="url(#shadow)" transform="translate(-20 -34)">
+    <g transform="rotate(-14 512 540)">
+      <rect x="262" y="330" width="420" height="290" rx="54" fill="#94a3b8"/>
+    </g>
+    <g transform="rotate(-3 512 540)">
+      <rect x="300" y="382" width="420" height="290" rx="54" fill="#6f9ef2"/>
+    </g>
+    <g transform="rotate(8 512 540)">
+      <rect x="342" y="440" width="420" height="290" rx="54" fill="#4cbb80"/>
+      <rect x="342" y="440" width="420" height="290" rx="54" fill="url(#sheen)"/>
+      <path d="M470 590 l58 58 l112 -122" fill="none" stroke="#ffffff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+</svg>

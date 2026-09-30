@@ -1,0 +1,1 @@
+{"jsonrpc": "2.0", "id": 2, "result": {"subscription_tier": "SuperGrok", "config": {"creditUsagePercent": 32.7, "currentPeriod": {"end": "2026-10-15T00:00:00Z"}}}}

@@ -1,0 +1,7 @@
+node_modules/
+.worktrees/
+.DS_Store
+test-results/
+out/
+dist/
+test/e2e/artifacts/

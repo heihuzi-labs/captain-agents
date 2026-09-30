@@ -1,0 +1,59 @@
+[>1u]11;?[2K[G
+
+  Cursor Agent
+  [2mv2026.09.28-64d2043[22m
+  [2mTip: Use /plan to iterate on an implementation plan before code changes.[22m
+
+
+
+ [48;5;233m                                                                                                                                          [49m
+ [48;5;233m [2m→ [22m[7mP[27m[2mlan, search, build anything[22m                                                                                                           [49m
+ [48;5;233m                                                                                                                                          [49m
+
+  [32mAsk (shift+tab to cycle)[39m
+  [2mGrok 4.7 256K High[22m
+  [2m/Users/example/.xagents/cache/cursor-usage-x[22m
+[?25l[?2004h]0;Cursor Agent[?2031h[?1004h[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[G [48;5;233m → [1m[36m/usage[39m[22m[7m [27m                                                                                                                                [49m
+ [48;5;233m                                                                                                                                          [49m
+
+  [32mAsk (shift+tab to cycle)[39m
+  [2mGrok 4.7 256K High[22m
+  [2m/Users/example/.xagents/cache/cursor-usage-x[22m
+[2K[1A[2K[1A[2K[1A[2K[G   → [1m/usage[22m                    [1mShow plan and on-demand usage[22m
+   [2m  /example-skill[22m  [2mExample skill description[22m
+   [2m  /context[22m                  [2mShow context usage breakdown[22m
+   [2m  /example-skill[22m  [2mExample skill description[22m
+   [2m  /example-skill[22m  [2mExample skill description[22m
+   [2m  /example-skill[22m  [2mExample skill description[22m
+[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[G [48;5;233m [2m→ [22m[7mP[27m[2mlan, search, build anything[22m                                                                                                           [49m
+ [48;5;233m                                                                                                                                          [49m
+
+   → [1m/usage[22m                    [1mShow plan and on-demand usage[22m
+   [2m  /example-skill[22m  [2mExample skill description[22m
+   [2m  /context[22m                  [2mShow context usage breakdown[22m
+   [2m  /example-skill[22m  [2mExample skill description[22m
+   [2m  /example-skill[22m  [2mExample skill description[22m
+   [2m  /example-skill[22m  [2mExample skill description[22m
+
+  [36mLoading usage data...[39m
+[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[G  [32mAsk (shift+tab to cycle)[39m
+  [2mGrok 4.7 256K High[22m
+  [2m/Users/example/.xagents/cache/cursor-usage-x[22m
+
+  [36mLoading usage data...[39m
+[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[G[38;5;229m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[39m
+ [1m[38;5;229mUsage[39m[22m[2m • [22mUltra                                                                                                              [2mResets Nov 12[22m
+ [2mMonthly plan and on-demand usage[22m
+
+ [2mCategory[22m        [2mCurrent[22m             [2mUsage[22m
+ Included        24% used             [36m██[39m[2m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░[22m
+ [2m  Auto[22m          [2m8% used[22m             [34m█[39m[2m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░[22m
+ [2m  API[22m           [2m37% used[22m            [35m███████████████[39m[2m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░[22m
+ On-Demand       Disabled            [2m————————————————————————————————————————————————————————————————————————————————————————————————————[22m
+
+ [2mOn-demand usage is off[22m
+
+ [2mView in dashboard: [22m]8;;https://cursor.com/dashboard?tab=usage[4m[34mcursor.com/dashboard?tab=usage[39m[24m]8;;
+
+ [2mEsc to close[22m
+[?2004l

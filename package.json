@@ -1,0 +1,84 @@
+{
+  "name": "xagents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "派活工作台：把活派给本机的 Codex、Grok、Cursor 命令行，登记、隔离、验收、看板",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "xagents": "bin/xagents"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "pack": "electron-vite build && node scripts/check-desktop-bundle.mjs && electron-builder --mac dir --arm64",
+    "install-app": "bash scripts/install-app.sh",
+    "typecheck": "tsc -p tsconfig.json && tsc -p app/main/tsconfig.json && tsc -p app/preload/tsconfig.json && tsc -p app/renderer/tsconfig.json",
+    "test": "node --test \"test/*.test.ts\"",
+    "test:ui": "vitest run",
+    "test:e2e": "node --test test/e2e/smoke.ts",
+    "verify": "npm run typecheck && npm test && npm run test:ui && npm run build && npm run test:e2e",
+    "icon": "electron scripts/make-icon.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.77",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "^24.19.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "jsdom": "^30.1.1",
+    "playwright-core": "1.57.0",
+    "typescript": "7.0.2",
+    "vite": "7.3.6",
+    "vitest": "5.0.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  },
+  "main": "out/main/index.js",
+  "build": {
+    "appId": "app.xagents.desk",
+    "productName": "派活工作台",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "package.json",
+      "src/core/pty-bridge.py",
+      "!node_modules{,/**/*}"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "src/core/pty-bridge.py"
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "identity": null
+    }
+  }
+}

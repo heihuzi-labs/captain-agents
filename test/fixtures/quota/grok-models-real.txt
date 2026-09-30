@@ -1,0 +1,9 @@
+You are logged in with grok.com.
+
+Default model: grok-4.7-build-fast
+
+Available models:
+  - grok-4.7
+  * grok-4.7-build-fast (default)
+  - grok-4.6
+  - grok-4.5
