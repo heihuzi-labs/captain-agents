@@ -102,4 +102,4 @@ npm run verify     # 类型检查、核心测试、界面测试、构建、真�
 
 ---
 
-<sub>船长系列，来自 [heihuzi-labs](https://github.com/heihuzi-labs)：**船长派活** · [船长 K8s](https://github.com/heihuzi-labs/captain-kube) · [船长运维](https://github.com/heihuzi-labs/captain-ops) · [船长待办](https://github.com/heihuzi-labs/captain-todo)</sub>
+<sub>船长系列，来自 [heihuzi-labs](https://github.com/heihuzi-labs)：**船长派活** · [船长 K8s](https://github.com/heihuzi-labs/captain-kube) · [船长运维](https://github.com/heihuzi-labs/captain-ops) · [船长密码箱](https://github.com/heihuzi-labs/captain-password) · [船长待办](https://github.com/heihuzi-labs/captain-todo)</sub>

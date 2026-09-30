@@ -102,4 +102,4 @@ Tests stay offline, never touch your real `~/.xagents`, and use stand-ins for ev
 
 ---
 
-<sub>Part of the Captain series from [heihuzi-labs](https://github.com/heihuzi-labs): **Captain Agents** · [Captain Kube](https://github.com/heihuzi-labs/captain-kube) · [Captain Ops](https://github.com/heihuzi-labs/captain-ops) · [Captain Todo](https://github.com/heihuzi-labs/captain-todo)</sub>
+<sub>Part of the Captain series from [heihuzi-labs](https://github.com/heihuzi-labs): **Captain Agents** · [Captain Kube](https://github.com/heihuzi-labs/captain-kube) · [Captain Ops](https://github.com/heihuzi-labs/captain-ops) · [Captain Password](https://github.com/heihuzi-labs/captain-password) · [Captain Todo](https://github.com/heihuzi-labs/captain-todo)</sub>
