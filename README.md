@@ -1,6 +1,6 @@
 <div align="center">
 
-# 派活工作台 · piework
+# 船长派活 · Captain Crew
 
 让一个 AI 当负责人，把编码的活派给你电脑上的 Codex、Grok、Cursor。
 
@@ -16,7 +16,7 @@
 
 真这么用上几天，麻烦就来了。谁在做什么、做到哪一步，全靠负责人那段对话记着，对话一压缩就断了。每次派活都得记得给别家的命令行加上限制，漏一次，它就能碰到不该碰的文件。选手说“测试都过了”，自己再跑一遍却不一定过。用久了，谁擅长修 bug、谁爱夸大结论、谁最省额度，也只剩个模糊印象。
 
-派活工作台就是把这一套固定下来的小工具：
+船长派活就是把这一套固定下来的小工具：
 
 - 一条命令给每件活开一个独立的 git 副本，把题目派出去；同一道题可以同时派给几家，比比谁做得好。
 - 选手只能在自己的副本里干活，网络只通它自家的模型服务器，读不到你的密钥和别家的登录，也改不了各家 AI 的全局配置。这些限制写死在代码里，每天自检一次，没过就不让派。
@@ -25,7 +25,7 @@
 
 你这边只用看桌面应用：看板上是正在做的和做完的，点开能看进度、给负责人留言，觉得哪份好就点“用这份”。具体的派活、验收、合并，都是负责人用命令做的。
 
-> “派”就是 pie，piework 就是“派活”。命令行工具叫 `xagents`，数据放在 `~/.xagents`。
+> 以前叫派活工作台（piework）。桌面应用和界面暂时还叫派活工作台，命令行工具叫 `xagents`，数据放在 `~/.xagents`；后面的版本会统一改名。
 
 ## 看一眼
 
@@ -49,7 +49,7 @@
 需要一台 Mac（目前只在苹果芯片上测过），Node.js 24 以上，pnpm。另外至少装好并登录一家：[Codex](https://github.com/openai/codex)（默认用 ChatGPT 应用自带的那份，可以用 `XAGENTS_CODEX` 指到别处）、Grok 命令行 `grok`、Cursor 命令行 `cursor-agent`。
 
 ```sh
-git clone <本仓库地址> piework && cd piework
+git clone https://github.com/heihuzi-labs/captain-crew.git && cd captain-crew
 pnpm install
 ln -s "$PWD/bin/xagents" ~/.local/bin/xagents
 
@@ -99,3 +99,7 @@ npm run verify     # 类型检查、核心测试、界面测试、构建、真�
 ## 许可证
 
 [MIT](LICENSE)。本项目和 OpenAI、xAI、Anysphere（Cursor）、Anthropic 都没有关系，各家的名字和图标归各自所有。
+
+---
+
+<sub>船长系列，来自 [heihuzi-labs](https://github.com/heihuzi-labs)：**船长派活** · [船长 K8s](https://github.com/heihuzi-labs/captain-kube) · [船长运维](https://github.com/heihuzi-labs/captain-ops) · [船长待办](https://github.com/heihuzi-labs/captain-todo)</sub>
