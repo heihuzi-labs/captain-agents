@@ -1,6 +1,6 @@
 <div align="center">
 
-# Captain Crew · 船长派活
+# Captain Agents · 船长派活
 
 Let one AI run the show and hand the coding work to the Codex, Grok and Cursor CLIs on your Mac.
 
@@ -16,7 +16,7 @@ If you pay for more than one AI coding tool, the obvious idea is to let one of t
 
 Try that for a few days and the cracks show. Who is doing what, and how far they got, lives only in the lead's chat, and it's gone once the chat gets compacted. Every dispatch needs the right restrictions on the other vendor's CLI; forget them once and the worker can touch files it shouldn't. A worker says "all tests pass" and a rerun says otherwise. After a while, who is good at bug fixes, who oversells, and who is cheapest is just a vague feeling.
 
-Captain Crew is the small tool that pins that routine down:
+Captain Agents is the small tool that pins that routine down:
 
 - One command gives each job its own git worktree and sends the brief out. The same brief can go to several workers at once so you can compare.
 - Workers only write inside their worktree, only reach their own vendor's model servers, can't read your secrets or other vendors' logins, and can't change any AI's global config. The limits live in the code, a self-check runs daily, and nothing gets dispatched if it fails.
@@ -49,7 +49,7 @@ On your side there is a desktop app. The board shows what's running and what's d
 You need a Mac (only tested on Apple silicon so far), Node.js 24 or newer, and pnpm. Also install and sign in to at least one of: [Codex](https://github.com/openai/codex) (by default the copy bundled with the ChatGPT app; set `XAGENTS_CODEX` to use another), the Grok CLI `grok`, or the Cursor CLI `cursor-agent`.
 
 ```sh
-git clone https://github.com/heihuzi-labs/captain-crew.git && cd captain-crew
+git clone https://github.com/heihuzi-labs/captain-agents.git && cd captain-agents
 pnpm install
 ln -s "$PWD/bin/xagents" ~/.local/bin/xagents
 
@@ -98,8 +98,8 @@ Tests stay offline, never touch your real `~/.xagents`, and use stand-ins for ev
 
 ## License
 
-[MIT](LICENSE). Captain Crew is not affiliated with OpenAI, xAI, Anysphere (Cursor) or Anthropic; their names and icons belong to them.
+[MIT](LICENSE). Captain Agents is not affiliated with OpenAI, xAI, Anysphere (Cursor) or Anthropic; their names and icons belong to them.
 
 ---
 
-<sub>Part of the Captain series from [heihuzi-labs](https://github.com/heihuzi-labs): **Captain Crew** · [Captain Kube](https://github.com/heihuzi-labs/captain-kube) · [Captain Ops](https://github.com/heihuzi-labs/captain-ops) · [Captain Todo](https://github.com/heihuzi-labs/captain-todo)</sub>
+<sub>Part of the Captain series from [heihuzi-labs](https://github.com/heihuzi-labs): **Captain Agents** · [Captain Kube](https://github.com/heihuzi-labs/captain-kube) · [Captain Ops](https://github.com/heihuzi-labs/captain-ops) · [Captain Todo](https://github.com/heihuzi-labs/captain-todo)</sub>
