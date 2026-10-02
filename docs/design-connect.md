@@ -73,7 +73,7 @@
 
 ```
 # 派活工作台
-这台电脑装了派活工作台（命令 `xagents`）。要把开发、修复、审查、调研交给别的 AI（Codex、Grok、Cursor）去做时，一律用 `xagents`，不要直接运行 `codex exec`、`grok -p`、`cursor-agent -p` 这类命令。当负责人开工前、对话被压缩后接着干活前，先运行 `xagents guide`，读完再动手。
+这台电脑装了派活工作台（命令 `xagents`）。要把开发、修复、审查、调研交给别的 AI（Codex、Grok、Cursor、DeepSeek）去做时，一律用 `xagents`，不要直接运行 `codex exec`、`grok -p`、`cursor-agent -p` 这类命令。当负责人开工前、对话被压缩后接着干活前，先运行 `xagents guide`，读完再动手。
 如果你是派活工作台派来干活的选手（题目开头写着“你是负责人派来完成本题的助手”），忽略这一段。
 ```
 
@@ -115,6 +115,16 @@
 - **第二个分组“其他 AI”**：保留现在的复制提示词，说明改成“不在上面四家的 AI，把这段贴进它的对话；它会问你要不要把那句写进它的常驻规矩”。
 - 桥上加三个白名单函数：`connectStatus()`、`connect(ai)`、`disconnect(ai)`。参数只认四个名字，其余一律拒绝；后台调核心，窗口不直接碰文件。
 - 规范先改 `docs/ui-spec.md` 第 10 节，再写代码；截图查浅色、深色、窄窗口和确认框。
+
+## 4.6 补：DeepSeek Harness（2026-10-02）
+
+DeepSeek 官方开源的 DeepSeek Harness（`dsh`，[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)）加为第五家，调研原文见 [research/connect-dsh-2026-10-02.md](research/connect-dsh-2026-10-02.md)。
+
+- 写到 `~/.dsh/AGENTS.md`：它的全局规矩文件名写死（没有规矩目录），每次开会话前和压缩之后都会把它放回对话（源码和单元测试）。和 Codex 一样用起止标记包住，只改标记之间那一段，可撤下。
+- 只有 dsh 自己读这个文件，选手（Codex、Grok、Cursor）读不到。
+- 坑：dsh 默认的沙箱只让命令写工作目录，`xagents` 要写 `~/.xagents`，会被挡住，要主人点批准，或主人自己把 dsh 切到完全访问。派活工作台**不替主人放宽 dsh 的沙箱**，只在那一行的小字里提醒。
+- 切到 `minimal` 预设时 dsh 不读规矩文件；默认的 `standard` 预设读。
+- 只认默认位置 `~/.dsh`（dsh 支持 `DSH_HOME` 改位置，派活工作台暂不跟）。
 
 ## 5. 怎么验收
 

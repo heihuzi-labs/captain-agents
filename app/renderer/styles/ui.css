@@ -21,6 +21,7 @@ button.plain { border: 0; background: transparent; padding: 0; text-align: inher
 .logo .mono-mark { display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--on-brand); background: var(--brand-other); }
 .mono-mark[data-brand="codex"] { background: var(--brand-codex); } .mono-mark[data-brand="grok"] { background: var(--brand-grok); }
 .mono-mark[data-brand="cursor"] { background: var(--brand-cursor); } .mono-mark[data-brand="claude"] { background: var(--brand-claude); }
+.mono-mark[data-brand="deepseek"] { background: var(--brand-deepseek); }
 .logo-sm .mono-mark { font-size: .75em; }
 .logo .badge { position: absolute; right: -12%; bottom: -12%; width: 45%; height: 45%; border-radius: 33%; box-shadow: 0 0 0 2px var(--panel); }
 .logo .badge.mono-mark { font-size: .75em; }
@@ -137,7 +138,6 @@ button.plain { border: 0; background: transparent; padding: 0; text-align: inher
 .done-foot { display: flex; align-items: baseline; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-top: 1px solid var(--line); font-size: var(--fs-sm); color: var(--muted); }
 .done-foot button { margin-left: auto; color: var(--muted); white-space: nowrap; }
 .done-foot button:hover { color: var(--text); }
-.bdot { width: var(--sp-2); height: var(--sp-2); border-radius: 50%; background: var(--batch); flex: none; display: inline-block; }
 .reply-dot { position: absolute; top: calc(var(--sp-1) * -1); right: calc(var(--sp-1) * -1); width: 10px; height: 10px; border-radius: 50%; background: var(--reply); box-shadow: 0 0 0 2px var(--panel); }
 .empty { color: var(--faint); padding: var(--sp-5) var(--sp-2); text-align: center; font-size: var(--fs-sm); }
 

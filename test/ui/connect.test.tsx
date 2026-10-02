@@ -13,11 +13,11 @@ function setup(extra: Parameters<typeof fixtureBridge>[0] = {}) {
 }
 const row = async (name: string) => (await screen.findByRole('group', { name }));
 
-test('一键接入：四家按顺序一行一家，标签和按钮跟着状态走；共用的没有按钮', async () => {
+test('一键接入：五家按顺序一行一家，标签和按钮跟着状态走；共用的没有按钮', async () => {
   setup();
   const group = (await screen.findByText('一键接入')).closest('.setting-group') as HTMLElement;
   const rows = await within(group).findAllByRole('group');
-  expect(rows.map(r => r.getAttribute('aria-label'))).toEqual(['Claude', 'Codex', 'Grok', 'Cursor']);
+  expect(rows.map(r => r.getAttribute('aria-label'))).toEqual(['Claude', 'Codex', 'Grok', 'Cursor', 'DeepSeek Harness']);
   expect(within(rows[0]).getByText('已接入')).toBeTruthy();
   expect(within(rows[0]).getByRole('button').textContent).toBe('撤下');
   expect(within(rows[1]).getByText('还没接入')).toBeTruthy();
@@ -26,6 +26,10 @@ test('一键接入：四家按顺序一行一家，标签和按钮跟着状态�
   expect(within(rows[2]).queryByRole('button')).toBeNull();
   expect(within(rows[3]).getByText('会写进 ~/.cursor/rules/xagents.mdc（只对家目录下的项目生效）')).toBeTruthy();
   expect(within(rows[3]).getByRole('button').textContent).toBe('接入');
+  // DeepSeek Harness 用 DeepSeek 的图标，小字提醒跑 xagents 要主人批准。
+  expect(within(rows[4]).getByText('会写进 ~/.dsh/AGENTS.md 末尾（它跑 xagents 时要你点批准）')).toBeTruthy();
+  expect(within(rows[4]).getByRole('button').textContent).toBe('接入');
+  expect(rows[4].querySelector('[data-icon="deepseek"], .mono-mark[data-brand="deepseek"]')).toBeTruthy();
 });
 
 test('没装的那家整行变淡、没有按钮；内容不是最新的给“更新”', async () => {

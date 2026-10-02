@@ -11,6 +11,8 @@ export const iconSources = {
   grok: 'Grok Bot.app/Contents/Resources/icon.icns',
   cursor: 'Cursor.app/Contents/Resources/Cursor.icns',
   claude: 'Claude.app/Contents/Resources/electron.icns',
+  // DeepSeek 选手借 Codex 跑，但界面上按 DeepSeek 显示；图标取 DeepSeek 自家桌面应用的，没装就显示字母。
+  deepseek: 'DeepSeek Harness.app/Contents/Resources/icon.png',
 };
 // 在锁内先复制到临时目录再改名；失败可重试，旧目录始终保留。
 export async function migrateIcons(home = paths().home) {

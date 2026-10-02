@@ -8,7 +8,7 @@ import { dayGroups, dimmed, entryProject, outcomeOf, projectLabel, projectRows, 
 import { dataTime, quotaLevel } from '../lib/quota.ts';
 import { errorReason } from '../lib/errors.ts';
 import { subscribeTick } from '../lib/ticker.ts';
-import { Button, CheckChip, Chip, cssVars, EmptyState, ReplyDot, SideNavLayout, WorkerIcon, WorkerIdentity, WorkerRow } from '../ui/index.ts';
+import { Button, CheckChip, Chip, EmptyState, ReplyDot, SideNavLayout, WorkerIcon, WorkerIdentity, WorkerRow } from '../ui/index.ts';
 import type { Workers } from '../ui/index.ts';
 import type { Open } from './Board.tsx';
 import { Dashboard } from './Dashboard.tsx';
@@ -29,13 +29,11 @@ function HistoryMember({ job: j, workers, open }: { job: ViewJob; workers: Worke
 function HistoryRow({
   entry: e,
   workers,
-  hue,
   project,
   open
 }: {
   entry: Entry;
   workers: Workers;
-  hue?: string;
   project?: string;
   open: Open;
 }) {
@@ -43,15 +41,12 @@ function HistoryRow({
     ms = e.members,
     outcome = outcomeOf(e),
     checked = ms.filter(m => m.check);
-  return <div className="hrow"><button type="button" className="hsum" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}><span className="date num">{fmtTime(e.started)}</span><span className="crow htitle">{hue && <span className="bdot" style={cssVars({
-          '--batch': hue
-        })} />}<Chip>{e.kind}</Chip><span className="ellip">{e.title}</span></span><span className="right">{project && <Chip title={'项目：' + project}>{project}</Chip>}<span className="crow">{ms.map(m => <span key={m.id} className={dimmed(e, m) ? 'icon-dim' : undefined}><WorkerIdentity job={m} workers={workers} size="sm" iconOnly /></span>)}</span>{checked.length > 0 && <span>合格 {checked.filter(m => m.check?.ok).length}/{checked.length}</span>}{outcome && (outcome.dropped ? <span className="faint">{outcome.text}</span> : <Chip tone={outcome.tone}>{outcome.text}</Chip>)}</span></button>
+  return <div className="hrow"><button type="button" className="hsum" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}><span className="date num">{fmtTime(e.started)}</span><span className="crow htitle"><Chip>{e.kind}</Chip><span className="ellip">{e.title}</span></span><span className="right">{project && <Chip title={'项目：' + project}>{project}</Chip>}<span className="crow">{ms.map(m => <span key={m.id} className={dimmed(e, m) ? 'icon-dim' : undefined}><WorkerIdentity job={m} workers={workers} size="sm" iconOnly /></span>)}</span>{checked.length > 0 && <span>合格 {checked.filter(m => m.check?.ok).length}/{checked.length}</span>}{outcome && (outcome.dropped ? <span className="faint">{outcome.text}</span> : <Chip tone={outcome.tone}>{outcome.text}</Chip>)}</span></button>
   {expanded && <div className="hmembers">{ms.map(j => <HistoryMember key={j.id} job={j} workers={workers} open={open} />)}{ms.length > 1 && <div className="hfoot"><button type="button" className="plain" onClick={() => open(e.target)}>打开这一批 →</button></div>}</div>}</div>;
 }
 export function History({
   view,
   rows,
-  colors,
   filter,
   setFilter,
   project,
@@ -62,7 +57,6 @@ export function History({
 }: {
   view: View;
   rows: Entry[];
-  colors: Map<string, string>;
   filter: string;
   setFilter: (s: string) => void;
   project: string;
@@ -103,7 +97,7 @@ export function History({
     <div className="history"><h1>历史</h1><p className="sub">{current ? current.label : '全部项目'} · 共 {shown.length} 件。同一道题派给几家的算一件，点一行看各家的打分和评语。</p>
     {archivedNow && <div className="arch-note" role="note"><span>这个项目已归档：不在看板上显示，也不能派活。记录和打分都留着。</span><Button size="sm" onClick={() => onUnarchive(scope)}>取消归档</Button></div>}
     {kinds.length > 2 && <div className="filters">{kinds.map(k => <button key={k} type="button" className={k === kind ? 'on' : ''} aria-pressed={k === kind} onClick={() => setFilter(k)}>{k}</button>)}</div>}
-    {shown.length ? dayGroups(shown, now).map(g => <section key={g.key} className="dayg"><h3 className="day">{g.label}</h3><div className="panel hgroup">{g.entries.map(e => <HistoryRow key={e.target.kind + e.target.id} entry={e} workers={view.workers} hue={colors.get(e.target.id)} project={scope ? undefined : projectLabel(view, entryProject(e))} open={open} />)}</div></section>)
+    {shown.length ? dayGroups(shown, now).map(g => <section key={g.key} className="dayg"><h3 className="day">{g.label}</h3><div className="panel hgroup">{g.entries.map(e => <HistoryRow key={e.target.kind + e.target.id} entry={e} workers={view.workers} project={scope ? undefined : projectLabel(view, entryProject(e))} open={open} />)}</div></section>)
       : <EmptyState>{scope ? '这个项目还没有历史。' : '还没有历史。'}</EmptyState>}</div>
   </SideNavLayout>;
 }

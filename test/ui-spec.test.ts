@@ -75,8 +75,9 @@ test('规范：开关只许用 Switch，renderer 里不许再出现浏览器自�
 
 test('规范：样式文件只用变量，颜色、字号、圆角、间距不写死', async () => {
   const tokens = strip(await readFile(join(renderer, 'styles/tokens.css'), 'utf8'));
-  // 元素自己身上赋值的局部变量（--state、--hue、--batch）也算有定义。
-  const runtime = (await pageSources()).flatMap(({ text }) => [...text.matchAll(/'(--[\w-]+)'/g)].map(match => match[1]));
+  // 元素自己身上赋值的局部变量（--state、--hue、--batch）也算有定义；页面和统一部件（ui/，比如卡片、弹窗的批次色带）都算。
+  const parts = await Promise.all((await files(join(renderer, 'ui'), /\.tsx?$/)).map(async name => ({ text: await readFile(name, 'utf8') })));
+  const runtime = [...await pageSources(), ...parts].flatMap(({ text }) => [...text.matchAll(/'(--[\w-]+)'/g)].map(match => match[1]));
   const local = (await Promise.all((await files(join(renderer, 'styles'), /\.css$/)).map(async name => strip(await readFile(name, 'utf8')))))
     .flatMap(css => [...css.matchAll(/(--[\w-]+)\s*:/g)].map(match => match[1]));
   const defined = new Set([...tokens.matchAll(/(--[\w-]+)\s*:/g)].map(match => match[1]).concat(runtime, local));

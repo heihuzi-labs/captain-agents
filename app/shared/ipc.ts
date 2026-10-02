@@ -28,7 +28,7 @@ export type XaBridge = {
   refreshQuota(): Promise<void>;
   // 把给其他 AI 的对接提示词（src/core/intro.ts 那一份）放进剪贴板；不收参数，窗口复制不了别的内容。
   copyIntro(): Promise<void>;
-  // 接入 AI（docs/design-connect.md）：读四家状态；接入或撤下一家，参数只认 CONNECT_AIS 里的名字，返回四家的新状态。
+  // 接入 AI（docs/design-connect.md）：读各家状态；接入或撤下一家，参数只认 CONNECT_AIS 里的名字，返回各家的新状态。
   connectStatus(): Promise<ConnectStatus[]>;
   connect(ai: ConnectAi): Promise<ConnectStatus[]>;
   disconnect(ai: ConnectAi): Promise<ConnectStatus[]>;

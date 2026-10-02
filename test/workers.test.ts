@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, readdir, stat, mkdir, symlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { selection, command, refreshGrokLogin } from '../src/core/workers.ts';
+import { selection, command, refreshGrokLogin, checkDeepseekLogin, loginDeepseek, KEY_VARS } from '../src/core/workers.ts';
 import { extraDenyRead } from '../src/core/settings.ts';
-import { whos, workerDisplay, isolationOf, allowedEfforts, launchModels } from '../src/core/roster.ts';
+import { whos, workerDisplay, isolationOf, allowedEfforts, launchModels, vendorOf } from '../src/core/roster.ts';
 import { sandbox, codexPermissions, grokSessionDirs, cursorStateDir, jobTmpDir } from '../src/core/sandbox.ts';
 import type { Job, Who } from '../src/core/job.ts';
 import type { Project } from '../src/core/project.ts';
@@ -15,11 +15,18 @@ function job(who: Who, ro = false, spec = `${who}:high`): Job {
   const s = selection(spec);
   return { id: '0929-1000-test', batch: 'batch', who, model: s.model, effort: s.effort, ...(s.fast ? { fast: true } : {}), repo: '/test/repo', worktree: '/test/repo/worktree', branch: 'xa/test', base: '123', project: '测试', title: '测试', kind: '实现', mode: ro ? 'read-only' : 'workspace-write', state: 'queued', created: new Date().toISOString() };
 }
-test('推理强度只开中档、高档、超高档；各选手一样，不许 max 和 low', () => {
-  for (const who of whos) for (const effort of ['medium', 'high', 'xhigh']) assert.equal(selection(`${who}:${effort}`).effort, effort);
-  for (const who of whos) for (const effort of ['max', 'low', 'minimal', '', 'HIGH']) assert.throws(() => selection(`${who}:${effort}`), /推理强度只允许：medium（中档）、high（高档）、xhigh（超高档）/);
+test('推理强度只开中档、高档、超高档，不许 max 和 low；DeepSeek 只开高档（它的超高档会被换算成拉满）', () => {
+  const native = whos.filter(w => !w.startsWith('deepseek'));
+  for (const who of native) for (const effort of ['medium', 'high', 'xhigh']) assert.equal(selection(`${who}:${effort}`).effort, effort);
+  for (const who of native) for (const effort of ['max', 'low', 'minimal', '', 'HIGH']) assert.throws(() => selection(`${who}:${effort}`), /推理强度只允许：medium（中档）、high（高档）、xhigh（超高档）/);
+  for (const who of ['deepseek', 'deepseek-flash']) {
+    assert.equal(selection(`${who}:high`).effort, 'high');
+    for (const effort of ['medium', 'xhigh', 'max', 'low']) assert.throws(() => selection(`${who}:${effort}`), /推理强度只允许：high（高档）/);
+    assert.throws(() => selection(`${who}:high:fast`), /DeepSeek 没有快速版/);
+  }
+  assert.equal(selection('deepseek:high').model, 'deepseek-v4-pro'); assert.equal(selection('deepseek-flash:high').model, 'deepseek-flash');
   for (const spec of ['codex', 'unknown:high', '__proto__:high', 'codex:high:fast:x', 'grok:high:slow', 'grok:high:', 'grok:high:FAST']) assert.throws(() => selection(spec));
-  assert.throws(() => selection('unknown:high'), /codex、codex-luna、grok、cursor-grok、cursor-opus、cursor-sonnet/);
+  assert.throws(() => selection('unknown:high'), /codex、codex-luna、grok、cursor-grok、cursor-opus、cursor-sonnet、deepseek、deepseek-flash/);
 });
 test('各选手 × 强度 × 快速版：模型名正确，任务里记下 fast', () => {
   const expected: Record<string, [string, string]> = {
@@ -39,13 +46,15 @@ test('各选手 × 强度 × 快速版：模型名正确，任务里记下 fast'
   assert.throws(() => selection('grok:high:slow'), /第三段只能写 fast/);
 });
 test('选手清单是唯一出处：展示表、隔离、额度池都从它派生，Cursor 只用三家模型，强度过底线', () => {
-  assert.deepEqual(whos, ['codex', 'codex-luna', 'grok', 'cursor-grok', 'cursor-opus', 'cursor-sonnet']);
+  assert.deepEqual(whos, ['codex', 'codex-luna', 'grok', 'cursor-grok', 'cursor-opus', 'cursor-sonnet', 'deepseek', 'deepseek-flash']);
+  assert.deepEqual(workerDisplay.deepseek, { name: 'DeepSeek', model: 'DeepSeek V4 Pro', icon: 'deepseek' });
+  assert.deepEqual(whos.map(vendorOf), ['codex', 'codex', 'grok', 'cursor', 'cursor', 'cursor', 'deepseek', 'deepseek']);
   assert.deepEqual(workerDisplay['codex-luna'], { name: 'Codex · Luna', model: 'GPT-6 Luna', icon: 'codex' });
   assert.deepEqual(workerDisplay['cursor-sonnet'], { name: 'Cursor · Sonnet', model: 'Claude Sonnet 5.5', icon: 'cursor', badge: 'claude' });
   assert.deepEqual(workerDisplay.grok, { name: 'Grok', model: 'Grok 4.7', icon: 'grok' });
-  assert.deepEqual(whos.map(isolationOf), ['codex', 'codex', 'grok', 'cursor', 'cursor', 'cursor']);
+  assert.deepEqual(whos.map(isolationOf), ['codex', 'codex', 'grok', 'cursor', 'cursor', 'cursor', 'codex', 'codex']);
   for (const who of whos) {
-    assert.deepEqual(allowedEfforts(who), ['medium', 'high', 'xhigh']);
+    assert.deepEqual(allowedEfforts(who), who.startsWith('deepseek') ? ['high'] : ['medium', 'high', 'xhigh']);
     for (const m of launchModels().filter(x => x.who === who)) if (isolationOf(who) === 'cursor') assert.match(m.model, /^(claude|gpt|grok)-/);
   }
   assert.ok(launchModels().every(m => !/max|low/.test(m.model.replace('build', ''))));
@@ -95,6 +104,21 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   const tmp = join(c.home, 'jobs', '0929-1000-test', 'tmp');
   assert.deepEqual(codex.env, { TMPDIR: tmp }); assert.ok((await stat(tmp)).isDirectory());
   assert.ok(codex.args.includes('model_reasoning_effort="high"'));
+  // 普通 Codex 不带 DeepSeek 的配置，Codex 文件夹仍是主人自己的。
+  assert.ok(!codex.args.some(v => v.includes('model_provider') || v.includes('api.deepseek.com'))); assert.equal(codex.env.CODEX_HOME, undefined);
+  // DeepSeek 借 Codex 跑：同一套隔离，Codex 文件夹换成登记处下单独的那个，连 DeepSeek 的接口，选手的命令去掉带钥匙的环境变量。
+  const ds = await command(job('deepseek', true, 'deepseek:high'), '题目', { denyReadExtra: [] });
+  assert.equal(ds.file, '/test/codex'); assert.equal(ds.stdin, 'prompt');
+  assert.deepEqual(ds.env, { TMPDIR: tmp, CODEX_HOME: join(c.home, 'deepseek') });
+  for (const value of ['model_provider="deepseek"', 'forced_login_method="api"', 'cli_auth_credentials_store="file"', 'web_search="disabled"', 'default_permissions="xa"', 'deepseek-v4-pro', 'model_reasoning_effort="high"']) assert.ok(ds.args.includes(value), value);
+  assert.ok(ds.args.some(v => v.startsWith('model_providers.deepseek=') && v.includes('base_url="https://api.deepseek.com/"') && v.includes('requires_openai_auth=true')));
+  assert.ok(ds.args.some(v => v.startsWith('shell_environment_policy.exclude=') && v.includes('"OPENAI_API_KEY"') && v.includes('"CODEX_API_KEY"')));
+  // Codex 主进程本身也不能继承别家的钥匙（这些变量在 Codex 里比登录文件优先）；普通 Codex 不受影响。
+  assert.deepEqual(ds.unset, KEY_VARS); assert.equal(codex.unset, undefined);
+  for (const name of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']) assert.ok(KEY_VARS.includes(name), name);
+  assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] })));
+  // 三种隔离都禁读 DeepSeek 的登录文件夹。
+  assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`"${join(c.home, 'deepseek')}"="deny"`));
   const grok = await command(job('grok'), '题目', { denyReadExtra: [] });
   assert.equal(Object.keys(grok.env).length, 13); assert.equal(Object.values(grok.env).filter(v => v === 'false').length, 10);
   // srt 用 CLAUDE_CODE_TMPDIR 给选手设 TMPDIR（不设就是公用的 /tmp/claude）。
@@ -297,4 +321,36 @@ test('Cursor 状态目录够短：长任务号也不会让 cursor-agent 退到�
   process.env.XAGENTS_HOME = '/' + 'x'.repeat(80);
   assert.throws(() => checkCursorState(cursorStateDir(long)), /路径太长/);
   process.env.XAGENTS_HOME = c.home;
+});
+
+test('DeepSeek 登录和派活前的登录检查：钥匙只经标准输入给 Codex，用单独的 Codex 文件夹，不带别家的钥匙变量', async t => {
+  const c = await context(t, false);
+  const oldHome = process.env.XAGENTS_HOME, oldCodex = process.env.XAGENTS_CODEX, oldKeys = KEY_VARS.map(k => process.env[k]);
+  // 替身 Codex：记下参数、标准输入、Codex 文件夹和继承到的钥匙变量；login status 时按“已登录”回答。
+  const fake = join(c.temp, 'fake-codex.mjs'), log = join(c.temp, 'fake-codex.jsonl');
+  await writeFile(fake, `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+let input = ''; if (process.argv.includes('--with-api-key')) for await (const chunk of process.stdin) input += chunk;
+appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args: process.argv.slice(2), input, home: process.env.CODEX_HOME, keys: ${JSON.stringify(KEY_VARS)}.filter(k => k in process.env) }) + '\\n');
+if (process.argv.includes('status')) console.log('Logged in using an API key - sk-***test');
+`, { mode: 0o755 });
+  process.env.XAGENTS_HOME = c.home; process.env.XAGENTS_CODEX = fake;
+  for (const k of KEY_VARS) process.env[k] = 'inherited-' + k;
+  t.after(() => {
+    if (oldHome === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = oldHome;
+    if (oldCodex === undefined) delete process.env.XAGENTS_CODEX; else process.env.XAGENTS_CODEX = oldCodex;
+    KEY_VARS.forEach((k, i) => { if (oldKeys[i] === undefined) delete process.env[k]; else process.env[k] = oldKeys[i]; });
+  });
+  await assert.rejects(loginDeepseek('not-a-key'), /应以 sk- 开头/);
+  await loginDeepseek('  sk-test1234567890  ');
+  await checkDeepseekLogin();
+  const calls = (await readFile(log, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  assert.equal(calls.length, 3); // 登录、登录后查一次、派活前查一次
+  assert.deepEqual(calls[0].args.slice(0, 2), ['login', '--with-api-key']); assert.equal(calls[0].input, 'sk-test1234567890\n');
+  for (const call of calls) {
+    assert.equal(call.home, join(c.home, 'deepseek')); assert.deepEqual(call.keys, []);
+    assert.ok(call.args.includes('forced_login_method="api"') && call.args.includes('cli_auth_credentials_store="file"'));
+    assert.ok(!call.args.some((a: string) => a.includes('sk-test')));
+  }
+  assert.deepEqual(calls[1].args.slice(0, 2), ['login', 'status']);
 });

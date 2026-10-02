@@ -10,7 +10,7 @@ import type { QueryCommand, QuotaSnapshot, QuotaSnapshots } from '../src/core/qu
 import { ensureHome, toolRoot } from '../src/core/paths.ts';
 import { localTime } from '../src/cli/format.ts';
 import { alive } from '../src/core/fsx.ts';
-import { whos } from '../src/core/roster.ts';
+import { whos, vendorOf } from '../src/core/roster.ts';
 import { quotaStops } from '../src/core/settings.ts';
 
 const fixtures = join(root, 'test/fixtures/quota');
@@ -133,7 +133,12 @@ test('80% 四家分别拦截，未知用量不拦，快照跨重置/近似/缺�
 });
 
 test('各选手按传入停派线判断：四档含边界，force、未知和近似用量保持原行为', async () => {
-  for (const who of whos) for (const stop of quotaStops) {
+  // DeepSeek 借 Codex 跑但扣自己的余额：没有额度条，Codex 的周额度用到多少都不拦它。
+  for (const who of whos.filter(w => vendorOf(w) === 'deepseek')) {
+    const data = await snapshot(); quotaBar(data, 'codex')!.used = 100;
+    assert.equal(quotaBar(data, who), undefined); assert.doesNotThrow(() => checkQuota(data, [{ who }], false, 50));
+  }
+  for (const who of whos.filter(w => vendorOf(w) !== 'deepseek')) for (const stop of quotaStops) {
     const data = await snapshot(), bar = quotaBar(data, who)!;
     bar.used = stop - 0.1; assert.doesNotThrow(() => checkQuota(data, [{ who }], false, stop));
     bar.used = stop; assert.throws(() => checkQuota(data, [{ who }], false, stop), new RegExp(`已用 ${stop}%，到了设置里的停派线 ${stop}%`));

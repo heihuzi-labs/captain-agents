@@ -352,9 +352,15 @@ test('真实应用：主人决定和留言落盘、菜单栏、通知、安全�
         assert.equal(await storage.getByRole('tab', { name: '30 天' }).isDisabled(), false);
       }
       await pane('选手与模型', 'workers', () => page.getByRole('group', { name: 'Cursor · Grok · Grok 4.7' }).waitFor())();
-      assert.deepEqual(await page.locator('[data-who]').evaluateAll(rows => rows.map(r => r.getAttribute('data-who'))), ['codex', 'codex-luna', 'grok', 'cursor-grok', 'cursor-opus', 'cursor-sonnet']);
-      assert.equal(await page.getByRole('switch', { name: '启用' }).count(), 6);
+      assert.deepEqual(await page.locator('[data-who]').evaluateAll(rows => rows.map(r => r.getAttribute('data-who'))), ['codex', 'codex-luna', 'grok', 'cursor-grok', 'cursor-opus', 'cursor-sonnet', 'deepseek', 'deepseek-flash']);
+      assert.equal(await page.getByRole('switch', { name: '启用' }).count(), 8);
+      // DeepSeek 组在最下面：只开高档，没有快速版，组头不写用量（按用量扣它自己的余额）。
+      await page.getByRole('group', { name: 'DeepSeek · Flash · DeepSeek V4.1 Flash' }).scrollIntoViewIfNeeded();
+      await shot(variant.name, 'settings-workers-deepseek');
       await pane('接入 AI', 'intro', () => page.locator('.intro-text').waitFor())();
+      // 一键接入五家，最后一行是 DeepSeek Harness（用 DeepSeek 的图标）。
+      await page.getByRole('group', { name: 'DeepSeek Harness' }).scrollIntoViewIfNeeded();
+      await shot(variant.name, 'settings-intro-connect');
       await pane('看板颜色', 'colors', () => page.getByLabel('进行中').waitFor())();
       if (variant.name === 'light') {
         // 键盘：上下键在左栏切换分页（不用鼠标）；选手页里用空格改“快速版”，主进程真的存下，再改回去。

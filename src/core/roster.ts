@@ -13,11 +13,18 @@
 // - Cursor：cursor-agent 2026.09.28-64d2043 的 models：
 //   claude-sonnet-5-5-{low,medium,high,xhigh,max}（没有快速版）；
 //   grok-4.7-{low,medium,high,xhigh}[-fast]；claude-opus-5-5-{low,medium,high,xhigh,max}[-fast]。
+// - DeepSeek（2026-10-02）：借 Codex 程序跑，DeepSeek 官方为 Codex 做了适配（api-docs.deepseek.com 的 Codex 接入页）。
+//   接口 GET /models：deepseek-v4-pro（DeepSeek-V4-Pro）、deepseek-flash（DeepSeek-V4.1-Flash），强度只有 low、high、max。
+//   中档、超高档接口也收，但会被换算（第三方资料：medium → high、xhigh → max），超高档等于拉满，所以只开高档。
+//   没有快速版。依据 docs/research/connect-deepseek-2026-10-02.md。
 
 export type Isolation = 'codex' | 'grok' | 'cursor';
+// 谁家出钱、谁家的登录：额度、模型核对、登录检查按它分。不写就和隔离同名。
+export type Vendor = Isolation | 'deepseek';
 export type Effort = 'medium' | 'high' | 'xhigh';
 type Spec = {
   isolation: Isolation;                       // 用哪套隔离与自检
+  vendor?: Vendor;                            // 谁家出钱、谁家的登录；不写就是 isolation
   name: string; shown: string;                // 界面上的选手名、模型展示名
   icon: string; badge?: string;               // 图标与角标
   pool?: 'auto' | 'api';                      // Cursor 的额度池：auto 自家模型池，api 其他模型池
@@ -41,6 +48,11 @@ export const roster = {
     model: 'claude-opus-5-5', effortInName: true, efforts: all, fast: { suffix: '-fast' } },
   'cursor-sonnet': { isolation: 'cursor', name: 'Cursor · Sonnet', shown: 'Claude Sonnet 5.5', icon: 'cursor', badge: 'claude', pool: 'api',
     model: 'claude-sonnet-5-5', effortInName: true, efforts: all, fast: null, noFast: 'Cursor 里的 Sonnet 5.5 没有快速版' },
+  // 借 Codex 程序跑：同一套 Codex 隔离；登录是 DeepSeek 的 API 钥匙，由 Codex 存在派活工作台单独的文件夹里（见 workers.ts）。
+  deepseek: { isolation: 'codex', vendor: 'deepseek', name: 'DeepSeek', shown: 'DeepSeek V4 Pro', icon: 'deepseek',
+    model: 'deepseek-v4-pro', effortInName: false, efforts: ['high'], fast: null, noFast: 'DeepSeek 没有快速版' },
+  'deepseek-flash': { isolation: 'codex', vendor: 'deepseek', name: 'DeepSeek · Flash', shown: 'DeepSeek V4.1 Flash', icon: 'deepseek',
+    model: 'deepseek-flash', effortInName: false, efforts: ['high'], fast: null, noFast: 'DeepSeek 没有快速版' },
 } satisfies Record<string, Spec>;
 
 // 底线：不属于设置，任何选择都要再过一遍。强度不许 max（拉满）、也不开 low；Cursor 里只用 Claude、GPT、Grok 三家的模型。
@@ -52,6 +64,8 @@ export const isWho = (value: unknown): value is Who => typeof value === 'string'
 export const spec = (who: Who): Spec => roster[who];
 export const isolations = [...new Set(whos.map(who => spec(who).isolation))] as Isolation[];
 export const isolationOf = (who: Who): Isolation => spec(who).isolation;
+export const vendorOf = (who: Who): Vendor => spec(who).vendor ?? spec(who).isolation;
+export const vendors = [...new Set(whos.map(vendorOf))] as Vendor[];
 export const allowedEfforts = (who: Who): Effort[] => spec(who).efforts.filter(e => floor.efforts.includes(e));
 export const supportsFast = (who: Who) => spec(who).fast !== null;
 export const fastWhos = whos.filter(supportsFast);

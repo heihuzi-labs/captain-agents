@@ -54,6 +54,16 @@ export const fixtureView = (): View => ({
       model: 'Sonnet',
       icon: 'cursor',
       badge: 'claude'
+    },
+    deepseek: {
+      name: 'DeepSeek',
+      model: '模型',
+      icon: 'deepseek'
+    },
+    'deepseek-flash': {
+      name: 'DeepSeek · Flash',
+      model: '模型',
+      icon: 'deepseek'
     }
   },
   projects: [],
@@ -93,6 +103,7 @@ export const connectFixture = (): ConnectStatus[] => [
   { ai: 'codex', name: 'Codex', state: 'off', note: '会写进 ~/.codex/AGENTS.md 末尾', files: ['~/.codex/AGENTS.md'] },
   { ai: 'grok', name: 'Grok', state: 'on', note: '和 Claude 共用一份规矩', files: ['~/.claude/rules/xagents.md'], sharedWith: 'claude' },
   { ai: 'cursor', name: 'Cursor', state: 'off', note: '会写进 ~/.cursor/rules/xagents.mdc（只对家目录下的项目生效）', files: ['~/.cursor/rules/xagents.mdc'] },
+  { ai: 'dsh', name: 'DeepSeek Harness', state: 'off', note: '会写进 ~/.dsh/AGENTS.md 末尾（它跑 xagents 时要你点批准）', files: ['~/.dsh/AGENTS.md'] },
 ];
 export const fixtureBridge = (extra: Partial<XaBridge> = {}): XaBridge => ({
   refreshQuota: vi.fn(async () => {}), copyIntro: vi.fn(async () => {}),

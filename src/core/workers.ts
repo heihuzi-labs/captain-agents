@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { access, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { jobDir, paths, toolRoot } from './paths.ts';
@@ -6,12 +7,12 @@ import { StreamParser, LogTail } from './activity.ts';
 import type { Job, Command } from './job.ts';
 import type { Who } from './roster.ts';
 import type { Project } from './project.ts';
-import { checkCursorState, codexPermissions, cursorState, cursorStateDir, jobTmpDir } from './sandbox.ts';
+import { checkCursorState, codexPermissions, cursorState, cursorStateDir, deepseekHome, jobTmpDir } from './sandbox.ts';
 import { execute } from './verify.ts';
 import type { Executor } from './verify.ts';
 import { grokEnvironment } from './quota.ts';
 import type { Isolated } from './sandbox.ts';
-import { allowedEfforts, fastWhos, isWho, isolationOf, launchModel, spec, supportsFast, whos } from './roster.ts';
+import { allowedEfforts, fastWhos, isWho, isolationOf, launchModel, spec, supportsFast, vendorOf, whos } from './roster.ts';
 import type { Effort } from './roster.ts';
 
 const effortNames: Record<Effort, string> = { medium: '中档', high: '高档', xhigh: '超高档' };
@@ -26,6 +27,44 @@ export function selection(value: string) {
   const fast = fastWord === 'fast';
   if (fast && !supportsFast(who)) throw new Error(`${who} 没有快速版：${s.noFast}。请去掉 :fast；有快速版的选手是 ${fastWhos.join('、')}。`);
   return { who, effort: effort as Effort, model: launchModel(who, effort as Effort, fast), ...(fast ? { fast: true as const } : {}) };
+}
+// DeepSeek 借 Codex 跑：Codex 文件夹换成派活工作台单独的那个（里面只有 DeepSeek 的登录），主人 ~/.codex 的 ChatGPT 登录不受影响。
+// 钥匙由 Codex 主进程在隔离外读、只发给 DeepSeek；选手跑的命令一律去掉带钥匙的环境变量（实测不显式去掉时看得到）。
+// 依据 docs/research/connect-deepseek-2026-10-02.md。
+export const DEEPSEEK_PROVIDER = 'model_providers.deepseek={name="DeepSeek",base_url="https://api.deepseek.com/",wire_api="responses",requires_openai_auth=true}';
+// 登录只认 API 钥匙，并固定存成文件（不进系统钥匙串，免得和主人自己的 Codex 登录混在一处）；登录和派活用同一组。
+const DEEPSEEK_LOGIN = ['-c', 'forced_login_method="api"', '-c', 'cli_auth_credentials_store="file"'];
+// 这些变量在 Codex 里比登录文件优先（codex-cli 0.159 的认证顺序），带着就会把 OpenAI 的钥匙发给 DeepSeek；
+// 后三个会让它改走“工作负载身份”登录，在只认 API 钥匙时直接报错、用不上 DeepSeek 的登录文件。
+// 所以 DeepSeek 的 Codex 主进程启动前从继承的环境里去掉（登录、查登录、派活都一样），选手的命令也一并去掉。
+export const KEY_VARS = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'DEEPSEEK_API_KEY',
+  'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT'];
+const deepseekEnv = (): NodeJS.ProcessEnv => ({ CODEX_HOME: deepseekHome(), ...Object.fromEntries(KEY_VARS.map(name => [name, undefined])) });
+function deepseekArgs(env: Record<string, string>) {
+  env.CODEX_HOME = deepseekHome();
+  return ['-c', 'model_provider="deepseek"', '-c', DEEPSEEK_PROVIDER, ...DEEPSEEK_LOGIN, '-c', 'web_search="disabled"',
+    '-c', `shell_environment_policy.exclude=[${KEY_VARS.map(name => `"${name}"`).join(',')}]`];
+}
+// 派 DeepSeek 活前在隔离外查一次登录；没登录就不派，提示主人自己登录（钥匙只有主人能拿到）。
+export async function checkDeepseekLogin(run: Executor = execute) {
+  await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
+  const r = await run(codexPath(), ['login', 'status', ...DEEPSEEK_LOGIN], deepseekHome(), 20_000, undefined, deepseekEnv());
+  if (r.exit !== 0 || r.timedOut || r.error || !/API key/i.test(r.output)) {
+    throw new Error('DeepSeek 还没登录，这件没有派出。请主人在终端运行 xagents login deepseek，按提示粘贴 DeepSeek 的 API 钥匙。');
+  }
+}
+// 主人自己登录 DeepSeek：钥匙从标准输入交给 Codex，由它存进 DeepSeek 的 Codex 文件夹；平台只转手，不存、不打印。
+export async function loginDeepseek(key: string) {
+  key = key.trim();
+  if (!/^sk-[A-Za-z0-9_-]{8,}$/.test(key)) throw new Error('这不像 DeepSeek 的 API 钥匙（应以 sk- 开头），没有保存。');
+  await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
+  const ok = await new Promise<boolean>((done, fail) => {
+    const child = spawn(codexPath(), ['login', '--with-api-key', ...DEEPSEEK_LOGIN], { cwd: deepseekHome(), env: { ...process.env, ...deepseekEnv() }, stdio: ['pipe', 'ignore', 'ignore'] });
+    child.once('error', fail); child.once('close', code => done(code === 0));
+    child.stdin.end(key + '\n');
+  });
+  if (!ok) throw new Error('Codex 没能保存 DeepSeek 的登录，请重试。');
+  await checkDeepseekLogin();
 }
 export async function srtPath() {
   const path = resolve(process.env.XAGENTS_SRT || join(toolRoot, 'node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js'));
@@ -45,7 +84,7 @@ export async function command(job: Job, text: string, project: Isolated): Promis
     env.TMPDIR = tmp;
     file = codexPath();
     const disable = ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories'];
-    args = ['exec', '--ignore-user-config', ...disable.flatMap(n => ['--disable', n]), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
+    args = ['exec', '--ignore-user-config', ...disable.flatMap(n => ['--disable', n]), ...(vendorOf(job.who) === 'deepseek' ? deepseekArgs(env) : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
   } else {
     file = process.execPath;
     // 替身模式仍传入完整参数；无需安装或执行真正的 srt。
@@ -71,7 +110,7 @@ export async function command(job: Job, text: string, project: Isolated): Promis
     file = process.execPath;
     args = [resolve(process.env.XAGENTS_FAKE_WORKER), ...args];
   }
-  return { file, args, env, stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
+  return { file, args, env, ...(vendorOf(job.who) === 'deepseek' ? { unset: KEY_VARS } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
 }
 // Grok 的登录每 6 小时换一次新令牌、旧令牌作废；写回 ~/.grok/auth.json 要在 ~/.grok 里新建临时文件，选手隔离里做不到。
 // 所以派 Grok 活前先在隔离外刷新：剩不到 5 小时就换新，选手干活期间用不着自己刷新（跑着的选手会直接用磁盘上的新令牌）。

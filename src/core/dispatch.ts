@@ -11,14 +11,14 @@ import { git, addWorktree, setup } from './worktree.ts';
 import { reserveJob, reserveBatch } from './ids.ts';
 import { prompt } from './prompt.ts';
 import { sandbox } from './sandbox.ts';
-import { selection, command, srtPath, refreshGrokLogin } from './workers.ts';
+import { selection, command, srtPath, refreshGrokLogin, checkDeepseekLogin } from './workers.ts';
 import { reconcileSafely } from './runner.ts';
 import { installIcons } from './icons.ts';
 import { ensureSelfcheck } from './selfcheck.ts';
 import { ensureQuota, checkQuota } from './quota.ts';
 import { readSettings, extraDenyRead } from './settings.ts';
 import { checkChoice } from './policy.ts';
-import { isolationOf } from './roster.ts';
+import { isolationOf, vendorOf } from './roster.ts';
 import { initialRealCheck } from './real.ts';
 
 export type RunOptions = { who: string[]; project?: string; base?: string; kind?: string; title?: string; summary?: string; ro?: boolean; force?: boolean; dirtyOk?: boolean; real?: boolean | string };
@@ -105,6 +105,8 @@ export async function dispatch(file: string, options: RunOptions): Promise<Job[]
       if ((await readJob(job.id)).state !== 'queued') continue;
       // 先刷新 Grok 登录，没成功就不开副本、不派。
       if (isolationOf(job.who) === 'grok' && !process.env.XAGENTS_FAKE_WORKER) await refreshGrokLogin();
+      // DeepSeek 没登录就不开副本、不派。
+      if (vendorOf(job.who) === 'deepseek' && !process.env.XAGENTS_FAKE_WORKER) await checkDeepseekLogin();
       await addWorktree(job);
       await setup(job, project.setup, join(jobDir(job.id), 'setup.log'));
       if ((await readJob(job.id)).state !== 'queued') continue;

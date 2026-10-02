@@ -8,7 +8,8 @@ import type { Who } from './roster.ts';
 export type { Who };
 export type State = 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lost';
 export type Usage = { read: number; cached: number; out: number; cacheWrite?: number };
-export type Command = { file: string; args: string[]; env: Record<string, string>; stdin: 'prompt' | 'ignore'; output: 'run.log' };
+// unset：启动前从继承的环境里去掉的变量（比如 DeepSeek 的活不能带上主人环境里别家的钥匙）。
+export type Command = { file: string; args: string[]; env: Record<string, string>; unset?: string[]; stdin: 'prompt' | 'ignore'; output: 'run.log' };
 export type Activity = { at: string; kind: 'cmd' | 'edit' | 'read' | 'say'; text: string };
 // 每一步的时间（看管进程边读边记）：steps 是调用工具的步数，toolSeconds 是工具在跑的时间（重叠的只算一次，扣掉休眠）。
 export type Timing = { steps: number; toolSeconds: number };

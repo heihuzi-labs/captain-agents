@@ -29,7 +29,7 @@ const quotaLine = (q: Quota | undefined) => {
   return [q.plan, used].filter(Boolean).join(' · ');
 };
 
-// 设置里的“选手与模型”：按厂家分组（Codex、Grok、Cursor），组内是一张对齐的表，一行一个模型：
+// 设置里的“选手与模型”：按厂家分组（Codex、Grok、Cursor、DeepSeek），组内是一张对齐的表，一行一个模型：
 // 模型 | 中档 | 高档 | 超高档 | 快速版 | 启用。关掉的模型整行变淡，强度和快速版点不动但保留原值。改动交给 change，由设置页统一排队保存。
 export function WorkerSettings({ view, values, error, change }: {
   view: Pick<View, 'roster' | 'workers' | 'quota'>; values: Values['workers'] | undefined; error: string;

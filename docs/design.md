@@ -87,7 +87,7 @@ xagents profiles [--json]             按“选手 × 普通/快速版 × 活的
 
 `--who` 的写法是“选手:强度[:fast]”。强度写 `medium`、`high`、`xhigh`，界面上叫中档、高档、超高档；不开 `low`，也不许拉满（没有 `max`）。末尾加 `:fast` 用快速版（同一个模型跑在更快的机器上，按 2 倍扣额度），现在只有 `grok`、`cursor-grok`、`cursor-opus` 有。
 
-选手清单写在一张纯数据表里（`src/core/roster.ts`），现在有六位：
+选手清单写在一张纯数据表里（`src/core/roster.ts`），现在有八位：
 
 | 选手 | 是什么 |
 |---|---|
@@ -97,6 +97,10 @@ xagents profiles [--json]             按“选手 × 普通/快速版 × 活的
 | `cursor-grok` | Cursor 里的 Grok 4.7 |
 | `cursor-opus` | Cursor 里的 Claude Opus 5.5 |
 | `cursor-sonnet` | Cursor 里的 Claude Sonnet 5.5 |
+| `deepseek` | DeepSeek V4 Pro，借 Codex 程序跑（2026-10-02 接入） |
+| `deepseek-flash` | DeepSeek V4.1 Flash，又快又便宜，同样借 Codex 跑 |
+
+DeepSeek 两位用 Codex 的隔离，但 Codex 文件夹（`CODEX_HOME`）换成登记处下单独的 `deepseek/`，里面只有 DeepSeek 的 API 钥匙登录（主人用 `xagents login deepseek` 登录），主人 `~/.codex` 的 ChatGPT 登录和会话记录都不受影响。只开高档：DeepSeek 自己只有低、高、最高三档，超高档会被它换算成最高（拉满）。按用量扣主人 DeepSeek 账户的钱，不占 Codex 的额度。依据见 [research/connect-deepseek-2026-10-02.md](research/connect-deepseek-2026-10-02.md)。
 
 解析 `--who`、校验、启动参数、展示名、额度池、隔离自检、模型核对都从这张表派生，新增选手或改模型只改这一处，模型名的来源和核对日期也记在那里。
 
@@ -240,18 +244,19 @@ realCheck: { needed: boolean; steps: string[]; result: { ok: boolean; note: stri
 
 所有选手都遵守：
 - **不开放本机端口。** 本机上常有浏览器调试口、代理软件、API 转发服务在监听。
-- 各家隔离都挡住读取：`~/.ssh`、`~/.npmrc`、包括自身在内的登录文件、设置里额外禁读的目录（`config.json` 的 `denyReadHome`）、项目的 `.data/`、`~/.claude`、`~/.aws`、`~/.config/gh`。（Grok、Cursor 整个跑在外层隔离里，自己的登录文件必须能读，否则启动不了；挡住的是别家的。）
+- 各家隔离都挡住读取：`~/.ssh`、`~/.npmrc`、包括自身在内的登录文件、DeepSeek 的登录文件夹（登记处下的 `deepseek/`）、设置里额外禁读的目录（`config.json` 的 `denyReadHome`）、项目的 `.data/`、`~/.claude`、`~/.aws`、`~/.config/gh`。（Grok、Cursor 整个跑在外层隔离里，自己的登录文件必须能读，否则启动不了；挡住的是别家的。）
 - **各家的全局配置对选手一律只读**：`~/.cursor`、`~/.local/share/cursor-agent`、`~/.grok`、`~/.claude`、`~/.agents`、`~/.codex` 都写不进去。这些地方放着钩子、技能、规矩、外部连接、插件、管理员配置和程序本身，主人之后在隔离外打开 Cursor 或 Grok 就会被加载，钩子还会以主人的账号直接执行、没有确认弹窗；选手能写就等于能逃出隔离。所以选手能写的只有：副本、这件活自己的临时目录（见下一条），外加各家必需的一处：Cursor 用 `CURSOR_CONFIG_DIR`、`CURSOR_DATA_DIR` 把配置、聊天记录、项目状态和信任标记搬到任务目录（`xagents clean` 时删掉）；Grok 只放开本副本自己的会话文件夹（按副本路径转义算出，带通配符 `* ? [ ]` 的写法不放开，路径不规范就不派）。Grok 的登录刷新要写 `~/.grok`，所以派 Grok 活前由平台在隔离外先刷新（剩不到 5 小时就换新，刷新报错就不派），选手干活期间一般用不着刷新。依据是 [2026-09-30 实测](research/global-config-writes-2026-09-30.md)。
 - **公用临时目录也不许写，每件活一个专用的 `tmp/`**（任务目录下，`xagents clean` 时删掉）。`/private/tmp` 下有负责人（Claude Code）会话的草稿和后台任务输出（`/private/tmp/claude-<用户号>`），`/private/var/folders` 下有别的程序的临时文件和套接字，选手能写就能伪造负责人读到的输出、影响别的程序。做法：Grok、Cursor 的模板只放开 `__TMP__`（任务的 `tmp/`），并显式禁写 srt 自己默认放开的 `/private/tmp/claude` 和 `~/.npm/_logs`；启动 srt 时设 `CLAUDE_CODE_TMPDIR=<任务的 tmp>`，srt 据此给选手设 `TMPDIR`（不设就是公用的 `/tmp/claude`）。Codex 的权限表把 `:slash_tmp`、`:tmpdir` 都设为只读、任务的 `tmp/` 写明可写，启动时 `TMPDIR` 也指向它。硬链接也挡住了：选手不能在可写目录里给外面的文件建硬链接、借此改它。共同规则 `rules.md` 告诉选手临时文件写 `$TMPDIR`：Grok 的系统提示叫模型把草稿写到 `/tmp/`，“除非用户或项目规矩另指地方”；macOS 自带的 `mktemp` 不带 `-p` 时优先用系统给用户的临时目录、不看 `TMPDIR`。依据是 [2026-09-30 临时目录实测](research/tmp-writes-2026-09-30.md)。
 - **不准提交代码、不准用 `git stash`。** 副本的提交记录库在隔离外面，想提交也写不进去。
 - **Codex 禁读缺口已堵上：** 启动和自检共用 `permissions.xa` 权限表，禁读研究推荐路径与项目 `denyReadExtra`（仓库、副本各一份），仅将 `~/.codex/tmp` 重新开放为可读。依据是 [2026-09-29 权限研究](research/codex-permissions-2026-09-29.md)。禁止混用 `-s` 或 `sandbox_mode`，否则权限档会失效；真实 `codex exec` 仍须负责人验收。
 
-派活前检查**自检**结果：用最终权限设置测副本内写、目录外写、Chrome 调试口、本机监听端口、外网，SSH、npmrc 和三家登录文件，21 处全局配置，以及 6 处公用临时位置（负责人会话的临时目录、`/private/tmp`、srt 的 `/private/tmp/claude`、系统给本用户的临时和缓存目录、`~/.npm/_logs`；三种隔离都要写不进去，别家的也不行）；同时要求 `TMPDIR` 正好指向这件活的 `tmp/` 且写得进去、在里面给外面的文件建硬链接被挡住。公用临时目录里探针万一建出了固定名的目录，不自动删，只报错。全局配置探针对已有文件用只写、不截断、不新建的方式打开，不改内容；对已有目录只建随机名空文件；还没有的按真实路径建出来。只要写成了就算没挡住（删不掉另记原因）；建出的东西连同文件编号报给外面，外面只删编号对得上的，对不上或探针没报告的一律不删、报错。Codex 探针用空的临时 `CODEX_HOME` 和 `codex sandbox -P xa -C <副本> -c <共用权限表> -- node <探针>`，结束后清理。srt 探针向代理发送 HTTP Basic 或 SOCKS5 用户名密码认证；直连与代理都明确拒绝才算挡住，HTTP 403 算拒绝，407、超时或文件不存在都算拿不准。自检不过，就不派活。自检结果缓存一天，旧缓存缺少新探针不能放行；探针做法改了就升缓存版本号，旧版本缓存作废、派活时自动重检。
+派活前检查**自检**结果：用最终权限设置测副本内写、目录外写、Chrome 调试口、本机监听端口、外网，SSH、npmrc、三家登录文件和 DeepSeek 的登录文件夹，21 处全局配置，以及 6 处公用临时位置（负责人会话的临时目录、`/private/tmp`、srt 的 `/private/tmp/claude`、系统给本用户的临时和缓存目录、`~/.npm/_logs`；三种隔离都要写不进去，别家的也不行）；同时要求 `TMPDIR` 正好指向这件活的 `tmp/` 且写得进去、在里面给外面的文件建硬链接被挡住。公用临时目录里探针万一建出了固定名的目录，不自动删，只报错。全局配置探针对已有文件用只写、不截断、不新建的方式打开，不改内容；对已有目录只建随机名空文件；还没有的按真实路径建出来。只要写成了就算没挡住（删不掉另记原因）；建出的东西连同文件编号报给外面，外面只删编号对得上的，对不上或探针没报告的一律不删、报错。Codex 探针用空的临时 `CODEX_HOME` 和 `codex sandbox -P xa -C <副本> -c <共用权限表> -- node <探针>`，结束后清理。srt 探针向代理发送 HTTP Basic 或 SOCKS5 用户名密码认证；直连与代理都明确拒绝才算挡住，HTTP 403 算拒绝，407、超时或文件不存在都算拿不准。自检不过，就不派活。自检结果缓存一天，旧缓存缺少新探针不能放行；探针做法改了就升缓存版本号，旧版本缓存作废、派活时自动重检。
 
 ## 8. 额度
 
 - **Codex**：读最近一次会话记录里它的服务器报回来的额度（每周窗口、已用百分比、重置时间）。
 - **Grok**：通过 `grok agent stdio` 调它内部的 `_x.ai/billing` 接口。
+- **DeepSeek**：暂不查。按用量扣钱，没有百分比可比，也不占 Codex 的周额度、不受 Codex 停派线影响；钱用完时 DeepSeek 自己报错。
 - **Cursor**：模拟终端打开交互界面，敲 `/usage`，分别读出“自家模型池”和“其他模型池”的用量。在隔离外跑，工作目录是 `~/.xagents/cache/cursor-usage-*` 临时目录，同派活一样用 `CURSOR_CONFIG_DIR`、`CURSOR_DATA_DIR` 把配置和项目状态（含信任标记）搬进这个临时目录，查完一起删，不在 `~/.cursor/projects` 留目录（2026-09-30 实测：换目录后仍是登录状态，`/usage` 照常读出）。
 
 规则：派出前先查。某家本期已用到设置里的 `limits.quotaStop` 就拒绝派给它（缺省 80%，可选 50%、60%、70%、80%），确实要派得加 `--force`。两条派活限制都在设置 → 选手与模型 → 派活限制调整，`workers` 和 `guide` 会显示当前设置值。前后两次快照都记进任务，`stats` 据此估算每类活大概花多少额度。实测参考：Codex 或 Grok 做一题约占每周额度的 0.3%，Cursor + Grok 约占当月自家模型池的 0.3%，Cursor + Opus 约占当月其他模型池的 3.7%。

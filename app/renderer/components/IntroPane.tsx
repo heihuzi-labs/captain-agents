@@ -5,7 +5,7 @@ import { errorReason } from '../lib/errors.ts';
 import { Button, Chip, ConfirmDialog, SettingGroup, SettingRow, WorkerIcon } from '../ui/index.ts';
 import type { Tone } from '../ui/index.ts';
 
-// 设置 → 接入 AI（docs/ui-spec.md 第 10 节）：上面一组“一键接入”四家，下面一组给其他 AI 的对接提示词。
+// 设置 → 接入 AI（docs/ui-spec.md 第 10 节）：上面一组“一键接入”五家，下面一组给其他 AI 的对接提示词。
 // 状态全部来自桥上的 connectStatus()，窗口不自己判断文件；接入、撤下也只走桥。所有文字当纯文字显示。
 const chips: Record<ConnectState, { tone: Tone; text: string }> = {
   on: { tone: 'ok', text: '已接入' }, outdated: { tone: 'warn', text: '不是最新' }, off: { tone: 'neutral', text: '还没接入' },
@@ -18,6 +18,9 @@ const actionOf = (s: ConnectStatus): { label: string; kind: 'connect' | 'disconn
   if (s.state === 'outdated') return { label: '更新', kind: 'connect' };
   return null;
 };
+
+// 图标名：DeepSeek Harness 用 DeepSeek 的图标，其余和名字相同。
+const iconOf = (ai: ConnectAi) => ai === 'dsh' ? 'deepseek' : ai;
 
 export function IntroPane() {
   return <>
@@ -51,7 +54,7 @@ function ConnectGroup() {
         : !list ? <p className="setting-row faint">正在读取…</p>
           : list.map(s => {
             const action = actionOf(s), chip = chips[s.state];
-            return <SettingRow key={s.ai} group title={s.name} note={s.note} dim={s.state === 'missing'} icon={<WorkerIcon name={s.ai} size="md" />}>
+            return <SettingRow key={s.ai} group title={s.name} note={s.note} dim={s.state === 'missing'} icon={<WorkerIcon name={iconOf(s.ai)} size="md" />}>
               <span className="connect-end">
                 <Chip tone={chip.tone}>{chip.text}</Chip>
                 {action && <Button size="sm" variant={action.kind === 'connect' ? 'primary' : 'secondary'} disabled={busy !== null} onClick={() => click(s, action.kind)}>{action.label}</Button>}

@@ -27,7 +27,7 @@ const names = (who: string) => [...row(who).querySelectorAll('[role=checkbox],[r
 const ready = async () => { fireEvent.click(await screen.findByRole('tab', { name: '选手与模型' })); await screen.findByText(/关掉的不会被派活/); };
 const all = ['medium', 'high', 'xhigh'];
 
-test('按厂家分组（Codex、Grok、Cursor），组内一张对齐的表；表头只出现一次；强度只列能选的，快速版只在支持时出现', async () => {
+test('按厂家分组（Codex、Grok、Cursor、DeepSeek），组内一张对齐的表；表头只出现一次；强度只列能选的，快速版只在支持时出现', async () => {
   const view = fixtureView();
   view.roster[0].efforts = ['high', 'xhigh'];   // Codex 只能选高档、超高档，也没有快速版
   view.quota = [
@@ -40,11 +40,12 @@ test('按厂家分组（Codex、Grok、Cursor），组内一张对齐的表；�
   expect(within(screen.getByRole('tablist', { name: '设置分页' })).getAllByRole('tab').map(t => t.textContent)).toEqual(['通用', '选手与模型', '看板颜色', '接入 AI']);
   // 分组：按 roster 首次出现的顺序，Cursor 三个模型在同一组
   const groups = [...document.querySelectorAll<HTMLElement>('.setting-group')].filter(g => g.getAttribute('aria-label')); // 最上面的“派活限制”不是厂家组
-  expect(groups.map(g => g.getAttribute('aria-label'))).toEqual(['Codex', 'Grok', 'Cursor']);
-  expect(groups.map(g => [...g.querySelectorAll<HTMLElement>('[data-who]')].map(r => r.dataset.who))).toEqual([['codex', 'codex-luna'], ['grok'], ['cursor-grok', 'cursor-opus', 'cursor-sonnet']]);
+  expect(groups.map(g => g.getAttribute('aria-label'))).toEqual(['Codex', 'Grok', 'Cursor', 'DeepSeek']);
+  expect(groups.map(g => [...g.querySelectorAll<HTMLElement>('[data-who]')].map(r => r.dataset.who))).toEqual([['codex', 'codex-luna'], ['grok'], ['cursor-grok', 'cursor-opus', 'cursor-sonnet'], ['deepseek', 'deepseek-flash']]);
   // 组头：厂家小图标 + 名字；右边淡色写套餐和用得最多的池；查不到就不写用量
-  expect(groups.map(g => g.querySelector('.setting-group-head > span:nth-child(2)')!.textContent)).toEqual(['Codex', 'Grok', 'Cursor']);
-  expect(groups.map(g => g.querySelector('.wk-quota')!.textContent)).toEqual(['pro · 本周用了 31%', '', 'pro · 其他池用了 47%']);
+  expect(groups.map(g => g.querySelector('.setting-group-head > span:nth-child(2)')!.textContent)).toEqual(['Codex', 'Grok', 'Cursor', 'DeepSeek']);
+  // DeepSeek 按用量扣自己的余额，简单版不查，组头不写用量
+  expect(groups.map(g => g.querySelector('.wk-quota')!.textContent)).toEqual(['pro · 本周用了 31%', '', 'pro · 其他池用了 47%', '']);
   expect(groups.every(g => g.querySelector('.setting-group-head img,.setting-group-head .mono-mark'))).toBe(true);
   // 表头只有一份，六列；每一行也是六格，列才对得齐
   const header = document.querySelectorAll('.wk-cols');
@@ -124,16 +125,16 @@ test('保存中来的多项改动合并成一次再存，选手之间互不覆�
 
 test('最后一位开着的选手不能关：开关点不了，悬停说明原因；有人重新打开后又能关', async () => {
   const { setSettings } = setup(); await ready();
-  for (const who of ['codex', 'codex-luna', 'grok', 'cursor-grok', 'cursor-opus']) {
+  for (const who of ['codex', 'codex-luna', 'grok', 'cursor-grok', 'cursor-opus', 'deepseek', 'deepseek-flash']) {
     expect(power(who).getAttribute('aria-disabled')).toBeNull();
     fireEvent.click(power(who));
     await waitFor(() => expect(on(power(who))).toBe(false));
   }
-  expect(setSettings).toHaveBeenCalledTimes(5);
+  expect(setSettings).toHaveBeenCalledTimes(7);
   const last = power('cursor-sonnet');
   expect(on(last)).toBe(true); expect(last.getAttribute('aria-disabled')).toBe('true'); expect(last.title).toBe('至少要留一位选手');
   fireEvent.click(last);
-  expect(setSettings).toHaveBeenCalledTimes(5); expect(on(last)).toBe(true);
+  expect(setSettings).toHaveBeenCalledTimes(7); expect(on(last)).toBe(true);
   for (const who of ['codex', 'grok']) expect(power(who).hasAttribute('title')).toBe(false);
   fireEvent.click(power('codex'));
   await waitFor(() => expect(on(power('codex'))).toBe(true));

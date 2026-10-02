@@ -2,7 +2,7 @@
 
 # 船长派活 · Captain Agents
 
-让一个 AI 当负责人，把编码的活派给你电脑上的 Codex、Grok、Cursor。
+让一个 AI 当负责人，把编码的活派给你电脑上的 Codex、Grok、Cursor，还有借 Codex 跑的 DeepSeek。
 
 简体中文 · [English](README.en.md)
 
@@ -46,7 +46,7 @@
 
 ## 装起来
 
-需要一台 Mac（目前只在苹果芯片上测过），Node.js 24 以上，pnpm。另外至少装好并登录一家：[Codex](https://github.com/openai/codex)（默认用 ChatGPT 应用自带的那份，可以用 `XAGENTS_CODEX` 指到别处）、Grok 命令行 `grok`、Cursor 命令行 `cursor-agent`。
+需要一台 Mac（目前只在苹果芯片上测过），Node.js 24 以上，pnpm。另外至少装好并登录一家：[Codex](https://github.com/openai/codex)（默认用 ChatGPT 应用自带的那份，可以用 `XAGENTS_CODEX` 指到别处）、Grok 命令行 `grok`、Cursor 命令行 `cursor-agent`。想用 DeepSeek 的话，装好 Codex 后运行 `xagents login deepseek`，粘贴 DeepSeek 的 API 钥匙（按用量扣钱）。钥匙由 Codex 存在派活工作台单独的文件夹里，不影响你自己的 ChatGPT 登录。
 
 ```sh
 git clone https://github.com/heihuzi-labs/captain-agents.git && cd captain-agents

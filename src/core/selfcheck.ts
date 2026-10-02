@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { paths } from './paths.ts';
 import { readJson, writeJson, hasCode, withLock } from './fsx.ts';
-import { sandbox, codexPermissions } from './sandbox.ts';
+import { sandbox, codexPermissions, deepseekHome } from './sandbox.ts';
 import { srtPath } from './workers.ts';
 import { extraDenyRead } from './settings.ts';
 import { whos, isolationOf, isolations } from './roster.ts';
@@ -20,7 +20,8 @@ export type IsolationResult = { isolation: Isolation; probes: Probe[]; error?: s
 // 探针的做法改了就升版本号：旧版本的缓存即使名字齐全、写着通过，也要重新自检。
 // 2：2026-09-30 全局配置探针改为“写成就算放行”、已有文件只写方式打开。
 // 3：2026-09-30 加公用临时目录和硬链接探针，选手只能写任务自己的 tmp。
-const cacheVersion = 3;
+// 4：2026-10-02 加 DeepSeek 登录文件夹探针，三种隔离都要读不到。
+const cacheVersion = 4;
 export type Selfcheck = { version: typeof cacheVersion; ok: boolean; at: string; note: string; results: IsolationResult[] };
 // 自检覆盖选手清单里出现的每一种隔离；新选手沿用已有隔离就自动被覆盖。
 const modes: Isolation[] = isolations;
@@ -77,12 +78,13 @@ export async function tempPaths(run: Executor, cwd: string, home = homedir()): P
 export function expectedProbes(mode: Isolation) {
   // Codex 的登录文件由它在隔离外的主进程读取，所以它的隔离里三家都必须读不到；
   // Grok、Cursor 整个跑在外层隔离里，必须能读自己的登录文件，只要求读不到别家的。
-  const logins = mode === 'codex' ? ['login-codex', 'login-grok', 'login-cursor'] : mode === 'grok' ? ['login-codex', 'login-cursor'] : ['login-codex', 'login-grok'];
+  // DeepSeek 的登录（API 钥匙）放在派活工作台单独的文件夹里，由 Codex 主进程在隔离外读，三种隔离都必须读不到。
+  const logins = [...(mode === 'codex' ? ['login-codex', 'login-grok', 'login-cursor'] : mode === 'grok' ? ['login-codex', 'login-cursor'] : ['login-codex', 'login-grok']), 'login-deepseek'];
   return ['worktree', 'tmpdir', 'hardlink', 'home', 'chrome', 'listener', 'internet', 'ssh', 'npmrc', ...logins, ...globalTargets.map(t => t.name), ...tempTargets.map(t => t.name)];
 }
 // 这两项必须写得进去，其余一律要挡住。
 const mustAllow = ['worktree', 'tmpdir'];
-const labels: Record<string, string> = { ...Object.fromEntries([...globalTargets, ...tempTargets].map(t => [t.name, t.label])), worktree: '副本内写文件', tmpdir: '任务专用临时目录可写（TMPDIR 指向它）', hardlink: '借硬链接改外面的文件', home: '目录外写文件', chrome: 'Chrome 调试口', listener: '本机监听端口', internet: '外网', ssh: '读 SSH 文件名', npmrc: '读 npm 登录配置', 'login-codex': '读 Codex 登录文件', 'login-grok': '读 Grok 登录文件', 'login-cursor': '读 Cursor 登录文件' };
+const labels: Record<string, string> = { ...Object.fromEntries([...globalTargets, ...tempTargets].map(t => [t.name, t.label])), worktree: '副本内写文件', tmpdir: '任务专用临时目录可写（TMPDIR 指向它）', hardlink: '借硬链接改外面的文件', home: '目录外写文件', chrome: 'Chrome 调试口', listener: '本机监听端口', internet: '外网', ssh: '读 SSH 文件名', npmrc: '读 npm 登录配置', 'login-codex': '读 Codex 登录文件', 'login-grok': '读 Grok 登录文件', 'login-cursor': '读 Cursor 登录文件', 'login-deepseek': '读 DeepSeek 登录文件夹' };
 export function evaluate(results: IsolationResult[], at = new Date().toISOString()): Selfcheck {
   const failures: string[] = [];
   for (const isolation of modes) {
@@ -209,6 +211,8 @@ await networkTest('internet', '1.1.1.1', 443, () => new Promise((resolve, reject
 await test('ssh', () => readdir(join(homedir(), '.ssh')));
 await test('npmrc', async () => { const fd = await open(join(homedir(), '.npmrc'), 'r'); await fd.close(); });
 ${expectedProbes(mode).filter(n => n.startsWith('login-')).map(name => {
+    // 文件夹由自检在外面先建好，所以查“能不能列出”，没登录时也有确定的结果。
+    if (name === 'login-deepseek') return `await test('login-deepseek', () => readdir(${JSON.stringify(deepseekHome())}));`;
     const path = { 'login-codex': '.codex/auth.json', 'login-grok': '.grok/auth.json', 'login-cursor': '.cursor/cli-config.json' }[name];
     return `await test(${JSON.stringify(name)}, async () => { const fd = await open(join(homedir(), ${JSON.stringify(path)}), 'r'); await fd.close(); });`;
   }).join('\n')}
@@ -318,6 +322,7 @@ export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
       for (const isolation of modes) results.push({ isolation, probes: [], error: '当前只支持 macOS 的实测隔离方式' });
     } else {
       const temp = await realpath(await mkdtemp(join(paths().cache, 'selfcheck-')));
+      await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
       const homeFiles: string[] = [];
       try {
         const listening = await run('/usr/sbin/lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-Fn'], temp, 5000);

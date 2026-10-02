@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { probeSource, expectedProbes, globalTargets } from '../src/core/selfcheck.ts';
+import { deepseekHome } from '../src/core/sandbox.ts';
 import type { Isolation, Probe, TempPaths } from '../src/core/selfcheck.ts';
 
 // 公用临时位置（假路径）；任务专用临时目录是 /fake/job/tmp。
@@ -85,8 +86,8 @@ for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 最
   const { probes, opened } = await runProbe(mode, { npmrc: 'ENOENT' });
   assert.ok(opened.includes('/fake/home/.npmrc')); assert.ok(opened.includes('/fake/home/.ssh'));
   for (const name of expectedProbes(mode).filter(n => n.startsWith('login-'))) {
-    const path = { 'login-codex': '.codex/auth.json', 'login-grok': '.grok/auth.json', 'login-cursor': '.cursor/cli-config.json' }[name];
-    assert.ok(opened.includes(`/fake/home/${path}`));
+    const path = { 'login-codex': '/fake/home/.codex/auth.json', 'login-grok': '/fake/home/.grok/auth.json', 'login-cursor': '/fake/home/.cursor/cli-config.json', 'login-deepseek': deepseekHome() }[name];
+    assert.ok(opened.includes(path!), name);
     assert.equal(probes.find(p => p.name === name)!.outcome, 'denied');
   }
   assert.equal(probes.find(p => p.name === 'npmrc')!.outcome, 'unknown');

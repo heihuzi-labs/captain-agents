@@ -2,7 +2,7 @@
 
 # Captain Agents · 船长派活
 
-Let one AI run the show and hand the coding work to the Codex, Grok and Cursor CLIs on your Mac.
+Let one AI run the show and hand the coding work to the Codex, Grok and Cursor CLIs on your Mac, plus DeepSeek running through Codex.
 
 [简体中文](README.md) · English
 
@@ -46,7 +46,7 @@ On your side there is a desktop app. The board shows what's running and what's d
 
 ## Getting it running
 
-You need a Mac (only tested on Apple silicon so far), Node.js 24 or newer, and pnpm. Also install and sign in to at least one of: [Codex](https://github.com/openai/codex) (by default the copy bundled with the ChatGPT app; set `XAGENTS_CODEX` to use another), the Grok CLI `grok`, or the Cursor CLI `cursor-agent`.
+You need a Mac (only tested on Apple silicon so far), Node.js 24 or newer, and pnpm. Also install and sign in to at least one of: [Codex](https://github.com/openai/codex) (by default the copy bundled with the ChatGPT app; set `XAGENTS_CODEX` to use another), the Grok CLI `grok`, or the Cursor CLI `cursor-agent`. For DeepSeek, install Codex and run `xagents login deepseek`, then paste your DeepSeek API key (pay per use). Codex keeps the key in a separate folder of its own, so your ChatGPT login is not touched.
 
 ```sh
 git clone https://github.com/heihuzi-labs/captain-agents.git && cd captain-agents

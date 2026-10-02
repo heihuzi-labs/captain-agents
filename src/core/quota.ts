@@ -8,7 +8,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { paths, toolRoot, unpackedPath } from './paths.ts';
 import { readJson, writeJson, hasCode } from './fsx.ts';
 import type { Who } from './job.ts';
-import { isolationOf, isolations, spec } from './roster.ts';
+import { isolationOf, isolations, spec, vendorOf } from './roster.ts';
 import { cursorState } from './sandbox.ts';
 import { LIMIT_CAPS } from './settings.ts';
 
@@ -223,12 +223,15 @@ export async function ensureQuota(options: QuotaOptions = {}) {
   const age = cached ? now.getTime() - Date.parse(cached.queriedAt) : Infinity;
   return cached && age >= 0 && age <= 600_000 ? cached : queryQuota(options);
 }
+// DeepSeek 借 Codex 跑但按用量扣自己的余额，不占 Codex 的周额度；简单版不查余额（钱用完时 DeepSeek 自己会报错）。
 export function quotaPool(who: Who) {
+  if (vendorOf(who) === 'deepseek') return { name: 'DeepSeek', label: '余额' };
   const provider = isolationOf(who);
   const label = provider === 'codex' ? '周额度' : provider === 'grok' ? '本期额度' : spec(who).pool === 'auto' ? '自家模型池' : '其他模型池';
   return { name: names[provider], label };
 }
 export function quotaBar(snapshot: QuotaSnapshot | null | undefined, who: Who) {
+  if (vendorOf(who) !== isolationOf(who)) return undefined;
   const entry = snapshot?.providers.find(p => p.icon === isolationOf(who));
   if (!entry || entry.error) return undefined;
   const { label } = quotaPool(who);
@@ -238,7 +241,7 @@ export function checkQuota(snapshot: QuotaSnapshot, chosen: { who: Who }[], forc
   if (force) return;
   for (const { who } of chosen) {
     const bar = quotaBar(snapshot, who);
-    const codex = isolationOf(who) === 'codex' ? snapshot.providers.find(p => p.icon === 'codex') : undefined, reached = !codex?.error && codex?.reached;
+    const codex = vendorOf(who) === 'codex' ? snapshot.providers.find(p => p.icon === 'codex') : undefined, reached = !codex?.error && codex?.reached;
     if (reached || (bar && !bar.approx && bar.used !== null && bar.used >= quotaStop)) {
       throw new Error(`${quotaPool(who).name} 的${bar?.label ?? '额度'}${reached ? '已触顶' : `已用 ${bar!.used}%，到了设置里的停派线 ${quotaStop}%`}，本次未派发。确实要派请加 --force。`);
     }

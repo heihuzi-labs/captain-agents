@@ -37,8 +37,9 @@ import { slimOld } from '../core/slim.ts';
 
 const help = `派活工作台：登记、派发和收集本机助手的任务。
   xagents intro   # 打印给其他 AI 的对接提示词（贴进它的对话，它就知道先读手册）
-  xagents connect   # 看四家 AI 的接入状态
-  xagents connect <claude|codex|grok|cursor> [--undo]   # 接入；--undo 撤下
+  xagents connect   # 看各家 AI 的接入状态
+  xagents connect <claude|codex|grok|cursor|dsh> [--undo]   # 接入；--undo 撤下（dsh 是 DeepSeek Harness）
+  xagents login deepseek   # 主人自己登录 DeepSeek：按提示粘贴 API 钥匙（屏幕上不显示），由 Codex 单独保管，不影响 ChatGPT 登录
   xagents guide
     打印指挥手册全文，末尾附这台机器现在的情况（选手设置、额度、各家档案、手头的活）。来指挥的 AI 第一步先运行它
   xagents project add <名字> <仓库路径> [--label 显示名] [--worktree-root 相对路径] [--setup 命令] [--verify 命令] [--deny-read 路径] [--rules 文件]
@@ -103,6 +104,26 @@ function parse(args: string[], values: string[] = [], flags: string[] = [], repe
   }
   return { positional, options, switches, one: (key: string) => options[key]?.[0] };
 }
+// 在终端里读一行而不回显（粘贴钥匙用）；不是终端时（比如从管道传进来）直接读完标准输入。
+async function readSecret(question: string): Promise<string> {
+  const input = process.stdin;
+  if (!input.isTTY) { let text = ''; for await (const chunk of input) text += chunk; return text; }
+  process.stderr.write(question);
+  input.setRawMode(true); input.resume(); input.setEncoding('utf8');
+  try {
+    return await new Promise<string>((done, fail) => {
+      let text = '';
+      const onData = (chunk: string) => {
+        for (const ch of chunk) {
+          if (ch === '\r' || ch === '\n') { input.off('data', onData); done(text); return; }
+          if (ch === '\u0003') { input.off('data', onData); fail(new Error('已取消，没有保存。')); return; }
+          if (ch === '\u007f' || ch === '\b') text = text.slice(0, -1); else text += ch;
+        }
+      };
+      input.on('data', onData);
+    });
+  } finally { input.setRawMode(false); input.pause(); process.stderr.write('\n'); }
+}
 function arity(values: string[], min: number, max = min) {
   if (values.length < min || values.length > max) throw new Error('参数数量不对，请运行 xagents --help 查看用法。');
 }
@@ -118,6 +139,14 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       const ai = p.positional.length ? connectArgument(p.positional) : undefined;
       const statuses = ai ? await (p.switches.has('undo') ? disconnect(ai) : connect(ai)) : await connectStatus();
       for (const status of statuses.filter(s => !ai || s.ai === ai)) console.log(`${status.name}：${connectStateNames[status.state]}；${status.note}`);
+      return 0;
+    }
+    if (cmd === 'login') {
+      arity(rest, 1);
+      if (rest[0] !== 'deepseek') throw new Error('目前只有 DeepSeek 需要这样登录：xagents login deepseek。其他几家用它们自己的程序登录。');
+      const { loginDeepseek } = await import('../core/workers.ts');
+      await loginDeepseek(await readSecret('请粘贴 DeepSeek 的 API 钥匙（屏幕上不显示），然后按回车：'));
+      console.log('DeepSeek 已登录。钥匙由 Codex 存在派活工作台单独的文件夹里，你自己的 ChatGPT 登录不受影响。');
       return 0;
     }
     if (cmd === 'guide') {

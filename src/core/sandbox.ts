@@ -18,6 +18,10 @@ function tomlString(value: string) {
 // 那里有负责人会话的草稿和后台输出、别的程序的临时文件和套接字。依据 docs/research/tmp-writes-2026-09-30.md。
 export const jobTmpDir = (job: Pick<Job, 'id'>) => join(jobDir(job.id), 'tmp');
 
+// DeepSeek 选手的 Codex 文件夹（CODEX_HOME）：放 DeepSeek 的登录（API 钥匙）和它的会话记录，和主人自己 ~/.codex 里的 ChatGPT 登录分开。
+// 钥匙由 Codex 隔离外的主进程读；三种隔离里的选手一律读不到这个文件夹。依据 docs/research/connect-deepseek-2026-10-02.md。
+export const deepseekHome = () => join(paths().home, 'deepseek');
+
 // 依据 docs/research/codex-permissions-2026-09-29.md；启动与探针只能从这里取表。
 // denyReadHome：设置里额外禁读的家目录位置（settings.ts 的 extraDenyRead，派活开头读好）。
 export type Isolated = Pick<Project, 'denyReadExtra'> & { denyReadHome?: string[] };
@@ -28,6 +32,7 @@ export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | '
   const rules = new Map<string, 'read' | 'write' | 'deny'>();
   for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); rules.set(join(homedir(), path), 'deny'); }
   rules.set(join(homedir(), '.codex/tmp'), 'read');
+  tomlString(deepseekHome()); rules.set(deepseekHome(), 'deny');
   rules.set(':slash_tmp', 'read');
   rules.set(':tmpdir', 'read');
   rules.set(tmp, 'write');
@@ -88,6 +93,7 @@ export async function sandbox(job: Job, project: Isolated, state = cursorStateDi
     : p === '__TMP__' ? [tmp]
     : p === '__GROK_SESSION__' ? sessions : [p]);
   for (const path of template.filesystem.allowWrite) checkRoot(path, '可写路径');
+  template.filesystem.denyRead.push(deepseekHome());
   for (const path of project.denyReadHome ?? []) { relativePath(path); template.filesystem.denyRead.push(join(homedir(), path)); }
   for (const extra of project.denyReadExtra) {
     relativePath(extra);

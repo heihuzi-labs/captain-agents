@@ -7,7 +7,7 @@ import { Elapsed } from './Elapsed.tsx';
 
 export type Workers = View['workers'];
 type Size = 'sm' | 'md' | 'lg';
-const LETTER: Record<string, string> = { codex: 'C', grok: 'G', cursor: 'Cu', claude: 'A' };
+const LETTER: Record<string, string> = { codex: 'C', grok: 'G', cursor: 'Cu', claude: 'A', deepseek: 'D' };
 
 // 一个图标：图片还在加载时只占位（不闪字母圆标）；加载成功显示图片，加载失败显示字母圆标。
 // 图片由应用自己的图标通道提供，新建的图片元素要等一小会儿才知道结果，所以每个元素自己记状态。

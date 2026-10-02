@@ -349,7 +349,8 @@ function workersView() {
   const v = view();
   v.workers = { codex: { name: 'Codex', model: 'GPT-6 Astra', icon: 'codex' }, 'codex-luna': { name: 'Codex · Luna', model: 'GPT-6 Luna', icon: 'codex' }, grok: { name: 'Grok', model: 'Grok 4.7', icon: 'grok' },
     'cursor-grok': { name: 'Cursor · Grok', model: 'Grok 4.7', icon: 'cursor', badge: 'grok' }, 'cursor-opus': { name: 'Cursor · Claude', model: 'Claude Opus 5.5', icon: 'cursor', badge: 'claude' },
-    'cursor-sonnet': { name: 'Cursor · Sonnet', model: 'Claude Sonnet 5.5', icon: 'cursor', badge: 'claude' } };
+    'cursor-sonnet': { name: 'Cursor · Sonnet', model: 'Claude Sonnet 5.5', icon: 'cursor', badge: 'claude' },
+    deepseek: { name: 'DeepSeek', model: 'DeepSeek V4 Pro', icon: 'deepseek' }, 'deepseek-flash': { name: 'DeepSeek · Flash', model: 'DeepSeek V4.1 Flash', icon: 'deepseek' } };
   return v;
 }
 const lead = (kind: 'adopt' | 'drop') => ({ kind, by: 'lead' as const, at: '' });

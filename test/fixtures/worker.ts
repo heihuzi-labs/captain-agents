@@ -10,7 +10,7 @@ const final = codex ? value('-o') : undefined;
 const dir = codex ? dirname(final!) : dirname(value('--settings'));
 const prompt = codex ? readFileSync(0, 'utf8') : grok ? readFileSync(value('--prompt-file'), 'utf8') : args.at(-1)!;
 const mode = process.env.XA_TEST_MODE || 'ok';
-writeFileSync(join(dir, 'observed.json'), JSON.stringify({ args, prompt, env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('GROK_'))), cwd: process.cwd() }));
+writeFileSync(join(dir, 'observed.json'), JSON.stringify({ args, prompt, env: Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('GROK_'))), keys: ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'DEEPSEEK_API_KEY'].filter(k => k in process.env), codexHome: process.env.CODEX_HOME ?? null, cwd: process.cwd() }));
 if (mode === 'hang' || mode === 'ignore-term') {
   const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
   writeFileSync(join(dir, 'grandchild.pid'), String(child.pid));

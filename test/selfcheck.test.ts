@@ -25,9 +25,10 @@ test('自检只承认明确权限拒绝；连接失败、超时、文件不存�
   const global = globalTargets.map(t => t.name), shared = tempTargets.map(t => t.name);
   assert.deepEqual(shared, ['tmp-lead', 'tmp-shared', 'tmp-srt', 'tmp-user', 'tmp-cache', 'npm-logs']);
   for (const name of ['cursor-hooks', 'cursor-skills', 'cursor-rules', 'cursor-mcp', 'cursor-config', 'cursor-trust', 'cursor-install', 'grok-skills', 'grok-agents', 'grok-rules', 'grok-hooks', 'grok-admin', 'grok-memory', 'grok-plugins', 'grok-sessions', 'grok-login', 'claude-config', 'agents-skills']) assert.ok(global.includes(name), name);
-  assert.deepEqual(expectedProbes('codex'), [...base, 'login-codex', 'login-grok', 'login-cursor', ...global, ...shared]);
-  assert.deepEqual(expectedProbes('grok'), [...base, 'login-codex', 'login-cursor', ...global, ...shared]);
-  assert.deepEqual(expectedProbes('cursor'), [...base, 'login-codex', 'login-grok', ...global, ...shared]);
+  // DeepSeek 的登录文件夹三种隔离都要读不到。
+  assert.deepEqual(expectedProbes('codex'), [...base, 'login-codex', 'login-grok', 'login-cursor', 'login-deepseek', ...global, ...shared]);
+  assert.deepEqual(expectedProbes('grok'), [...base, 'login-codex', 'login-cursor', 'login-deepseek', ...global, ...shared]);
+  assert.deepEqual(expectedProbes('cursor'), [...base, 'login-codex', 'login-grok', 'login-deepseek', ...global, ...shared]);
   for (const code of ['EPERM', 'EACCES']) assert.equal(permissionOutcome(code), 'denied');
   for (const code of ['ENOENT', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNRESET', '']) assert.equal(permissionOutcome(code), 'unknown');
   assert.equal(evaluate(passing()).ok, true);
@@ -64,7 +65,7 @@ test('缓存一天有效，过期重检；失败和损坏拦截，不能仅凭 o
   assert.equal((await readSelfcheck(now - 1)).ok, null);
   await ensureSelfcheck(checker); assert.equal(calls, 1);
   await writeFile(file, JSON.stringify(evaluate(passing(), new Date(now - 86400000).toISOString()))); await ensureSelfcheck(checker); assert.equal(calls, 2);
-  await writeFile(file, JSON.stringify({ version: 3, ok: true, at: new Date().toISOString(), results: [] }));
+  await writeFile(file, JSON.stringify({ version: 4, ok: true, at: new Date().toISOString(), results: [] }));
   await assert.rejects(ensureSelfcheck(checker), /自检没过/); assert.equal(calls, 2);
   // 旧版本的缓存（探针做法改之前）即使名字齐全、写着通过，也要重新自检。
   await writeFile(file, JSON.stringify({ ...evaluate(passing()), version: 2 }));
@@ -105,10 +106,10 @@ test('旧自检缓存缺 npmrc 或该查的登录探针，即使 ok 为 true 也
   t.after(() => { if (oldHome === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = oldHome; });
   await mkdir(join(c.home, 'cache'));
   // Codex 要查自己的登录文件；Grok、Cursor 只查别家的（自己的必须能读，否则启动不了）。
-  for (const [isolation, login] of [['codex', 'login-codex'], ['grok', 'login-cursor'], ['cursor', 'login-grok']] as [Isolation, string][]) for (const name of ['npmrc', login]) {
+  for (const [isolation, login] of [['codex', 'login-codex'], ['grok', 'login-cursor'], ['cursor', 'login-grok'], ['grok', 'login-deepseek']] as [Isolation, string][]) for (const name of ['npmrc', login]) {
     const results = passing(), result = results.find(r => r.isolation === isolation)!;
     result.probes = result.probes.filter(p => p.name !== name);
-    await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 3, ok: true, at: new Date().toISOString(), results }));
+    await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 4, ok: true, at: new Date().toISOString(), results }));
     await assert.rejects(ensureSelfcheck(), /缺少有效结果/);
   }
 });

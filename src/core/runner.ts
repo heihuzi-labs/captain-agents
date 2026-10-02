@@ -67,7 +67,9 @@ export async function runWorker(id: string) {
       const input = cmd.stdin === 'prompt' ? await open(join(dir, 'prompt.md'), 'r') : undefined;
       if (input) handles.push(input);
       if (!stopping) {
-        const child = spawn(cmd.file, cmd.args, { cwd: job.worktree, detached: true, env: { ...process.env, ...cmd.env }, stdio: [input?.fd ?? 'ignore', output.fd, errors.fd] });
+        const env: NodeJS.ProcessEnv = { ...process.env, ...cmd.env };
+        for (const name of cmd.unset ?? []) delete env[name];
+        const child = spawn(cmd.file, cmd.args, { cwd: job.worktree, detached: true, env, stdio: [input?.fd ?? 'ignore', output.fd, errors.fd] });
         const spawned = new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
         workerPid = child.pid;
         const finished = new Promise<number | null>((resolve, reject) => {

@@ -149,14 +149,14 @@ function outcome(m: ViewJob): ReactNode {
   return m.state === 'stopped' ? <span className="faint when">已停</span> : null;
 }
 // 已完成列里一件活占一行：选手小图标、题目、用时，最右边是结果。一批就是这一批的几家小图标，结果写用了哪家。点这一行打开详情。
-function DoneRow({ entry: e, workers, hue, open }: { entry: Entry; workers: Workers; hue?: string; open: Open }) {
+function DoneRow({ entry: e, workers, open }: { entry: Entry; workers: Workers; open: Open }) {
   const single = e.members.length === 1 ? e.members[0] : null;
   const seconds = e.members.reduce<number | null>((max, m) => m.seconds == null ? max : Math.max(max ?? 0, m.seconds), null);
   // 正常的不写、只标例外：采用了什么都不挂（一批里没采用的那家图标调淡）；没用的整行调淡、写“没用”。
   const result = single ? outcome(single) : (() => { const o = outcomeOf(e); return o && (o.dropped ? <span className="faint when">{o.text}</span> : <Chip tone={o.tone}>{o.text}</Chip>); })();
   const dropped = e.members.every(m => m.decision?.kind === 'drop');
   return <MemberRow className={'done-row' + (dropped ? ' done-dropped' : '')} marked={e.members.some(awaitingReply)} onClick={() => open(e.target)} title={e.title}>
-    <span className="done-icons">{hue && <span className="bdot" style={cssVars({ '--batch': hue })} />}{e.members.map(m => <span key={m.id} className={dimmed(e, m) ? 'icon-dim' : undefined}><WorkerIdentity job={m} workers={workers} size="sm" iconOnly /></span>)}</span>
+    <span className="done-icons">{e.members.map(m => <span key={m.id} className={dimmed(e, m) ? 'icon-dim' : undefined}><WorkerIdentity job={m} workers={workers} size="sm" iconOnly /></span>)}</span>
     <span className="ellip done-title">{e.title}</span>
     {seconds != null && <span className="faint num done-time">{fmtDur(seconds, true)}</span>}
     {result != null && <span className="done-end">{result}</span>}
@@ -183,10 +183,9 @@ function DoneHeader({ name, count, shut, body, toggle, onArchive }: {
 // 标题栏：左边折叠箭头、项目名、件数，右边“…”菜单；标题栏右键复用菜单（未归类不给）。
 // 卡底“还有 N 件”和“这个项目的全部 →”（去历史页并选中这个项目）。
 // 项目按各自最近完成的一件排。默认折起，只剩项目名和件数；点标题栏展开或折起，点开了哪些本机记住。
-export function DoneList({ entries, workers, hue, label, open, showProject, onArchive }: {
+export function DoneList({ entries, workers, label, open, showProject, onArchive }: {
   entries: Entry[];
   workers: Workers;
-  hue: (e: Entry) => string | undefined;
   label: (project: string) => string;
   open: Open;
   showProject: (project: string) => void;
@@ -203,7 +202,7 @@ export function DoneList({ entries, workers, hue, label, open, showProject, onAr
     return <section key={g.name} aria-label={name}><BatchGroup head={<DoneHeader name={name} count={g.entries.length} shut={shut} body={body}
       toggle={() => toggle(g.name)} onArchive={g.name === NO_PROJECT ? undefined : () => onArchive(g.name)} />}>
       {!shut && <div id={body}>
-        {g.entries.slice(0, DONE_ROWS).map(e => <DoneRow key={e.target.kind + e.target.id} entry={e} workers={workers} hue={hue(e)} open={open} />)}
+        {g.entries.slice(0, DONE_ROWS).map(e => <DoneRow key={e.target.kind + e.target.id} entry={e} workers={workers} open={open} />)}
         <div className="done-foot">{more > 0 && <span>还有 {more} 件</span>}<button type="button" className="plain" onClick={() => showProject(g.name)}>这个项目的全部 →</button></div>
       </div>}
     </BatchGroup></section>;

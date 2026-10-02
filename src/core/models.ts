@@ -1,5 +1,5 @@
 import { codexPath } from './workers.ts';
-import { launchModels, isolationOf, isolations } from './roster.ts';
+import { launchModels, isolationOf, isolations, vendorOf } from './roster.ts';
 import { cleanTerminal, executeQuery, grokEnvironment } from './quota.ts';
 import type { Provider, QueryExecutor } from './quota.ts';
 import type { Who } from './job.ts';
@@ -29,7 +29,8 @@ export function parseTextModels(raw: string, provider: 'grok' | 'cursor'): Model
 export async function queryModels(execute: QueryExecutor = executeQuery): Promise<ModelResult[]> {
   return Promise.all(isolations.map(async provider => {
     // “当前”= 派活工作台按选手、强度、快速版会实际启动的每一个模型名，全部来自选手清单。
-    const current = launchModels().filter(m => isolationOf(m.who) === provider).map(m => ({ ...m, present: null as boolean | null }));
+    // DeepSeek 的模型不在 Codex 自带的列表里，这里不核对（简单版）；它的模型名以 roster.ts 里写明的核对结果为准。
+    const current = launchModels().filter(m => isolationOf(m.who) === provider && vendorOf(m.who) === provider).map(m => ({ ...m, present: null as boolean | null }));
     try {
       const raw = await execute(provider === 'codex' ? { file: codexPath(), args: ['debug', 'models'], timeoutMs: 20_000 }
         : provider === 'grok' ? { file: 'grok', args: ['models'], env: grokEnvironment(), timeoutMs: 20_000 }

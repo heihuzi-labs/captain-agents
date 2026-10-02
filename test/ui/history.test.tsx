@@ -158,7 +158,13 @@ test('已完成列的一行：点了打开详情；一批采用了一家时不�
   const row = document.querySelector('.column.c-done .done-row') as HTMLElement;
   expect(row.querySelectorAll('.done-icons .logo')).toHaveLength(2); expect(row.querySelectorAll('.done-icons .icon-dim')).toHaveLength(1);
   expect(row.querySelector('.done-end')).toBeNull(); expect(row.classList.contains('done-dropped')).toBe(false);
-  fireEvent.click(row); await screen.findByRole('dialog');
+  // 一批不另加批次色点：并排的几家图标已经说明是一批（粉色的点还容易和留言小圆点混淆）。历史页的行也一样。
+  expect(row.querySelector('.bdot, [style*="--batch"]')).toBeNull();
+  fireEvent.click(screen.getByRole('tab', { name: '历史' }));
+  const hrow = (await screen.findByText('两家对比')).closest('.hrow') as HTMLElement;
+  expect(hrow.querySelectorAll('.logo')).toHaveLength(2); expect(hrow.querySelector('.bdot, [style*="--batch"]')).toBeNull();
+  fireEvent.click(screen.getByRole('tab', { name: '看板' }));
+  fireEvent.click(document.querySelector('.column.c-done .done-row') as HTMLElement); await screen.findByRole('dialog');
   cleanup(); v.jobs = v.jobs.map(j => ({ ...j, decision: { kind: 'drop' as const, by: 'lead' as const, at: lead.at } }));
   show(v); await screen.findByRole('tablist', { name: '页面' });
   const both = document.querySelector('.column.c-done .done-row')!;

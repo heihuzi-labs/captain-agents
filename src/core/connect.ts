@@ -12,14 +12,18 @@ export type ConnectOptions = { home?: string };
 export const connectStateNames: Record<ConnectState, string> = {
   on: '已接入', outdated: '内容不是最新', off: '还没接入', missing: '没装', broken: '要看一眼',
 };
-const names = { claude: 'Claude', codex: 'Codex', grok: 'Grok', cursor: 'Cursor' };
-const begin = '<!-- xagents:begin（派活工作台写入，用 xagents connect codex --undo 撤下） -->';
+const names = { claude: 'Claude', codex: 'Codex', grok: 'Grok', cursor: 'Cursor', dsh: 'DeepSeek Harness' };
+// 和主人的内容同在一个文件里的几家（Codex、DeepSeek Harness）：只写起止标记之间那一段。
+type BlockAi = 'codex' | 'dsh';
+const isBlock = (ai: ConnectAi): ai is BlockAi => ai === 'codex' || ai === 'dsh';
+const beginOf = (ai: BlockAi) => `<!-- xagents:begin（派活工作台写入，用 xagents connect ${ai} --undo 撤下） -->`;
 // 不另存登记文件：在开始行里记住补过末尾换行，撤下才能逐字节恢复。
-const noNewlineBegin = begin.replace(' -->', ' 原文末尾无换行 -->');
+const noNewlineBeginOf = (ai: BlockAi) => beginOf(ai).replace(' -->', ' 原文末尾无换行 -->');
 const end = '<!-- xagents:end -->';
 // 每家写哪个文件（Grok 和 Claude 共用一份）。Cursor 的规矩目录是 2026-09-30 实测的：命令行从项目目录一路往上找 .cursor/rules，
-// 所以只对家目录下的项目生效；编辑器里没实测。
-const files = { claude: '.claude/rules/xagents.md', grok: '.claude/rules/xagents.md', codex: '.codex/AGENTS.md', cursor: '.cursor/rules/xagents.mdc' };
+// 所以只对家目录下的项目生效；编辑器里没实测。DeepSeek Harness 的全局规矩文件名写死是 ~/.dsh/AGENTS.md（没有规矩目录），
+// 每次开会话和压缩之后都会放回对话（官方源码 packages/context/agent-instructions，见 docs/research/connect-dsh-2026-10-02.md）。
+const files = { claude: '.claude/rules/xagents.md', grok: '.claude/rules/xagents.md', codex: '.codex/AGENTS.md', cursor: '.cursor/rules/xagents.mdc', dsh: '.dsh/AGENTS.md' };
 const shownFile = (ai: ConnectAi) => `~/${files[ai]}`;
 const target = (home: string, ai: ConnectAi) => join(home, files[ai]);
 // 整份文件都是我们写的那几家（Claude、Cursor）：文件内容。Cursor 的 .mdc 要带“总是生效”的头。
@@ -58,7 +62,7 @@ async function read(file: string): Promise<Snapshot> {
 }
 
 type Block = { start: number; body: number; endStart: number; finish: number; noNewline: boolean; current: boolean; eol: string };
-function parse(bytes: Buffer): { state: 'on' | 'off' | 'outdated' | 'broken'; block?: Block; note?: string } {
+function parse(bytes: Buffer, ai: BlockAi): { state: 'on' | 'off' | 'outdated' | 'broken'; block?: Block; note?: string } {
   // latin1 的每个字符对应一个字节，切片不会重编码主人的其他内容。
   const lines = [...bytes.toString('latin1').matchAll(/[^\n]*(?:\n|$)/g)].filter(m => m[0]);
   const starts = lines.filter(m => m[0].startsWith('<!-- xagents:begin'));
@@ -72,18 +76,19 @@ function parse(bytes: Buffer): { state: 'on' | 'off' | 'outdated' | 'broken'; bl
   const line = Buffer.from(a[0], 'latin1').toString('utf8'), marker = line.replace(/\r?\n$/, '');
   const noNewline = marker.endsWith(' 原文末尾无换行 -->');
   const block = { start: a.index!, body: a.index! + a[0].length, endStart: b.index!, finish: b.index! + b[0].length,
-    noNewline, current: marker === (noNewline ? noNewlineBegin : begin), eol: line.slice(marker.length) || '\n' };
+    noNewline, current: marker === (noNewline ? noNewlineBeginOf(ai) : beginOf(ai)), eol: line.slice(marker.length) || '\n' };
   const body = bytes.subarray(block.body, block.endStart).toString('utf8').replace(/^[\r\n]+|[\r\n]+$/g, '');
   return { state: body === LEAD_RULE && block.current ? 'on' : 'outdated', block };
 }
-const onlyHome = (ai: ConnectAi) => ai === 'cursor' ? '（只对家目录下的项目生效）' : '';
-async function inspect(home: string, ai: 'claude' | 'codex' | 'cursor'): Promise<{ status: ConnectStatus; snapshot: Snapshot; block?: Block }> {
-  const status: ConnectStatus = { ai, name: names[ai], state: 'off', note: `会写进 ${shownFile(ai)}${ai === 'codex' ? ' 末尾' : ''}${onlyHome(ai)}`, files: [shownFile(ai)] };
+// 写在小字里的提醒：Cursor 只对家目录下的项目生效；DeepSeek Harness 默认的沙箱不让命令写项目外面，跑 xagents 要主人点批准。
+const onlyHome = (ai: ConnectAi) => ai === 'cursor' ? '（只对家目录下的项目生效）' : ai === 'dsh' ? '（它跑 xagents 时要你点批准）' : '';
+async function inspect(home: string, ai: Exclude<ConnectAi, 'grok'>): Promise<{ status: ConnectStatus; snapshot: Snapshot; block?: Block }> {
+  const status: ConnectStatus = { ai, name: names[ai], state: 'off', note: `会写进 ${shownFile(ai)}${isBlock(ai) ? ' 末尾' : ''}${onlyHome(ai)}`, files: [shownFile(ai)] };
   try {
     if (!await directory(join(home, `.${ai}`))) return { status: { ...status, state: 'missing', note: `这台电脑上没找到 ${names[ai]}` }, snapshot: null };
     await checkPath(home, ai);
     const snapshot = await read(target(home, ai));
-    const parsed = ai === 'codex' ? parse(snapshot?.bytes ?? Buffer.alloc(0))
+    const parsed = isBlock(ai) ? parse(snapshot?.bytes ?? Buffer.alloc(0), ai)
       : { state: !snapshot ? 'off' as const : snapshot.bytes.equals(Buffer.from(whole(ai))) ? 'on' as const : 'outdated' as const };
     status.state = parsed.state;
     if (parsed.state === 'on') status.note = `写在 ${shownFile(ai)}${onlyHome(ai)}`;
@@ -103,7 +108,8 @@ export async function connectStatus(options?: ConnectOptions): Promise<ConnectSt
   const grok: ConnectStatus = { ai: 'grok', name: names.grok, state: await info(join(home, '.grok')) ? claude.state : 'missing',
     note: '和 Claude 共用一份规矩', files: [shownFile('grok')], sharedWith: 'claude' };
   const cursor = (await inspect(home, 'cursor')).status;
-  return [claude, codex, grok, cursor];
+  const dsh = (await inspect(home, 'dsh')).status;
+  return [claude, codex, grok, cursor, dsh];
 }
 
 // 主进程只收一个白名单名字；放在可独立测试的核心里，避免测试启动 Electron。
@@ -134,20 +140,20 @@ async function change(ai: ConnectAi, undo: boolean, options?: ConnectOptions): P
   if ((!undo && status.state === 'on') || (undo && status.state === 'off')) return connectStatus(options);
   const bytes = snapshot?.bytes ?? Buffer.alloc(0);
   let next: Buffer;
-  if (ai !== 'codex') next = Buffer.from(undo ? '' : whole(ai));
+  if (!isBlock(ai)) next = Buffer.from(undo ? '' : whole(ai));
   else if (undo) next = removeBlock(bytes, block!);
-  else if (block) next = Buffer.concat([bytes.subarray(0, block.start), Buffer.from(`${block.noNewline ? noNewlineBegin : begin}${block.eol}${LEAD_RULE}\n`), bytes.subarray(block.endStart)]);
+  else if (block) next = Buffer.concat([bytes.subarray(0, block.start), Buffer.from(`${block.noNewline ? noNewlineBeginOf(ai) : beginOf(ai)}${block.eol}${LEAD_RULE}\n`), bytes.subarray(block.endStart)]);
   else {
     const missingNewline = bytes.length > 0 && bytes[bytes.length - 1] !== 10;
     const separator = bytes.length ? missingNewline ? '\n\n' : '\n' : '';
-    next = Buffer.concat([bytes, Buffer.from(`${separator}${missingNewline ? noNewlineBegin : begin}\n${LEAD_RULE}\n${end}\n`)]);
+    next = Buffer.concat([bytes, Buffer.from(`${separator}${missingNewline ? noNewlineBeginOf(ai) : beginOf(ai)}\n${LEAD_RULE}\n${end}\n`)]);
   }
   let backup: string | undefined;
   try {
     await assertUnchanged(home, ai, snapshot);
-    const remove = undo && (ai !== 'codex' || !next.toString('utf8').trim());
+    const remove = undo && (!isBlock(ai) || !next.toString('utf8').trim());
     if (snapshot && !remove) backup = await copyToTrash([file], `接入备份-${ai}`);
-    if (ai !== 'codex' && !undo) await fs.mkdir(dirname(file), { recursive: true });
+    if (!isBlock(ai) && !undo) await fs.mkdir(dirname(file), { recursive: true });
     await assertUnchanged(home, ai, snapshot);
     if (remove) backup = await moveToTrash([file], `接入备份-${ai}`);
     else {

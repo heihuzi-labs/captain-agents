@@ -23,13 +23,14 @@ async function setup(t: TestContext, installed = true) {
   return { ...c, home, trash, codex, claude, options, state, backups };
 }
 
-test('四家状态、Claude 更新、Grok 共用，不读其他配置', async t => {
+test('各家状态、Claude 更新、Grok 共用，不读其他配置', async t => {
   const c = await setup(t, false);
-  assert.deepEqual((await connectStatus(c.options)).map(s => s.state), ['missing', 'missing', 'missing', 'missing']);
+  assert.deepEqual((await connectStatus(c.options)).map(s => s.state), ['missing', 'missing', 'missing', 'missing', 'missing']);
   await assert.rejects(connect('claude', c.options), /这台电脑上没找到 Claude/);
   await assert.rejects(connect('codex', c.options), /这台电脑上没找到 Codex/);
   for (const ai of CONNECT_AIS) await fs.mkdir(join(c.home, `.${ai}`));
-  assert.deepEqual((await connectStatus(c.options)).map(s => s.state), ['off', 'off', 'off', 'off']);
+  assert.deepEqual((await connectStatus(c.options)).map(s => s.state), ['off', 'off', 'off', 'off', 'off']);
+  assert.deepEqual((await connectStatus(c.options)).map(s => s.name), ['Claude', 'Codex', 'Grok', 'Cursor', 'DeepSeek Harness']);
   assert.deepEqual((await c.state('cursor')).files, ['~/.cursor/rules/xagents.mdc']);
   assert.equal((await c.state('grok')).sharedWith, 'claude');
   assert.equal((await c.state('grok')).note, '和 Claude 共用一份规矩');
@@ -191,11 +192,12 @@ test('copyToTrash 使用同样的目录编号，保留源文件与权限，符�
   await assert.rejects(copyToTrash([c.codex], '../坏名字'), /不合法/);
 });
 
-test('CLI 列出四家、接入、撤下、备份位置、错误参数；guide 带状态且读不出仍成功', async t => {
+test('CLI 列出各家、接入、撤下、备份位置、错误参数；guide 带状态且读不出仍成功', async t => {
   const c = await setup(t);
   const list = await c.cli(['connect']);
   assert.equal(list.code, 0, list.stderr);
-  assert.equal(list.stdout.trim().split('\n').length, 4);
+  assert.equal(list.stdout.trim().split('\n').length, 5);
+  assert.match(list.stdout, /DeepSeek Harness：还没接入；会写进 ~\/.dsh\/AGENTS.md 末尾（它跑 xagents 时要你点批准）/);
   assert.match(list.stdout, /Claude：还没接入/); assert.match(list.stdout, /Grok：还没接入；和 Claude 共用/);
   assert.match(list.stdout, /Cursor：还没接入；会写进 ~\/.cursor\/rules\/xagents.mdc（只对家目录下的项目生效）/);
   await fs.writeFile(c.codex, '原文\n');
@@ -208,7 +210,7 @@ test('CLI 列出四家、接入、撤下、备份位置、错误参数；guide �
   for (const args of [['bad'], ['codex', 'claude'], ['--undo'], ['codex', '--bad']]) assert.equal((await c.cli(['connect', ...args])).code, 1);
   assert.match((await c.cli(['connect', 'bad'])).stderr, /claude、codex、grok、cursor/);
   assert.match((await c.cli(['--help'])).stdout, /xagents connect/);
-  const guide = await c.cli(['guide']); assert.equal(guide.code, 0, guide.stderr); assert.match(guide.stdout, /接入的 AI：Claude 还没接入；Codex 还没接入；Grok 和 Claude 共用；Cursor 还没接入/);
+  const guide = await c.cli(['guide']); assert.equal(guide.code, 0, guide.stderr); assert.match(guide.stdout, /接入的 AI：Claude 还没接入；Codex 还没接入；Grok 和 Claude 共用；Cursor 还没接入；DeepSeek Harness 还没接入/);
   const fakeHome = join(c.temp, '不是目录'); await fs.writeFile(fakeHome, '');
   const failedRead = await c.cli(['guide'], { HOME: fakeHome });
   assert.equal(failedRead.code, 0, failedRead.stderr); assert.match(failedRead.stdout, /接入状态读不出：/);
@@ -265,4 +267,25 @@ test('开始行还是改名前的写法：算不是最新，再接入换成新�
   assert.equal((await c.state('codex')).state, 'on');
   await disconnect('codex', c.options);
   assert.deepEqual(await fs.readFile(c.codex), original);
+});
+
+test('DeepSeek Harness：写 ~/.dsh/AGENTS.md 的标记段，保留主人原有内容，撤下逐字节还原；Codex 已接入的不受影响', async t => {
+  const c = await setup(t), file = join(c.home, '.dsh/AGENTS.md'), mine = '# 我自己的规矩\n别删我';
+  const dshBegin = '<!-- xagents:begin（派活工作台写入，用 xagents connect dsh --undo 撤下） -->';
+  // 还没有文件：新建只含标记段。
+  await connect('dsh', c.options);
+  assert.equal(await fs.readFile(file, 'utf8'), `${dshBegin}\n${LEAD_RULE}\n${end}\n`);
+  assert.equal((await c.state('dsh')).state, 'on'); assert.match((await c.state('dsh')).note, /写在 ~\/.dsh\/AGENTS.md（它跑 xagents 时要你点批准）/);
+  await disconnect('dsh', c.options); await assert.rejects(fs.access(file));
+  // 主人自己有内容（末尾没有换行）：只在末尾加一段，撤下后一个字节都不差。
+  await fs.writeFile(file, mine);
+  await connect('dsh', c.options);
+  const written = await fs.readFile(file, 'utf8');
+  assert.ok(written.startsWith(mine + '\n\n')); assert.ok(written.includes(LEAD_RULE)); assert.ok(written.includes('connect dsh --undo'));
+  await disconnect('dsh', c.options);
+  assert.equal(await fs.readFile(file, 'utf8'), mine);
+  // Codex 的开始行一字不变：已经接入的 Codex 仍是“已接入”。
+  await fs.writeFile(c.codex, block);
+  assert.equal((await c.state('codex')).state, 'on');
+  assert.equal(connectArgument(['dsh']), 'dsh');
 });

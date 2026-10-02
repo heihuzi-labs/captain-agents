@@ -12,7 +12,7 @@
   /* 批次色板：同一批的卡片顶部色带，按派出顺序轮换 */
   --batch-1: #7c5cff; --batch-2: #0f9d9a; --batch-3: #d9468f; --batch-4: #4f5bd5; --batch-5: #6f8f1f; --batch-6: #8a5a9e;
   /* 选手字母圆标（图标缺失时的兜底） */
-  --brand-codex: #4b5cf0; --brand-grok: #111111; --brand-cursor: #111111; --brand-claude: #d97757; --brand-other: #888888;
+  --brand-codex: #4b5cf0; --brand-grok: #111111; --brand-cursor: #111111; --brand-claude: #d97757; --brand-deepseek: #4d6bfe; --brand-other: #888888;
   --on-brand: #ffffff; --on-accent: #ffffff; --icon-ring: transparent;
   /* 开关：关着时的轨道、滑块 */
   --switch-off: #cfcfc7; --knob: #ffffff;

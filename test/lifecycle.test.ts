@@ -37,7 +37,10 @@ test('四家同批派发到完成、共同起点、收集、diff、清理与记�
     const observed = JSON.parse(await readFile(join(dir, 'observed.json'), 'utf8'));
     assert.equal(observed.prompt, prompt); assert.equal(observed.cwd, j.worktree);
     if (j.who === 'codex') {
-      assert.ok(observed.args.includes(codexPermissions(j, { denyReadExtra: ['.data'] }, join(dir, 'tmp'))));
+      // 权限里带着登记处下 DeepSeek 文件夹的禁读，要按派活时的登记处来算。
+      const oldHome = process.env.XAGENTS_HOME; process.env.XAGENTS_HOME = c.home;
+      try { assert.ok(observed.args.includes(codexPermissions(j, { denyReadExtra: ['.data'] }, join(dir, 'tmp')))); }
+      finally { if (oldHome === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = oldHome; }
       assert.ok(!observed.args.includes('-s'));
       assert.ok(!observed.args.some((arg: string) => arg.includes('sandbox_mode')));
     }
@@ -397,4 +400,21 @@ test('清理 Grok 活时，它在 ~/.grok/sessions 下的会话文件夹一起�
   await assert.rejects(access(mine)); await access(other);
   const trashed = await readdir(c.env.XAGENTS_TRASH!);
   assert.ok(trashed.some(name => name.startsWith(`派活工作台-Grok会话-${grok.id}`)), trashed.join(','));
+});
+
+test('DeepSeek 的 Codex 主进程不继承别家的钥匙变量，用单独的 Codex 文件夹；普通 Codex 照旧', async t => {
+  const c = await context(t);
+  assert.equal((await c.add([])).code, 0);
+  const keys = { OPENAI_API_KEY: 'test-openai', CODEX_API_KEY: 'test-codex', CODEX_ACCESS_TOKEN: 'test-token', DEEPSEEK_API_KEY: 'test-deepseek' };
+  const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'deepseek:high', '--who', 'codex:high', '--ro'], { XA_TEST_MODE: 'change', ...keys });
+  assert.equal(r.code, 0, r.stderr);
+  const waited = await c.cli(['wait', (await c.jobs())[0].batch]); assert.equal(waited.code, 0, waited.stderr + waited.stdout);
+  for (const j of await c.jobs()) {
+    const observed = JSON.parse(await readFile(join(c.home, 'jobs', j.id, 'observed.json'), 'utf8'));
+    if (j.who === 'deepseek') { assert.deepEqual(observed.keys, []); assert.equal(observed.codexHome, join(c.home, 'deepseek')); }
+    else { assert.deepEqual(observed.keys, Object.keys(keys)); assert.notEqual(observed.codexHome, join(c.home, 'deepseek')); }
+    // 任务记录里只记要去掉哪些变量的名字，不记值。
+    const record = await readFile(join(c.home, 'jobs', j.id, 'job.json'), 'utf8');
+    for (const value of Object.values(keys)) assert.ok(!record.includes(value));
+  }
 });
