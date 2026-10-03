@@ -22,6 +22,30 @@ export const jobTmpDir = (job: Pick<Job, 'id'>) => join(jobDir(job.id), 'tmp');
 // 钥匙由 Codex 隔离外的主进程读；三种隔离里的选手一律读不到这个文件夹。依据 docs/research/connect-deepseek-2026-10-02.md。
 export const deepseekHome = () => join(paths().home, 'deepseek');
 
+// 系统钥匙串的两个文件夹：本用户的（登录钥匙串，主人和各家程序存的密码）和系统的（Wi-Fi 等）。三种隔离一律读不到。
+// srt 固定放行钥匙串服务、设置里收不回，读得到文件就能用 security 读出密码；挡住文件就读不出。
+// Grok、Cursor 的模板（sandbox/*.json）里写的是同样两处。依据 docs/research/keychain-2026-10-02.md。
+export const keychainDirs = () => [join(homedir(), 'Library/Keychains'), '/Library/Keychains'];
+
+// 终端的配置文件和命令历史：主人常把钥匙写在里面（export XX_API_KEY=…），历史里也会留下敲过的钥匙。
+// Grok 跑命令用登录式 bash，会自动读 ~/.bash_profile、~/.bashrc，把里面的钥匙重新导进命令的环境，env.ts 的过滤就白做了；
+// 选手也能直接 cat 这些文件。所以三种隔离一律禁读（2026-10-02 实测，docs/research/worker-env-2026-10-02.md）。
+// 禁读后 bash 每条命令前多一行“Operation not permitted”的提示，命令照常跑；PATH 由派活进程传下去，不靠这些文件。
+export const SHELL_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_history',
+  '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zsh_history', '.zsh_sessions', '.config/fish'];
+// 家目录下常见的登录和凭据文件：里面是主人在别家服务的密码、令牌、私钥。选手不联网，用不着它们；
+// 三家程序启动、git 本地操作都不读（2026-10-02 实测，docs/research/credential-files-2026-10-02.md）。
+// 整个目录只放纯凭据目录；.cargo、.gem、.terraform.d、Hugging Face 缓存里还有程序和缓存，只禁读凭据那个文件。
+// 每次运行都要读的配置（~/.terraformrc、~/.m2/settings.xml、~/.gradle/gradle.properties、~/.yarnrc.yml、Poetry 的 auth.toml）不放：读不到程序直接报错。
+export const CREDENTIAL_FILES = ['.netrc', '.git-credentials', '.config/git/credentials',
+  '.docker', '.dockercfg', '.kube', '.config/gcloud', '.azure', '.gnupg', '.config/op', '.config/hub', '.config/glab-cli', '.ollama',
+  '.pypirc', '.gem/credentials', '.cargo/credentials.toml', '.cargo/credentials', '.terraform.d/credentials.tfrc.json',
+  '.pgpass', '.my.cnf', '.vault-token', '.huggingface/token', '.cache/huggingface/token', '.cache/huggingface/stored_tokens',
+  // DeepSeek Harness 的家目录：里面有它的登录凭据和会话记录，选手用不着（2026-10-03 加，docs/research/connect-dsh-2026-10-02.md）。
+  '.dsh'];
+// 三种隔离共用的家目录禁读名单（Codex 权限表和 srt 模板都从这里取）。
+const HOME_DENY = [...SHELL_FILES, ...CREDENTIAL_FILES];
+
 // 依据 docs/research/codex-permissions-2026-09-29.md；启动与探针只能从这里取表。
 // denyReadHome：设置里额外禁读的家目录位置（settings.ts 的 extraDenyRead，派活开头读好）。
 export type Isolated = Pick<Project, 'denyReadExtra'> & { denyReadHome?: string[] };
@@ -30,9 +54,10 @@ export type Isolated = Pick<Project, 'denyReadExtra'> & { denyReadHome?: string[
 export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job)) {
   tomlString(job.repo); tomlString(job.worktree); tomlString(tmp); checkRoot(tmp, '临时目录');
   const rules = new Map<string, 'read' | 'write' | 'deny'>();
-  for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); rules.set(join(homedir(), path), 'deny'); }
+  for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...HOME_DENY, ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); rules.set(join(homedir(), path), 'deny'); }
   rules.set(join(homedir(), '.codex/tmp'), 'read');
   tomlString(deepseekHome()); rules.set(deepseekHome(), 'deny');
+  for (const dir of keychainDirs()) { tomlString(dir); rules.set(dir, 'deny'); }
   rules.set(':slash_tmp', 'read');
   rules.set(':tmpdir', 'read');
   rules.set(tmp, 'write');
@@ -94,6 +119,7 @@ export async function sandbox(job: Job, project: Isolated, state = cursorStateDi
     : p === '__GROK_SESSION__' ? sessions : [p]);
   for (const path of template.filesystem.allowWrite) checkRoot(path, '可写路径');
   template.filesystem.denyRead.push(deepseekHome());
+  for (const path of HOME_DENY) template.filesystem.denyRead.push(join(homedir(), path));
   for (const path of project.denyReadHome ?? []) { relativePath(path); template.filesystem.denyRead.push(join(homedir(), path)); }
   for (const extra of project.denyReadExtra) {
     relativePath(extra);

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { access, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { jobDir, paths, toolRoot } from './paths.ts';
 import { readOptional, withLock } from './fsx.ts';
 import { StreamParser, LogTail } from './activity.ts';
@@ -11,6 +12,7 @@ import { checkCursorState, codexPermissions, cursorState, cursorStateDir, deepse
 import { execute } from './verify.ts';
 import type { Executor } from './verify.ts';
 import { grokEnvironment } from './quota.ts';
+import { codexEnvPolicy } from './env.ts';
 import type { Isolated } from './sandbox.ts';
 import { allowedEfforts, fastWhos, isWho, isolationOf, launchModel, spec, supportsFast, vendorOf, whos } from './roster.ts';
 import type { Effort } from './roster.ts';
@@ -29,7 +31,7 @@ export function selection(value: string) {
   return { who, effort: effort as Effort, model: launchModel(who, effort as Effort, fast), ...(fast ? { fast: true as const } : {}) };
 }
 // DeepSeek 借 Codex 跑：Codex 文件夹换成派活工作台单独的那个（里面只有 DeepSeek 的登录），主人 ~/.codex 的 ChatGPT 登录不受影响。
-// 钥匙由 Codex 主进程在隔离外读、只发给 DeepSeek；选手跑的命令一律去掉带钥匙的环境变量（实测不显式去掉时看得到）。
+// 钥匙由 Codex 主进程在隔离外读、只发给 DeepSeek；选手看不到带钥匙的环境变量（规则在 env.ts，所有选手都一样）。
 // 依据 docs/research/connect-deepseek-2026-10-02.md。
 export const DEEPSEEK_PROVIDER = 'model_providers.deepseek={name="DeepSeek",base_url="https://api.deepseek.com/",wire_api="responses",requires_openai_auth=true}';
 // 登录只认 API 钥匙，并固定存成文件（不进系统钥匙串，免得和主人自己的 Codex 登录混在一处）；登录和派活用同一组。
@@ -37,13 +39,13 @@ const DEEPSEEK_LOGIN = ['-c', 'forced_login_method="api"', '-c', 'cli_auth_crede
 // 这些变量在 Codex 里比登录文件优先（codex-cli 0.159 的认证顺序），带着就会把 OpenAI 的钥匙发给 DeepSeek；
 // 后三个会让它改走“工作负载身份”登录，在只认 API 钥匙时直接报错、用不上 DeepSeek 的登录文件。
 // 所以 DeepSeek 的 Codex 主进程启动前从继承的环境里去掉（登录、查登录、派活都一样），选手的命令也一并去掉。
+// 名字带 KEY、TOKEN 的本来就会被 env.ts 去掉；后三个里有两个不带，所以这张表还要单独留着。
 export const KEY_VARS = ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'DEEPSEEK_API_KEY',
   'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT'];
 const deepseekEnv = (): NodeJS.ProcessEnv => ({ CODEX_HOME: deepseekHome(), ...Object.fromEntries(KEY_VARS.map(name => [name, undefined])) });
 function deepseekArgs(env: Record<string, string>) {
   env.CODEX_HOME = deepseekHome();
-  return ['-c', 'model_provider="deepseek"', '-c', DEEPSEEK_PROVIDER, ...DEEPSEEK_LOGIN, '-c', 'web_search="disabled"',
-    '-c', `shell_environment_policy.exclude=[${KEY_VARS.map(name => `"${name}"`).join(',')}]`];
+  return ['-c', 'model_provider="deepseek"', '-c', DEEPSEEK_PROVIDER, ...DEEPSEEK_LOGIN, '-c', 'web_search="disabled"'];
 }
 // 派 DeepSeek 活前在隔离外查一次登录；没登录就不派，提示主人自己登录（钥匙只有主人能拿到）。
 export async function checkDeepseekLogin(run: Executor = execute) {
@@ -72,6 +74,32 @@ export async function srtPath() {
   catch { throw new Error('找不到 srt。请先在工具目录安装 @anthropic-ai/sandbox-runtime，或把 XAGENTS_SRT 设为已有 dist/cli.js 的路径。'); }
   return path;
 }
+// Cursor 把登录令牌存在系统钥匙串里（cursor-agent 用 /usr/bin/security 读 cursor-user 的 cursor-access-token），
+// 而钥匙串对选手一律读不到（sandbox.ts 的 keychainDirs）。所以由看管进程在隔离外读出，只放进这次 Cursor 进程的环境
+// （CURSOR_AUTH_TOKEN），不写进任务记录和日志；AGENT_CLI_CREDENTIAL_STORE=memory 让它只在内存里记登录、不去写钥匙串。
+// 这个令牌约两个月有效，普通登录时 Cursor 不会在干活中途换新，快到期就不派、请主人重新登录。依据 docs/research/keychain-2026-10-02.md。
+export const securityPath = () => process.env.XAGENTS_SECURITY || '/usr/bin/security';
+const CURSOR_MIN_SECONDS = 2 * 3600;
+export async function cursorToken(run: Executor = execute, now = Date.now()) {
+  const r = await run(securityPath(), ['find-generic-password', '-a', 'cursor-user', '-s', 'cursor-access-token', '-w'], homedir(), 10_000);
+  const failed = r.timedOut || r.signal || r.error;
+  if (r.exit === 44 && !failed) throw new Error('没在钥匙串里找到 Cursor 的登录。请主人在终端运行 cursor-agent login 登录 Cursor。');
+  if (r.exit !== 0 || failed) throw new Error(`从钥匙串读 Cursor 的登录没成功（${r.timedOut ? '超时' : r.error ? '启动失败' : r.signal ? `被 ${r.signal} 停止` : `退出码 ${r.exit}`}），请稍后重试；一直这样请主人在终端运行 cursor-agent login。`);
+  const token = r.output.trim();
+  if (!/^[\w.-]+$/.test(token)) throw new Error('钥匙串里 Cursor 的登录格式不对。请主人在终端运行 cursor-agent login 重新登录。');
+  const exp = jwtExpiry(token);
+  if (exp !== null && exp * 1000 - now < CURSOR_MIN_SECONDS * 1000) throw new Error('Cursor 的登录剩不到 2 小时就过期了。请主人在终端运行 cursor-agent login 重新登录。');
+  return token;
+}
+function jwtExpiry(token: string): number | null {
+  try { const exp = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString()).exp; return Number.isFinite(exp) ? exp : null; }
+  catch { return null; }
+}
+// 派 Cursor 活前在隔离外先查一次登录（只查，不留令牌）；没登录或快过期就不派。
+export async function checkCursorLogin(run: Executor = execute) {
+  try { await cursorToken(run); }
+  catch (e) { throw new Error(`这件没有派出：${(e as Error).message}`); }
+}
 // 本机 Codex 不在 PATH 上，派活和查模型用同一个取路径的地方；XAGENTS_CODEX 可覆盖。
 export const codexPath = () => process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
 export async function command(job: Job, text: string, project: Isolated): Promise<Command> {
@@ -83,8 +111,9 @@ export async function command(job: Job, text: string, project: Isolated): Promis
     // Codex 的 :workspace 放开的是 $TMPDIR，所以把它指到任务的 tmp。
     env.TMPDIR = tmp;
     file = codexPath();
+    const deepseek = vendorOf(job.who) === 'deepseek';
     const disable = ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories'];
-    args = ['exec', '--ignore-user-config', ...disable.flatMap(n => ['--disable', n]), ...(vendorOf(job.who) === 'deepseek' ? deepseekArgs(env) : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
+    args = ['exec', '--ignore-user-config', ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : []), '-c', codexEnvPolicy(deepseek ? KEY_VARS : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
   } else {
     file = process.execPath;
     // 替身模式仍传入完整参数；无需安装或执行真正的 srt。
@@ -102,6 +131,8 @@ export async function command(job: Job, text: string, project: Isolated): Promis
       const state = cursorState(process.env.XAGENTS_FAKE_WORKER ? cursorStateDir(job) : checkCursorState(cursorStateDir(job)));
       await mkdir(state.config, { recursive: true }); await mkdir(state.data, { recursive: true });
       env.CURSOR_CONFIG_DIR = state.config; env.CURSOR_DATA_DIR = state.data;
+      // 登录由看管进程启动前现取（见 cursorToken），Cursor 只在内存里记，不碰钥匙串。
+      env.AGENT_CLI_CREDENTIAL_STORE = 'memory';
       args.push('cursor-agent', '-p', '--output-format', 'stream-json', '--model', job.model, '--force', '--trust', ...(job.mode === 'read-only' ? ['--mode', 'ask'] : []), '--workspace', job.worktree, text);
     }
   }
@@ -110,7 +141,7 @@ export async function command(job: Job, text: string, project: Isolated): Promis
     file = process.execPath;
     args = [resolve(process.env.XAGENTS_FAKE_WORKER), ...args];
   }
-  return { file, args, env, ...(vendorOf(job.who) === 'deepseek' ? { unset: KEY_VARS } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
+  return { file, args, env, ...(vendorOf(job.who) === 'deepseek' ? { unset: KEY_VARS } : {}), ...(isolationOf(job.who) === 'cursor' ? { login: 'cursor' as const } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
 }
 // Grok 的登录每 6 小时换一次新令牌、旧令牌作废；写回 ~/.grok/auth.json 要在 ~/.grok 里新建临时文件，选手隔离里做不到。
 // 所以派 Grok 活前先在隔离外刷新：剩不到 5 小时就换新，选手干活期间用不着自己刷新（跑着的选手会直接用磁盘上的新令牌）。

@@ -11,7 +11,7 @@ import { git, addWorktree, setup } from './worktree.ts';
 import { reserveJob, reserveBatch } from './ids.ts';
 import { prompt } from './prompt.ts';
 import { sandbox } from './sandbox.ts';
-import { selection, command, srtPath, refreshGrokLogin, checkDeepseekLogin } from './workers.ts';
+import { selection, command, srtPath, refreshGrokLogin, checkDeepseekLogin, checkCursorLogin } from './workers.ts';
 import { reconcileSafely } from './runner.ts';
 import { installIcons } from './icons.ts';
 import { ensureSelfcheck } from './selfcheck.ts';
@@ -107,6 +107,8 @@ export async function dispatch(file: string, options: RunOptions): Promise<Job[]
       if (isolationOf(job.who) === 'grok' && !process.env.XAGENTS_FAKE_WORKER) await refreshGrokLogin();
       // DeepSeek 没登录就不开副本、不派。
       if (vendorOf(job.who) === 'deepseek' && !process.env.XAGENTS_FAKE_WORKER) await checkDeepseekLogin();
+      // Cursor 的登录在钥匙串里、选手读不到，由看管进程启动前现取；没登录或快过期就不派。
+      if (isolationOf(job.who) === 'cursor' && !process.env.XAGENTS_FAKE_WORKER) await checkCursorLogin();
       await addWorktree(job);
       await setup(job, project.setup, join(jobDir(job.id), 'setup.log'));
       if ((await readJob(job.id)).state !== 'queued') continue;

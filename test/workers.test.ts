@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, readdir, stat, mkdir, symlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { selection, command, refreshGrokLogin, checkDeepseekLogin, loginDeepseek, KEY_VARS } from '../src/core/workers.ts';
+import { selection, command, refreshGrokLogin, checkDeepseekLogin, loginDeepseek, KEY_VARS, cursorToken, checkCursorLogin } from '../src/core/workers.ts';
+import { codexEnvPolicy, isSecretName, PLATFORM_SWITCHES } from '../src/core/env.ts';
 import { extraDenyRead } from '../src/core/settings.ts';
 import { whos, workerDisplay, isolationOf, allowedEfforts, launchModels, vendorOf } from '../src/core/roster.ts';
-import { sandbox, codexPermissions, grokSessionDirs, cursorStateDir, jobTmpDir } from '../src/core/sandbox.ts';
+import { sandbox, codexPermissions, grokSessionDirs, cursorStateDir, jobTmpDir, keychainDirs, SHELL_FILES, CREDENTIAL_FILES } from '../src/core/sandbox.ts';
 import type { Job, Who } from '../src/core/job.ts';
 import type { Project } from '../src/core/project.ts';
 import { context, root } from './helpers.ts';
@@ -112,11 +113,18 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   assert.deepEqual(ds.env, { TMPDIR: tmp, CODEX_HOME: join(c.home, 'deepseek') });
   for (const value of ['model_provider="deepseek"', 'forced_login_method="api"', 'cli_auth_credentials_store="file"', 'web_search="disabled"', 'default_permissions="xa"', 'deepseek-v4-pro', 'model_reasoning_effort="high"']) assert.ok(ds.args.includes(value), value);
   assert.ok(ds.args.some(v => v.startsWith('model_providers.deepseek=') && v.includes('base_url="https://api.deepseek.com/"') && v.includes('requires_openai_auth=true')));
-  assert.ok(ds.args.some(v => v.startsWith('shell_environment_policy.exclude=') && v.includes('"OPENAI_API_KEY"') && v.includes('"CODEX_API_KEY"')));
+  // Codex 自己那一层：选手的命令去掉带密钥字样的变量，DeepSeek 另外点名去掉 KEY_VARS（有两个不带这些字样）。
+  assert.ok(ds.args.includes(codexEnvPolicy(KEY_VARS))); assert.ok(codex.args.includes(codexEnvPolicy()));
+  for (const name of ['OPENAI_FEDERATION_RULE_ID', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']) assert.ok(codexEnvPolicy(KEY_VARS).includes(`"${name}"`), name);
   // Codex 主进程本身也不能继承别家的钥匙（这些变量在 Codex 里比登录文件优先）；普通 Codex 不受影响。
   assert.deepEqual(ds.unset, KEY_VARS); assert.equal(codex.unset, undefined);
   for (const name of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']) assert.ok(KEY_VARS.includes(name), name);
   assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] })));
+  // 三种隔离都禁读终端配置文件和命令历史（主人常把钥匙写在里面，Grok 的登录式 bash 还会自动读），以及常见的登录凭据文件。
+  for (const f of [...SHELL_FILES, ...CREDENTIAL_FILES]) {
+    assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`"${join(homedir(), f)}"="deny"`), f);
+    for (const who of ['grok', 'cursor-grok'] as Who[]) assert.ok((await sandbox(job(who), { denyReadExtra: [] })).filesystem.denyRead.includes(join(homedir(), f)), `${who} ${f}`);
+  }
   // 三种隔离都禁读 DeepSeek 的登录文件夹。
   assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`"${join(c.home, 'deepseek')}"="deny"`));
   const grok = await command(job('grok'), '题目', { denyReadExtra: [] });
@@ -148,12 +156,19 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
     const cursor = await command(job(who, true), '保留空格、引号和 $() 的题目', { denyReadExtra: [] });
     // Cursor 会变的状态搬进登记处的短目录，只读题也一样；目录由启动前建好。
     const state = cursorStateDir(job(who, true));
-    assert.deepEqual(cursor.env, { CLAUDE_CODE_TMPDIR: jobTmpDir(job(who, true)), CURSOR_CONFIG_DIR: join(state, 'config'), CURSOR_DATA_DIR: join(state, 'data') });
-    for (const dir of Object.values(cursor.env)) assert.ok((await stat(dir)).isDirectory());
+    // 登录不在命令里：看管进程启动前现取（login: 'cursor'），Cursor 只在内存里记登录。
+    assert.deepEqual(cursor.env, { CLAUDE_CODE_TMPDIR: jobTmpDir(job(who, true)), CURSOR_CONFIG_DIR: join(state, 'config'), CURSOR_DATA_DIR: join(state, 'data'), AGENT_CLI_CREDENTIAL_STORE: 'memory' });
+    assert.equal(cursor.login, 'cursor');
+    for (const dir of [cursor.env.CLAUDE_CODE_TMPDIR, cursor.env.CURSOR_CONFIG_DIR, cursor.env.CURSOR_DATA_DIR]) assert.ok((await stat(dir)).isDirectory());
     assert.ok(cursor.args.includes('--force')); assert.ok(cursor.args.includes('--trust')); assert.ok(cursor.args.includes('ask'));
     assert.equal(cursor.output, 'run.log');
     assert.equal(cursor.args[cursor.args.indexOf('--output-format') + 1], 'stream-json');
     assert.equal(cursor.args.at(-1), '保留空格、引号和 $() 的题目');
+  }
+  // 平台自己给选手设的变量照给（不过 env.ts 的过滤），所以名字都不许带密钥字样；要加这种变量先改 env.ts 的说明。
+  for (const who of whos) for (const ro of [false, true]) {
+    const cmd = await command(job(who, ro), '题目', { denyReadExtra: [] });
+    for (const name of Object.keys(cmd.env)) assert.ok(!isSecretName(name) || PLATFORM_SWITCHES.includes(name), `${who}: ${name}`);
   }
   process.env.XAGENTS_SRT = join(c.temp, 'missing.js');
   await assert.rejects(command(job('grok'), '', { denyReadExtra: [] }), /找不到 srt/);
@@ -171,6 +186,8 @@ test('Codex 权限表完整禁读、开口 tmp、合并项目双份路径并去�
     assert.ok(table.startsWith(`permissions.xa={extends="${ro ? ':read-only' : ':workspace'}",filesystem={`));
     for (const entry of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc']) assert.ok(table.includes(`${JSON.stringify(join(homedir(), entry))}="deny"`), entry);
     assert.ok(table.includes(`${JSON.stringify(join(homedir(), '.codex/tmp'))}="read"`));
+    // 钥匙串的两个文件夹（本用户的、系统的）都禁读。
+    for (const dir of keychainDirs()) assert.ok(table.includes(`${JSON.stringify(dir)}="deny"`), dir);
     // 公用的 /tmp 只读，只有任务自己的 tmp 可写。
     assert.ok(table.includes(`":slash_tmp"="read"`)); assert.ok(table.includes(`":tmpdir"="read"`)); assert.ok(table.includes(`${JSON.stringify(jobTmpDir(j))}="write"`));
     for (const base of [j.repo, j.worktree]) for (const extra of p.denyReadExtra) {
@@ -204,7 +221,7 @@ test('Codex 最终参数只换权限档，其余完全保留，绝不混用 -s �
     const actual = await command(j, '题目', p);
     assert.deepEqual(actual.args, ['exec', '--ignore-user-config',
       '--disable', 'plugins', '--disable', 'apps', '--disable', 'remote_plugin', '--disable', 'computer_use', '--disable', 'browser_use', '--disable', 'browser_use_external', '--disable', 'in_app_browser', '--disable', 'hooks', '--disable', 'memories',
-      '-m', j.model, '-c', 'model_reasoning_effort="high"', '-c', 'default_permissions="xa"', '-c', codexPermissions(j, p),
+      '-c', codexEnvPolicy(), '-m', j.model, '-c', 'model_reasoning_effort="high"', '-c', 'default_permissions="xa"', '-c', codexPermissions(j, p),
       '-C', j.worktree, '--json', '-o', join(c.home, 'jobs', j.id, 'final.md'), '-']);
     assert.ok(!actual.args.includes('-s')); assert.ok(!actual.args.includes('--sandbox'));
     assert.ok(!actual.args.some(arg => arg.includes('sandbox_mode')));
@@ -216,7 +233,7 @@ test('srt 新增 npmrc 禁读且不丢失任何已有禁读条目；选手自己
   const other = { grok: '~/.cursor/cli-config.json', 'cursor-grok': '~/.grok/auth.json' } as Record<string, string>;
   for (const who of ['grok', 'cursor-grok'] as Who[]) {
     const config = await sandbox(job(who), { denyReadExtra: [] } as unknown as Project);
-    for (const path of ['~/.ssh', '~/.codex', '~/.aws', '~/.claude', '~/.config/gh', '~/.npmrc', other[who]]) assert.ok(config.filesystem.denyRead.includes(path), `${who}: ${path}`);
+    for (const path of ['~/.ssh', '~/.codex', '~/.aws', '~/.claude', '~/.config/gh', '~/.npmrc', '~/Library/Keychains', '/Library/Keychains', other[who]]) assert.ok(config.filesystem.denyRead.includes(path), `${who}: ${path}`);
     // 整个选手跑在外层隔离里，禁读自己的登录文件它就启动不了。
     assert.ok(!config.filesystem.denyRead.includes(own[who]), `${who} 不能禁读自己的登录文件`);
   }
@@ -353,4 +370,24 @@ if (process.argv.includes('status')) console.log('Logged in using an API key - s
     assert.ok(!call.args.some((a: string) => a.includes('sk-test')));
   }
   assert.deepEqual(calls[1].args.slice(0, 2), ['login', 'status']);
+});
+
+test('Cursor 的登录：在隔离外从钥匙串取，取不到、快过期都报错让主人登录；不是 JWT 的令牌照用', async () => {
+  const token = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp })).toString('base64url')}.sig`;
+  const now = Date.UTC(2026, 9, 2);
+  const calls: string[][] = [];
+  const run = (exit: number, output: string) => (async (file: string, args: string[]) => { calls.push([file, ...args]); return { exit, output, timedOut: false }; }) as any;
+  const good = token(now / 1000 + 30 * 86400);
+  assert.equal(await cursorToken(run(0, good + '\n'), now), good);
+  assert.deepEqual(calls[0], ['/usr/bin/security', 'find-generic-password', '-a', 'cursor-user', '-s', 'cursor-access-token', '-w']);
+  assert.equal(await cursorToken(run(0, 'plain-api-token'), now), 'plain-api-token');
+  await assert.rejects(cursorToken(run(44, ''), now), /没在钥匙串里找到 Cursor 的登录[\s\S]*cursor-agent login/);
+  // 超时、退出码不对：说读没成功、请重试，不冒充“没登录”。
+  await assert.rejects(cursorToken((async () => ({ exit: null, output: '', timedOut: true })) as any, now), /读 Cursor 的登录没成功（超时）/);
+  await assert.rejects(cursorToken(run(51, ''), now), /读 Cursor 的登录没成功（退出码 51）/);
+  await assert.rejects(cursorToken(run(0, 'security: 出错了 有空格'), now), /格式不对/);
+  // 正好剩 2 小时照派，少 1 秒就不派。
+  assert.ok(await cursorToken(run(0, token(now / 1000 + 7200)), now));
+  await assert.rejects(cursorToken(run(0, token(now / 1000 + 7199)), now), /剩不到 2 小时[\s\S]*cursor-agent login/);
+  await assert.rejects(checkCursorLogin(run(44, '')), /这件没有派出：没在钥匙串里找到/);
 });

@@ -18,17 +18,18 @@ test('选手清单里每位选手用的隔离都在自检范围内，缺哪一�
   assert.equal(isolationOf('cursor-sonnet'), 'cursor');
 });
 test('自检只承认明确权限拒绝；连接失败、超时、文件不存在都不能冒充隔离', () => {
-  const base = ['worktree', 'tmpdir', 'hardlink', 'home', 'chrome', 'listener', 'internet', 'ssh', 'npmrc'];
+  const base = ['worktree', 'tmpdir', 'hardlink', 'home', 'chrome', 'listener', 'internet', 'ssh', 'npmrc', 'shell-files', 'credential-files', 'env-secret'];
   // Codex 的登录由隔离外的主进程读取：三家都要读不到。Grok、Cursor 整个跑在隔离里：只查别家的。
   // 各家全局配置（钩子、技能、规矩、插件、程序、登录）三种隔离都要写不进去。
   // 公用临时位置（负责人会话的临时目录、/tmp、srt 的 /tmp/claude、系统给本用户的临时和缓存目录、npm 日志）也要写不进去。
   const global = globalTargets.map(t => t.name), shared = tempTargets.map(t => t.name);
   assert.deepEqual(shared, ['tmp-lead', 'tmp-shared', 'tmp-srt', 'tmp-user', 'tmp-cache', 'npm-logs']);
   for (const name of ['cursor-hooks', 'cursor-skills', 'cursor-rules', 'cursor-mcp', 'cursor-config', 'cursor-trust', 'cursor-install', 'grok-skills', 'grok-agents', 'grok-rules', 'grok-hooks', 'grok-admin', 'grok-memory', 'grok-plugins', 'grok-sessions', 'grok-login', 'claude-config', 'agents-skills']) assert.ok(global.includes(name), name);
-  // DeepSeek 的登录文件夹三种隔离都要读不到。
-  assert.deepEqual(expectedProbes('codex'), [...base, 'login-codex', 'login-grok', 'login-cursor', 'login-deepseek', ...global, ...shared]);
-  assert.deepEqual(expectedProbes('grok'), [...base, 'login-codex', 'login-cursor', 'login-deepseek', ...global, ...shared]);
-  assert.deepEqual(expectedProbes('cursor'), [...base, 'login-codex', 'login-grok', 'login-deepseek', ...global, ...shared]);
+  // DeepSeek 的登录文件夹、钥匙串（测试条目、本用户和系统的钥匙串文件夹）三种隔离都要读不到。
+  const keychain = ['keychain', 'keychain-user', 'keychain-system'];
+  assert.deepEqual(expectedProbes('codex'), [...base, 'login-codex', 'login-grok', 'login-cursor', 'login-deepseek', ...keychain, ...global, ...shared]);
+  assert.deepEqual(expectedProbes('grok'), [...base, 'login-codex', 'login-cursor', 'login-deepseek', ...keychain, ...global, ...shared]);
+  assert.deepEqual(expectedProbes('cursor'), [...base, 'login-codex', 'login-grok', 'login-deepseek', ...keychain, ...global, ...shared]);
   for (const code of ['EPERM', 'EACCES']) assert.equal(permissionOutcome(code), 'denied');
   for (const code of ['ENOENT', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNRESET', '']) assert.equal(permissionOutcome(code), 'unknown');
   assert.equal(evaluate(passing()).ok, true);
@@ -41,7 +42,7 @@ test('自检只承认明确权限拒绝；连接失败、超时、文件不存�
 test('自检必须各项齐全，副本可写；所有敏感文件读取都不能例外放行', () => {
   const r = passing(); r[0].probes.find(p => p.name === 'login-grok')!.outcome = 'allowed';
   assert.equal(evaluate(r).ok, false); assert.doesNotMatch(evaluate(r).note, /已知例外/);
-  for (const [mode, name] of [['cursor', 'cursor-hooks'], ['grok', 'grok-skills'], ['grok', 'grok-agents'], ['codex', 'claude-config'], ['grok', 'login-cursor'], ['cursor', 'login-grok'], ['codex', 'login-codex'], ['codex', 'login-grok'], ['codex', 'npmrc'], ['grok', 'npmrc'], ['cursor', 'npmrc'], ['codex', 'ssh'], ['codex', 'chrome'], ['grok', 'login-codex'], ['cursor', 'home'], ['codex', 'worktree'], ['grok', 'tmpdir'], ['cursor', 'tmp-lead'], ['grok', 'tmp-shared'], ['codex', 'tmp-user'], ['cursor', 'npm-logs']]) {
+  for (const [mode, name] of [['cursor', 'cursor-hooks'], ['grok', 'grok-skills'], ['grok', 'grok-agents'], ['codex', 'claude-config'], ['grok', 'login-cursor'], ['cursor', 'login-grok'], ['codex', 'login-codex'], ['codex', 'login-grok'], ['codex', 'npmrc'], ['grok', 'npmrc'], ['cursor', 'npmrc'], ['codex', 'ssh'], ['codex', 'chrome'], ['grok', 'login-codex'], ['cursor', 'home'], ['codex', 'worktree'], ['grok', 'tmpdir'], ['cursor', 'tmp-lead'], ['grok', 'tmp-shared'], ['codex', 'tmp-user'], ['cursor', 'npm-logs'], ['grok', 'keychain'], ['cursor', 'keychain'], ['codex', 'keychain'], ['codex', 'keychain-user'], ['cursor', 'keychain-system']]) {
     const r = passing(), p = r.find(x => x.isolation === mode)!.probes.find(p => p.name === name)!;
     p.outcome = mustAllow(name) ? 'denied' : 'allowed'; assert.equal(evaluate(r).ok, false);
   }
@@ -65,11 +66,14 @@ test('缓存一天有效，过期重检；失败和损坏拦截，不能仅凭 o
   assert.equal((await readSelfcheck(now - 1)).ok, null);
   await ensureSelfcheck(checker); assert.equal(calls, 1);
   await writeFile(file, JSON.stringify(evaluate(passing(), new Date(now - 86400000).toISOString()))); await ensureSelfcheck(checker); assert.equal(calls, 2);
-  await writeFile(file, JSON.stringify({ version: 4, ok: true, at: new Date().toISOString(), results: [] }));
+  await writeFile(file, JSON.stringify({ version: 7, ok: true, at: new Date().toISOString(), results: [] }));
   await assert.rejects(ensureSelfcheck(checker), /自检没过/); assert.equal(calls, 2);
-  // 旧版本的缓存（探针做法改之前）即使名字齐全、写着通过，也要重新自检。
-  await writeFile(file, JSON.stringify({ ...evaluate(passing()), version: 2 }));
+  // 旧版本的缓存（探针做法改之前）即使名字齐全、写着通过，也要重新自检；版本 4 还没有钥匙串探针。
+  await writeFile(file, JSON.stringify({ ...evaluate(passing()), version: 4 }));
   assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker); assert.equal(calls, 3);
+  // 第 5 版没有凭据文件探针。
+  await writeFile(file, JSON.stringify({ ...evaluate(passing()), version: 5 }));
+  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker); assert.equal(calls, 4);
   await writeFile(file, '{'); await assert.rejects(ensureSelfcheck(checker), /缓存损坏/);
 });
 test('隔离内的 CLI 自检不启动真实探针，保存失败且桌面视图不显示通过', async t => {
@@ -95,7 +99,7 @@ test('网络必须直连和代理都拒绝；生成探针无需运行也能做�
   const c = await context(t, false);
   const path = join(c.temp, 'probe.mjs');
   const temp = { 'tmp-lead': '/t/a', 'tmp-shared': '/t', 'tmp-srt': '/t/b', 'tmp-user': null, 'tmp-cache': '/c', 'npm-logs': '/n' };
-  await writeFile(path, probeSource('grok', c.repo, join(c.temp, 'outside'), 1234, 'MARKER', 'TOKEN', temp, join(c.temp, 'tmp'), join(c.temp, 'target')));
+  await writeFile(path, probeSource('grok', c.repo, join(c.temp, 'outside'), 1234, 'MARKER', 'TOKEN', temp, join(c.temp, 'tmp'), join(c.temp, 'target'), { account: 'a', service: 's "x', value: 'v' }, ['XAGENTS_SELFCHECK_API_KEY']));
   const { exec } = await import('./helpers.ts');
   const r = await exec(process.execPath, ['--check', path], c.temp, c.env); assert.equal(r.code, 0, r.stderr);
 });
@@ -106,10 +110,10 @@ test('旧自检缓存缺 npmrc 或该查的登录探针，即使 ok 为 true 也
   t.after(() => { if (oldHome === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = oldHome; });
   await mkdir(join(c.home, 'cache'));
   // Codex 要查自己的登录文件；Grok、Cursor 只查别家的（自己的必须能读，否则启动不了）。
-  for (const [isolation, login] of [['codex', 'login-codex'], ['grok', 'login-cursor'], ['cursor', 'login-grok'], ['grok', 'login-deepseek']] as [Isolation, string][]) for (const name of ['npmrc', login]) {
+  for (const [isolation, login] of [['codex', 'login-codex'], ['grok', 'login-cursor'], ['cursor', 'login-grok'], ['grok', 'login-deepseek'], ['cursor', 'keychain'], ['grok', 'keychain-user']] as [Isolation, string][]) for (const name of ['npmrc', 'shell-files', 'credential-files', 'env-secret', login]) {
     const results = passing(), result = results.find(r => r.isolation === isolation)!;
     result.probes = result.probes.filter(p => p.name !== name);
-    await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 4, ok: true, at: new Date().toISOString(), results }));
+    await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 7, ok: true, at: new Date().toISOString(), results }));
     await assert.rejects(ensureSelfcheck(), /缺少有效结果/);
   }
 });
@@ -117,6 +121,7 @@ test('旧自检缓存缺 npmrc 或该查的登录探针，即使 ok 为 true 也
 test('Codex 自检真实调用共用权限表，空 CODEX_HOME 仅给子进程，成功/失败/抛错都清理', async t => {
   const { codexProbe } = await import('../src/core/selfcheck.ts');
   const { codexPermissions } = await import('../src/core/sandbox.ts');
+  const { codexEnvPolicy, isSecretName } = await import('../src/core/env.ts');
   const { readdir, access } = await import('node:fs/promises');
   const c = await context(t, false), inherited = process.env.CODEX_HOME;
   const project = { denyReadExtra: ['秘密 "目录'] };
@@ -125,9 +130,14 @@ test('Codex 自检真实调用共用权限表，空 CODEX_HOME 仅给子进程�
     let temporaryHome = '';
     const result = { exit: behavior === 'ok' ? 0 : 1, output: '', timedOut: behavior === 'failed' };
     const tmp = join(c.temp, 'job-tmp');
+    const parentEnv = { PATH: process.env.PATH ?? '', XAGENTS_SELFCHECK_API_KEY: 'fake-outer', XA_PLAIN: 'plain' };
     const call = codexProbe(job, project, '/temporary/probe.mjs', tmp, async (file, args, cwd, timeout, onData, env) => {
       assert.equal(file, process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex');
-      assert.deepEqual(args, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '--', process.execPath, '/temporary/probe.mjs']);
+      assert.deepEqual(args, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '-c', codexEnvPolicy(), '--', process.execPath, '/temporary/probe.mjs']);
+      // 外面那一层和派活一样去掉带密钥字样的变量（写成 undefined，执行器才不会从 process.env 垫回来）；inner 绕过它，只靠 Codex 那一层挡。
+      assert.ok('XAGENTS_SELFCHECK_API_KEY' in env!); assert.equal(env!.XAGENTS_SELFCHECK_API_KEY, undefined);
+      for (const [name, value] of Object.entries(env!)) if (value !== undefined && name !== 'XAGENTS_SELFCHECK_INNER_TOKEN') assert.ok(!isSecretName(name), name);
+      assert.equal(env!.XAGENTS_SELFCHECK_INNER_TOKEN, 'fake-inner'); assert.equal(env!.XA_PLAIN, 'plain');
       // 与派活时一样：TMPDIR 指向任务的 tmp，权限表把它写明可写、/tmp 只读。
       assert.equal(env!.TMPDIR, tmp); assert.ok(args[6].includes(`":slash_tmp"="read"`)); assert.ok(args[6].includes(`":tmpdir"="read"`)); assert.ok(args[6].includes(`${JSON.stringify(tmp)}="write"`));
       assert.equal(cwd, job.worktree); assert.equal(timeout, 20000); assert.equal(onData, undefined);
@@ -137,7 +147,7 @@ test('Codex 自检真实调用共用权限表，空 CODEX_HOME 仅给子进程�
       assert.equal(process.env.CODEX_HOME, inherited);
       if (behavior === 'throw') throw new Error('模拟启动失败');
       return result;
-    });
+    }, parentEnv, { XAGENTS_SELFCHECK_INNER_TOKEN: 'fake-inner' });
     if (behavior === 'throw') await assert.rejects(call, /模拟启动失败/);
     else assert.deepEqual(await call, result);
     await assert.rejects(access(temporaryHome), { code: 'ENOENT' });
@@ -222,4 +232,36 @@ test('公用临时位置：getconf 查系统目录，查不到算空；没有 ~/
   assert.equal(paths['npm-logs'], home);
   await mkdir(join(home, '.npm'));
   assert.equal((await tempPaths(run as any, c.temp, home))['npm-logs'], join(home, '.npm/_logs'));
+});
+
+test('钥匙串测试条目：外面建好并读回核对才用；按固定账号名清扫，删到“没有这一项”为止，删不掉要报出来', async () => {
+  const { addKeychainItem, sweepKeychainItems } = await import('../src/core/selfcheck.ts');
+  const fake = (behave: { add?: number; read?: 'same' | 'other' | 'fail'; deletes?: ({ exit: number | null; timedOut?: boolean })[] }) => {
+    const calls: string[][] = [];
+    let stored = '', n = 0;
+    const run = async (file: string, args: string[]) => {
+      calls.push([file, ...args]);
+      if (args[0] === 'add-generic-password') { stored = args[args.indexOf('-w') + 1]; return { exit: behave.add ?? 0, output: '', timedOut: false }; }
+      if (args[0] === 'find-generic-password') return behave.read === 'fail' ? { exit: 44, output: '', timedOut: false } : { exit: 0, output: (behave.read === 'other' ? 'other' : stored) + '\n', timedOut: false };
+      const d = (behave.deletes ?? [])[n++] ?? { exit: 44 };
+      return { exit: d.exit, output: '', timedOut: d.timedOut ?? false };
+    };
+    return { calls, run: run as any };
+  };
+  const ok = fake({});
+  const item = await addKeychainItem(ok.run);
+  assert.ok(item); assert.equal(item.account, 'xagents-selfcheck'); assert.match(item.service, /^xagents-selfcheck-[0-9a-f-]{36}$/); assert.match(item.value, /^[0-9a-f]{32}$/);
+  assert.deepEqual(ok.calls.map(c => c[1]), ['add-generic-password', 'find-generic-password']);
+  assert.ok(ok.calls.every(c => c[0] === '/usr/bin/security'));
+  // 不加 -A、-T：条目只信任 security 自己，别的程序读会弹窗。
+  assert.ok(!ok.calls[0].includes('-A') && !ok.calls[0].includes('-T'));
+  for (const behave of [{ add: 1 }, { read: 'other' as const }, { read: 'fail' as const }]) assert.equal(await addKeychainItem(fake(behave).run), null);
+  // 清扫：按账号一条条删，直到 44（没有这一项）。
+  const sweep = fake({ deletes: [{ exit: 0 }, { exit: 0 }, { exit: 44 }] });
+  assert.equal(await sweepKeychainItems(sweep.run), null);
+  assert.deepEqual(sweep.calls, Array(3).fill(['/usr/bin/security', 'delete-generic-password', '-a', 'xagents-selfcheck']));
+  // 删除出错、超时都要报出来，不能当成删干净了。
+  assert.match((await sweepKeychainItems(fake({ deletes: [{ exit: 0 }, { exit: 1 }] }).run))!, /未能删除钥匙串里的自检测试条目.*退出码 1/);
+  assert.match((await sweepKeychainItems(fake({ deletes: [{ exit: 44, timedOut: true }] }).run))!, /未能删除.*超时/);
+  assert.match((await sweepKeychainItems(fake({ deletes: Array(60).fill({ exit: 0 }) }).run))!, /删了 50 条还没删完/);
 });

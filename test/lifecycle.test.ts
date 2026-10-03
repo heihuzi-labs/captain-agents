@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { root } from './helpers.ts';
 import { ensureHome } from '../src/core/paths.ts';
+import { PLATFORM_SWITCHES } from '../src/core/env.ts';
 import { reserveJob } from '../src/core/ids.ts';
 import { createJob } from '../src/core/job.ts';
 import { codexPermissions } from '../src/core/sandbox.ts';
@@ -402,19 +403,52 @@ test('清理 Grok 活时，它在 ~/.grok/sessions 下的会话文件夹一起�
   assert.ok(trashed.some(name => name.startsWith(`派活工作台-Grok会话-${grok.id}`)), trashed.join(','));
 });
 
-test('DeepSeek 的 Codex 主进程不继承别家的钥匙变量，用单独的 Codex 文件夹；普通 Codex 照旧', async t => {
+test('选手一律看不到名字带密钥字样的环境变量，别的照常继承；DeepSeek 另用单独的 Codex 文件夹', async t => {
   const c = await context(t);
   assert.equal((await c.add([])).code, 0);
-  const keys = { OPENAI_API_KEY: 'test-openai', CODEX_API_KEY: 'test-codex', CODEX_ACCESS_TOKEN: 'test-token', DEEPSEEK_API_KEY: 'test-deepseek' };
-  const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'deepseek:high', '--who', 'codex:high', '--ro'], { XA_TEST_MODE: 'change', ...keys });
+  const keys = { OPENAI_API_KEY: 'test-openai', CODEX_API_KEY: 'test-codex', CODEX_ACCESS_TOKEN: 'test-token', DEEPSEEK_API_KEY: 'test-deepseek',
+    OTHER_SERVICE_API_KEY: 'test-other', My_Db_Password: 'test-password', GH_TOKEN: 'test-gh', SSH_AUTH_SOCK: '/test/agent.sock' };
+  const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'deepseek:high', '--who', 'codex:high', '--who', 'grok:high', '--who', 'cursor-sonnet:high', '--ro'], { XA_TEST_MODE: 'change', XA_TEST_PLAIN: 'plain', ...keys });
   assert.equal(r.code, 0, r.stderr);
   const waited = await c.cli(['wait', (await c.jobs())[0].batch]); assert.equal(waited.code, 0, waited.stderr + waited.stdout);
   for (const j of await c.jobs()) {
     const observed = JSON.parse(await readFile(join(c.home, 'jobs', j.id, 'observed.json'), 'utf8'));
-    if (j.who === 'deepseek') { assert.deepEqual(observed.keys, []); assert.equal(observed.codexHome, join(c.home, 'deepseek')); }
-    else { assert.deepEqual(observed.keys, Object.keys(keys)); assert.notEqual(observed.codexHome, join(c.home, 'deepseek')); }
+    // 平台自己设的开关（名字带密钥字样、值不是密钥，见 env.ts 的 PLATFORM_SWITCHES）除外，主人的一个都不许漏进来。
+    assert.deepEqual(observed.secrets.filter((n: string) => !PLATFORM_SWITCHES.includes(n)), [], j.who); assert.equal(observed.plain, 'plain', j.who);
+    if (j.who === 'deepseek') assert.equal(observed.codexHome, join(c.home, 'deepseek'));
+    else assert.notEqual(observed.codexHome, join(c.home, 'deepseek'));
     // 任务记录里只记要去掉哪些变量的名字，不记值。
     const record = await readFile(join(c.home, 'jobs', j.id, 'job.json'), 'utf8');
     for (const value of Object.values(keys)) assert.ok(!record.includes(value));
   }
+});
+
+test('Cursor 的登录由看管进程在隔离外现取，只进选手进程的环境，不进任务记录；取不到就失败', async t => {
+  const c = await context(t);
+  assert.equal((await c.add([])).code, 0);
+  // 假的 security：只认 Cursor 登录那一项，打印一个两个月后才过期的假令牌。
+  const exp = Math.floor(Date.now() / 1000) + 60 * 86400;
+  const token = `h.${Buffer.from(JSON.stringify({ exp })).toString('base64url')}.fake-cursor-signature`;
+  const security = join(c.temp, 'security');
+  await writeFile(security, `#!/bin/sh\n[ "$*" = "find-generic-password -a cursor-user -s cursor-access-token -w" ] && echo '${token}' && exit 0\nexit 44\n`, { mode: 0o755 });
+  const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'cursor-grok:high', '--who', 'grok:high', '--ro'], { XAGENTS_SECURITY: security });
+  assert.equal(r.code, 0, r.stderr);
+  const waited = await c.cli(['wait', (await c.jobs())[0].batch]); assert.equal(waited.code, 0, waited.stderr + waited.stdout);
+  for (const j of await c.jobs()) {
+    const observed = JSON.parse(await readFile(join(c.home, 'jobs', j.id, 'observed.json'), 'utf8'));
+    if (j.who === 'cursor-grok') { assert.equal(observed.cursorAuth, token); assert.equal(observed.credentialStore, 'memory'); }
+    else { assert.equal(observed.cursorAuth, null); assert.equal(observed.credentialStore, null); }
+    const record = await readFile(join(c.home, 'jobs', j.id, 'job.json'), 'utf8');
+    assert.ok(!record.includes('fake-cursor-signature'));
+  }
+  // 钥匙串里没有 Cursor 的登录：这件失败，提示主人登录，不启动选手。
+  await writeFile(security, '#!/bin/sh\nexit 44\n', { mode: 0o755 });
+  const earlier = new Set((await c.jobs()).map(j => j.id));
+  const again = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'cursor-grok:high', '--ro'], { XAGENTS_SECURITY: security });
+  assert.equal(again.code, 0, again.stderr);
+  const added = (await c.jobs()).find(j => !earlier.has(j.id))!;
+  await c.cli(['wait', added.batch]);
+  const failed = (await c.jobs()).find(j => j.id === added.id)!;
+  assert.equal(failed.state, 'failed'); assert.match(failed.error ?? '', /cursor-agent login/);
+  await assert.rejects(access(join(c.home, 'jobs', failed.id, 'observed.json')));
 });

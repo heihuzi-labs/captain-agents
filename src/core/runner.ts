@@ -12,6 +12,8 @@ import { keepAwake } from './awake.ts';
 import { SleepMonitor } from './sleeps.ts';
 import { readQuotaCache } from './quota.ts';
 import { collectRealSteps } from './real.ts';
+import { cursorToken } from './workers.ts';
+import { workerEnv } from './env.ts';
 
 export function killGroup(pid: number | undefined, signal: NodeJS.Signals) {
   if (!pid || pid <= 0) return;
@@ -67,8 +69,12 @@ export async function runWorker(id: string) {
       const input = cmd.stdin === 'prompt' ? await open(join(dir, 'prompt.md'), 'r') : undefined;
       if (input) handles.push(input);
       if (!stopping) {
-        const env: NodeJS.ProcessEnv = { ...process.env, ...cmd.env };
-        for (const name of cmd.unset ?? []) delete env[name];
+        // 名字带密钥字样的环境变量不交给选手（规则在 env.ts）；平台设的照给，这件活点名不要的再去掉。
+        const env = workerEnv(process.env, cmd.env, cmd.unset);
+        // Cursor 的登录在隔离外现取，只放进这次进程的环境，不进任务记录（见 workers.ts 的 cursorToken）。
+        // 必须放在上面那步过滤之后：它的名字带 TOKEN，先加再过滤就会被去掉，Cursor 就成了没登录。
+        // 替身模式下没指定假的 security 就不取，测试不碰真钥匙串。
+        if (cmd.login === 'cursor' && (!process.env.XAGENTS_FAKE_WORKER || process.env.XAGENTS_SECURITY)) env.CURSOR_AUTH_TOKEN = await cursorToken();
         const child = spawn(cmd.file, cmd.args, { cwd: job.worktree, detached: true, env, stdio: [input?.fd ?? 'ignore', output.fd, errors.fd] });
         const spawned = new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
         workerPid = child.pid;

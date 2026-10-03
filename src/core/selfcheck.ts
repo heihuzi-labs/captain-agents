@@ -1,11 +1,12 @@
 import { mkdtemp, mkdir, rm, rmdir, writeFile, realpath, lstat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { paths } from './paths.ts';
 import { readJson, writeJson, hasCode, withLock } from './fsx.ts';
-import { sandbox, codexPermissions, deepseekHome } from './sandbox.ts';
-import { srtPath } from './workers.ts';
+import { sandbox, codexPermissions, deepseekHome, keychainDirs, SHELL_FILES, CREDENTIAL_FILES } from './sandbox.ts';
+import { srtPath, securityPath } from './workers.ts';
+import { SECRET_WORDS, SRT_OWN_VARS, codexEnvPolicy, exactEnv, workerEnv } from './env.ts';
 import { extraDenyRead } from './settings.ts';
 import { whos, isolationOf, isolations } from './roster.ts';
 import type { Isolation } from './roster.ts';
@@ -21,7 +22,12 @@ export type IsolationResult = { isolation: Isolation; probes: Probe[]; error?: s
 // 2：2026-09-30 全局配置探针改为“写成就算放行”、已有文件只写方式打开。
 // 3：2026-09-30 加公用临时目录和硬链接探针，选手只能写任务自己的 tmp。
 // 4：2026-10-02 加 DeepSeek 登录文件夹探针，三种隔离都要读不到。
-const cacheVersion = 4;
+// 5：2026-10-02 加钥匙串探针（读测试条目、列两个钥匙串文件夹），三种隔离都要读不到。
+// 6：2026-10-02 加环境变量探针：外面放一个名字带 KEY 的假变量，三种隔离里都要看不到，也不许有别的带密钥字样的变量；
+//    加终端配置文件和命令历史的禁读探针。
+// 7：2026-10-03 加常见登录凭据文件（~/.netrc、~/.git-credentials、~/.docker、~/.kube 等）的禁读探针；
+//    钥匙串和环境变量两条并行的修复合并，统一升到这一版（两边各自升过的 5、6 都作废重检）。
+const cacheVersion = 7;
 export type Selfcheck = { version: typeof cacheVersion; ok: boolean; at: string; note: string; results: IsolationResult[] };
 // 自检覆盖选手清单里出现的每一种隔离；新选手沿用已有隔离就自动被覆盖。
 const modes: Isolation[] = isolations;
@@ -75,16 +81,21 @@ export async function tempPaths(run: Executor, cwd: string, home = homedir()): P
     'npm-logs': await lstat(join(home, '.npm')).then(() => join(home, '.npm/_logs'), () => home),
   };
 }
+// 钥匙串：读自检临时放进登录钥匙串的测试条目，再列本用户和系统的钥匙串文件夹。三种隔离都要读不到。
+// 依据 docs/research/keychain-2026-10-02.md。
+const keychainProbes = ['keychain', 'keychain-user', 'keychain-system'];
+// 测试条目：随机名、随机值，不是任何真密码；自检前在外面建好并读回核对，结束后删掉。
+export type KeychainItem = { account: string; service: string; value: string };
 export function expectedProbes(mode: Isolation) {
   // Codex 的登录文件由它在隔离外的主进程读取，所以它的隔离里三家都必须读不到；
   // Grok、Cursor 整个跑在外层隔离里，必须能读自己的登录文件，只要求读不到别家的。
   // DeepSeek 的登录（API 钥匙）放在派活工作台单独的文件夹里，由 Codex 主进程在隔离外读，三种隔离都必须读不到。
   const logins = [...(mode === 'codex' ? ['login-codex', 'login-grok', 'login-cursor'] : mode === 'grok' ? ['login-codex', 'login-cursor'] : ['login-codex', 'login-grok']), 'login-deepseek'];
-  return ['worktree', 'tmpdir', 'hardlink', 'home', 'chrome', 'listener', 'internet', 'ssh', 'npmrc', ...logins, ...globalTargets.map(t => t.name), ...tempTargets.map(t => t.name)];
+  return ['worktree', 'tmpdir', 'hardlink', 'home', 'chrome', 'listener', 'internet', 'ssh', 'npmrc', 'shell-files', 'credential-files', 'env-secret', ...logins, ...keychainProbes, ...globalTargets.map(t => t.name), ...tempTargets.map(t => t.name)];
 }
 // 这两项必须写得进去，其余一律要挡住。
 const mustAllow = ['worktree', 'tmpdir'];
-const labels: Record<string, string> = { ...Object.fromEntries([...globalTargets, ...tempTargets].map(t => [t.name, t.label])), worktree: '副本内写文件', tmpdir: '任务专用临时目录可写（TMPDIR 指向它）', hardlink: '借硬链接改外面的文件', home: '目录外写文件', chrome: 'Chrome 调试口', listener: '本机监听端口', internet: '外网', ssh: '读 SSH 文件名', npmrc: '读 npm 登录配置', 'login-codex': '读 Codex 登录文件', 'login-grok': '读 Grok 登录文件', 'login-cursor': '读 Cursor 登录文件', 'login-deepseek': '读 DeepSeek 登录文件夹' };
+const labels: Record<string, string> = { ...Object.fromEntries([...globalTargets, ...tempTargets].map(t => [t.name, t.label])), worktree: '副本内写文件', tmpdir: '任务专用临时目录可写（TMPDIR 指向它）', hardlink: '借硬链接改外面的文件', home: '目录外写文件', chrome: 'Chrome 调试口', listener: '本机监听端口', internet: '外网', ssh: '读 SSH 文件名', npmrc: '读 npm 登录配置', 'login-codex': '读 Codex 登录文件', 'login-grok': '读 Grok 登录文件', 'login-cursor': '读 Cursor 登录文件', 'login-deepseek': '读 DeepSeek 登录文件夹', keychain: '读钥匙串里的密码', 'keychain-user': '读本用户的钥匙串文件夹', 'keychain-system': '读系统的钥匙串文件夹', 'env-secret': '看到带密钥字样的环境变量', 'shell-files': '读终端配置文件和命令历史', 'credential-files': '读常见的登录凭据文件' };
 export function evaluate(results: IsolationResult[], at = new Date().toISOString()): Selfcheck {
   const failures: string[] = [];
   for (const isolation of modes) {
@@ -99,7 +110,7 @@ export function evaluate(results: IsolationResult[], at = new Date().toISOString
       if (p.outcome !== (mustAllow.includes(name) ? 'allowed' : 'denied')) failures.push(`${isolation} ${labels[name]} ${p.outcome === 'unknown' ? '拿不准' : '未达到要求'}：${p.reason || '没有原因'}`);
     }
   }
-  return { version: cacheVersion, ok: failures.length === 0, at, note: failures.join('；') || '目录外写、公用临时目录、硬链接、各家全局配置、Chrome 调试口、本机端口、外网、读密钥和登录文件都被挡住，副本内可写', results };
+  return { version: cacheVersion, ok: failures.length === 0, at, note: failures.join('；') || '目录外写、公用临时目录、硬链接、各家全局配置、Chrome 调试口、本机端口、外网、读密钥和登录文件、钥匙串、终端配置文件、常见凭据文件、带密钥字样的环境变量都被挡住，副本内可写', results };
 }
 export function networkOutcome(outcomes: Probe['outcome'][]): Probe['outcome'] {
   if (outcomes.includes('allowed')) return 'allowed';
@@ -111,9 +122,12 @@ export function permissionOutcome(code: string): Probe['outcome'] {
 
 // 只输出结果和错误码；不输出文件名、凭据内容，也不向本机端口发送数据。
 // linkTarget：隔离外一个已有的文件（选手读得到、写不进），用来查能不能在可写目录里给它建硬链接、借此改它。
-export function probeSource(mode: Isolation, worktree: string, homeFile: string, port: number | null, marker: string, token: string, temp: TempPaths, tmp: string, linkTarget: string) {
+// keychain：外面建好的钥匙串测试条目；没建成时传 null，钥匙串探针记为拿不准。
+// fakes：外面放进环境的假变量名（名字带 KEY 等字样，值是随机数，不是真密钥）；探针只报变量名，不读值。
+export function probeSource(mode: Isolation, worktree: string, homeFile: string, port: number | null, marker: string, token: string, temp: TempPaths, tmp: string, linkTarget: string, keychain: KeychainItem | null, fakes: string[]) {
   return `import { writeFile, rm, readdir, open, mkdir, rmdir, stat, link } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import net from 'node:net';
@@ -210,12 +224,48 @@ await networkTest('internet', '1.1.1.1', 443, () => new Promise((resolve, reject
 }));
 await test('ssh', () => readdir(join(homedir(), '.ssh')));
 await test('npmrc', async () => { const fd = await open(join(homedir(), '.npmrc'), 'r'); await fd.close(); });
+// 终端配置文件、命令历史和常见的登录凭据文件：本机有的必须读不到（没有权限），本机没有的（不存在）不算数；读得到任何一个就是放行。
+// 只看能不能打开（目录看能不能列出），不读内容，也不报文件名。
+async function unreadable(name, files) {
+  const results = [];
+  for (const f of files) {
+    try { await readdir(join(homedir(), f)); results.push('allowed'); }
+    catch (e) {
+      if (e.code !== 'ENOTDIR') { results.push(e.code === 'ENOENT' ? 'absent' : outcome(e.code)); continue; }
+      try { const fd = await open(join(homedir(), f), 'r'); await fd.close(); results.push('allowed'); }
+      catch (e2) { results.push(e2.code === 'ENOENT' ? 'absent' : outcome(e2.code)); }
+    }
+  }
+  const count = o => results.filter(r => r === o).length;
+  probes.push({name, outcome:count('allowed') ? 'allowed' : count('unknown') ? 'unknown' : 'denied', reason:'读得到 ' + count('allowed') + ' 个，挡住 ' + count('denied') + ' 个，拿不准 ' + count('unknown') + ' 个，本机没有 ' + count('absent') + ' 个'});
+}
+await unreadable('shell-files', ${JSON.stringify(SHELL_FILES)});
+await unreadable('credential-files', ${JSON.stringify(CREDENTIAL_FILES)});
+// 环境变量：外面放的假变量看不到，也没有别的名字带密钥字样的变量，才算挡住。只报名字。
+// srt 自己设的代理口令（SRT_OWN_VARS）只在值正好等于 HTTP_PROXY 网址里的口令时放过；只比较、不输出值。
+{
+  const fakes = ${JSON.stringify(fakes)}, words = ${JSON.stringify(SECRET_WORDS)}, own = ${JSON.stringify(mode === 'codex' ? [] : SRT_OWN_VARS)};
+  let proxyPassword = null;
+  try { proxyPassword = decodeURIComponent(new URL(process.env.HTTP_PROXY || '').password) || null; } catch {}
+  const seen = Object.keys(process.env).filter(n => fakes.includes(n) || (words.some(w => n.toUpperCase().includes(w)) && !(own.includes(n) && proxyPassword !== null && process.env[n] === proxyPassword)));
+  probes.push({name:'env-secret', outcome:seen.length ? 'allowed' : 'denied', reason:seen.length ? '看得到 ' + seen.join('、') : '看不到'});
+}
 ${expectedProbes(mode).filter(n => n.startsWith('login-')).map(name => {
     // 文件夹由自检在外面先建好，所以查“能不能列出”，没登录时也有确定的结果。
     if (name === 'login-deepseek') return `await test('login-deepseek', () => readdir(${JSON.stringify(deepseekHome())}));`;
     const path = { 'login-codex': '.codex/auth.json', 'login-grok': '.grok/auth.json', 'login-cursor': '.cursor/cli-config.json' }[name];
     return `await test(${JSON.stringify(name)}, async () => { const fd = await open(join(homedir(), ${JSON.stringify(path)}), 'r'); await fd.close(); });`;
   }).join('\n')}
+// 钥匙串：用系统的 security 读测试条目（条目只信任 security，读得到时不弹窗）。只比对读出的是不是那个值，不打印内容。
+// security 跑起来但读不出（退出码非 0）算挡住；读出别的、超时、启动不了都算拿不准。
+${keychain ? `await new Promise(resolve => execFile(${JSON.stringify(securityPath())}, ['find-generic-password', '-a', ${JSON.stringify(keychain.account)}, '-s', ${JSON.stringify(keychain.service)}, '-w'], {timeout:10000}, (e, stdout) => {
+  if (!e) probes.push(String(stdout).trim() === ${JSON.stringify(keychain.value)} ? {name:'keychain', outcome:'allowed', reason:'读出了测试条目'} : {name:'keychain', outcome:'unknown', reason:'读出的内容对不上'});
+  else if (typeof e.code === 'number' && !e.killed) probes.push({name:'keychain', outcome:'denied', reason:'security 退出码 ' + e.code});
+  else probes.push({name:'keychain', outcome:'unknown', reason:e.killed ? '超时' : (e.code || '未知错误')});
+  resolve();
+}));` : "probes.push({name:'keychain', outcome:'unknown', reason:'没能在钥匙串里放测试条目'});"}
+await test('keychain-user', () => readdir(${JSON.stringify(keychainDirs()[0])}));
+await test('keychain-system', () => readdir(${JSON.stringify(keychainDirs()[1])}));
 // 全局配置：已有的文件用“只写、不截断、不新建”方式打开，不改内容；已有的目录里建一个随机名空文件；还没有的按真实路径建出来。
 // 判定只看写这一步：写成了就是放行，删不掉另记原因。建出来的东西连同文件编号报给外面，外面只删编号对得上的。
 // keep：公用临时目录。探针万一在里面建出了固定名的目录，不删（别的程序可能同时在删建同名目录），只报出来。
@@ -304,12 +354,37 @@ export async function readSelfcheck(now = Date.now()): Promise<{ ok: boolean | n
 
 // CODEX_HOME 必须为空，不能让负责人现有配置改变探针实际使用的权限。
 // TMPDIR 与派活时一样指向任务的 tmp（Codex 的 :workspace 放开的是 $TMPDIR）。
-export async function codexProbe(job: Pick<Job, 'mode' | 'repo' | 'worktree'>, project: Pick<Project, 'denyReadExtra'>, script: string, tmp: string, run: Executor = execute) {
+// 环境变量和派活时一样两层：inherited 先按 env.ts 去掉带密钥字样的；inner 是绕过这一层、直接塞给 Codex 的假变量，
+// 只靠 Codex 自己的 shell_environment_policy（和派活同一条参数）挡，两层各验一次。
+export async function codexProbe(job: Pick<Job, 'mode' | 'repo' | 'worktree'>, project: Pick<Project, 'denyReadExtra'>, script: string, tmp: string, run: Executor = execute, inherited: NodeJS.ProcessEnv = process.env, inner: Record<string, string> = {}) {
   const home = await mkdtemp(join(tmpdir(), 'xagents-codex-home-'));
   try {
     const file = process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
-    return await run(file, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '--', process.execPath, script], job.worktree, 20000, undefined, { CODEX_HOME: home, TMPDIR: tmp });
+    const env = exactEnv({ ...workerEnv(inherited, { CODEX_HOME: home, TMPDIR: tmp }), ...inner }, { ...process.env, ...inherited });
+    return await run(file, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '-c', codexEnvPolicy(), '--', process.execPath, script], job.worktree, 20000, undefined, env);
   } finally { await rm(home, { recursive: true, force: true }); }
+}
+// 测试条目都用这个固定账号名，清理时按它找。
+export const KEYCHAIN_ACCOUNT = 'xagents-selfcheck';
+// 在登录钥匙串里放一个测试条目（随机名、随机值），读回核对一致才用，否则返回 null。建没建成都由调用方之后统一清扫。
+// 条目只信任 security 自己（不带 -T、-A），探针里用 security 读时不弹窗，别的程序读会弹窗，所以探针只用 security。
+export async function addKeychainItem(run: Executor = execute): Promise<KeychainItem | null> {
+  const item = { account: KEYCHAIN_ACCOUNT, service: `xagents-selfcheck-${randomUUID()}`, value: randomBytes(16).toString('hex') };
+  const ok = (r: Awaited<ReturnType<Executor>>) => r.exit === 0 && !r.timedOut && !r.signal && !r.error;
+  const added = await run(securityPath(), ['add-generic-password', '-a', item.account, '-s', item.service, '-w', item.value], homedir(), 10_000);
+  const back = ok(added) ? await run(securityPath(), ['find-generic-password', '-a', item.account, '-s', item.service, '-w'], homedir(), 10_000) : null;
+  return back && ok(back) && back.output.trim() === item.value ? item : null;
+}
+// 删掉登录钥匙串里所有自检测试条目：按固定账号名找，一次删一条，删到“没有这一项”为止。
+// 自检前后各扫一次，上次自检被杀掉、超时后条目才写进去等情况留下的也一并清掉。返回出错原因，没出错返回 null。
+export async function sweepKeychainItems(run: Executor = execute): Promise<string | null> {
+  for (let i = 0; i < 50; i++) {
+    const r = await run(securityPath(), ['delete-generic-password', '-a', KEYCHAIN_ACCOUNT], homedir(), 10_000);
+    const failed = r.timedOut || r.signal || r.error;
+    if (r.exit === 44 && !failed) return null;
+    if (r.exit !== 0 || failed) return `未能删除钥匙串里的自检测试条目（账号 ${KEYCHAIN_ACCOUNT}）：${r.error || (r.timedOut ? '超时' : r.signal ? `被 ${r.signal} 停止` : `退出码 ${r.exit}`)}`;
+  }
+  return `钥匙串里的自检测试条目（账号 ${KEYCHAIN_ACCOUNT}）删了 50 条还没删完，请负责人查看`;
 }
 export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
   await mkdir(paths().cache, { recursive: true });
@@ -324,18 +399,25 @@ export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
       const temp = await realpath(await mkdtemp(join(paths().cache, 'selfcheck-')));
       await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
       const homeFiles: string[] = [];
+      let keychain: KeychainItem | null = null;
+      const leftovers: string[] = [];
       try {
+        const stale = await sweepKeychainItems(run); if (stale) leftovers.push(stale);
+        keychain = await addKeychainItem(run);
         const listening = await run('/usr/sbin/lsof', ['-nP', '-iTCP', '-sTCP:LISTEN', '-Fn'], temp, 5000);
         const port = listening.exit === 0 && !listening.timedOut && !listening.error ? Number(listening.output.match(/^n(?:127\.0\.0\.1|\*):(\d+)$/m)?.[1]) || null : null;
         const shared = await tempPaths(run, temp);
         // 硬链接探针的目标：放在自检目录本身（不在任何放开写的地方）。
         const linkTarget = join(temp, 'link-target'); await writeFile(linkTarget, 'xagents selfcheck', { mode: 0o600 });
+        // 假变量：名字带 KEY、TOKEN，值是随机数。outer 放在探针进程继承的环境里；inner 只给 Codex，绕过外面那一层。
+        const outer = 'XAGENTS_SELFCHECK_API_KEY', inner = 'XAGENTS_SELFCHECK_INNER_TOKEN';
+        const inherited = { ...process.env, [outer]: randomUUID() };
         for (const isolation of modes) {
           const worktree = join(temp, isolation); await mkdir(worktree);
           const tmp = join(temp, `${isolation}-tmp`); await mkdir(tmp);
           const homeFile = join(homedir(), `.xagents-selfcheck-${randomUUID()}`); homeFiles.push(homeFile);
           const marker = `XAGENTS_PROBE_${randomUUID()}:`, script = join(worktree, 'probe.mjs'), token = `.xagents-selfcheck-${randomUUID()}`;
-          await writeFile(script, probeSource(isolation, worktree, homeFile, port, marker, token, shared, tmp, linkTarget), { mode: 0o600 });
+          await writeFile(script, probeSource(isolation, worktree, homeFile, port, marker, token, shared, tmp, linkTarget, keychain, isolation === 'codex' ? [outer, inner] : [outer]), { mode: 0o600 });
           const before = await globalBefore(homedir(), shared);
           let probes: Probe[] | null = null;
           try {
@@ -344,11 +426,12 @@ export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
             const project = { denyReadExtra: [], denyReadHome: await extraDenyRead() };
             let r;
             if (isolation === 'codex') {
-              r = await codexProbe(job, project, script, tmp, run);
+              r = await codexProbe(job, project, script, tmp, run, inherited, { [inner]: randomUUID() });
             } else {
               const settings = join(temp, `${isolation}.json`);
               await writeJson(settings, await sandbox(job, project, join(temp, `${isolation}-state`), tmp));
-              r = await run(process.execPath, [await srtPath(), '--settings', settings, process.execPath, script], worktree, 20000, undefined, { CLAUDE_CODE_TMPDIR: tmp });
+              // 和派活时一样：srt 拿到的环境先按 env.ts 去掉带密钥字样的变量。
+              r = await run(process.execPath, [await srtPath(), '--settings', settings, process.execPath, script], worktree, 20000, undefined, exactEnv(workerEnv(inherited, { CLAUDE_CODE_TMPDIR: tmp }), inherited));
             }
             const lines = r.output.split('\n').filter(line => line.startsWith(marker));
             if (r.exit !== 0 || r.timedOut || r.signal || r.error || lines.length !== 1) throw new Error(r.error || (r.timedOut ? '探针超时' : `探针没有完整结果（退出码 ${r.exit}）`));
@@ -362,6 +445,10 @@ export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
           if (problems.length) { const r = results.at(-1)!; r.error = [r.error, ...problems].filter(Boolean).join('；'); }
         }
       } finally {
+        // 建没建成都扫一遍；删不掉就记进自检结果（自检不过），不悄悄留下。
+        const left = await sweepKeychainItems(run).catch(e => `未能删除钥匙串里的自检测试条目：${(e as Error).message}`);
+        if (left) leftovers.push(left);
+        if (leftovers.length) { const r = results[0]; if (r) r.error = [r.error, ...leftovers].filter(Boolean).join('；'); }
         for (const file of homeFiles) await rm(file, { force: true }).catch(e => {
           const r = results[0];
           if (r) r.error = `${r.error ? r.error + '；' : ''}未能清理自检随机文件 ${file}：${e.code || '未知错误'}`;

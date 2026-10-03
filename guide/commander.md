@@ -174,8 +174,8 @@ xagents rate <任务号> --score 1-5 [--good "做得好的"] [--improve "要改�
 ## 13. 常见故障
 
 - **隔离自检没过**（`xagents selfcheck` 或派活时自动跑，结果缓存一天）：不能派活。看是哪一项没过，在隔离外查清楚、修好，再重跑。绝不为了能派活放宽隔离，`--force` 也跳不过。
-  - 三家的隔离都必须做到：只能写自己的副本（外加这件活自己的临时目录和各家必需的一处状态目录，见 `docs/design.md` 第 7 节）；写不进公用临时目录（`/tmp`、`/var/folders`，里面有负责人会话的草稿和后台输出、别的程序的临时文件和套接字）；写不进各家的全局配置（`~/.cursor`、`~/.grok`、`~/.claude`、`~/.agents`、`~/.codex` 等，里面的钩子、技能、规矩会被主人在隔离外加载）；不联网（含本机端口）；读不到 `~/.ssh`、`~/.npmrc` 和别家的登录文件。
-  - Codex 在隔离里连自己的登录文件也读不到（它的登录由隔离外的主进程负责）；Grok、Cursor 必须读得到自己的登录文件，否则启动不了。依据见 `docs/design.md` 第 7 节、`docs/research/codex-permissions-2026-09-29.md` 和 `docs/research/global-config-writes-2026-09-30.md`。
+  - 三家的隔离都必须做到：只能写自己的副本（外加这件活自己的临时目录和各家必需的一处状态目录，见 `docs/design.md` 第 7 节）；写不进公用临时目录（`/tmp`、`/var/folders`，里面有负责人会话的草稿和后台输出、别的程序的临时文件和套接字）；写不进各家的全局配置（`~/.cursor`、`~/.grok`、`~/.claude`、`~/.agents`、`~/.codex` 等，里面的钩子、技能、规矩会被主人在隔离外加载）；不联网（含本机端口）；读不到 `~/.ssh`、`~/.npmrc`、别家的登录文件、系统钥匙串（`~/Library/Keychains`、`/Library/Keychains`）和终端的配置文件、命令历史（`~/.bashrc`、`~/.zshrc` 等，主人常把钥匙写在里面）；看不到名字带 KEY、TOKEN、SECRET、PASS 等字样的环境变量（依据 `docs/research/worker-env-2026-10-02.md`）。
+  - Codex 在隔离里连自己的登录文件也读不到（它的登录由隔离外的主进程负责）；Grok、Cursor 必须读得到自己的登录文件，否则启动不了。Cursor 的登录放在钥匙串里，由平台在隔离外取出、只交给这次 Cursor 进程；派 Cursor 活报“没在钥匙串里找到 Cursor 的登录”或“剩不到 2 小时就过期”时，请主人在终端运行一次 `cursor-agent login`。依据见 `docs/design.md` 第 7 节、`docs/research/codex-permissions-2026-09-29.md`、`docs/research/global-config-writes-2026-09-30.md` 和 `docs/research/keychain-2026-10-02.md`。
   - 自检的做法更新后，旧的自检缓存自动作废，下次派活会先自动重检；若报“缺少有效结果”，运行 `xagents selfcheck` 重检即可。
 - **派 DeepSeek 活报“DeepSeek 还没登录”**：钥匙只有主人能拿到。在对话里请主人在终端运行一次 `xagents login deepseek`，按提示粘贴 DeepSeek 的 API 钥匙；钥匙不要发进对话。它只存在派活工作台单独的 Codex 文件夹里，不影响主人自己的 ChatGPT 登录。DeepSeek 报余额不足（402）时请主人去 DeepSeek 网站充值。
 - **派 Grok 活报“刷新 Grok 登录没成功”，或 Grok 选手说没登录**：派 Grok 活前平台会在隔离外先刷新它的登录，失败就不派。先在终端运行 `grok models` 看报什么；多半是主人的 Grok 登录失效（一件 Grok 活跑得很久、令牌在隔离里到期可能引起），这属于“只有主人能拿到的东西”，在对话里请主人在终端运行一次 `grok` 重新登录。

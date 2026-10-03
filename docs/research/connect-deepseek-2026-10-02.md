@@ -52,6 +52,7 @@
 - 实测：在 Grok、Cursor 用的 srt 隔离里，`security find-generic-password -s <名字> -w` 能读出用 `security` 命令存进去的钥匙。Codex 的隔离读不到。
 - 原因：srt 0.0.77 的 macOS 隔离配置固定放行 `com.apple.SecurityServer` 和 `com.apple.securityd.xpc` 两个系统服务（`dist/sandbox/macos-sandbox-utils.js`），设置里只能多放行、不能收回。
 - 和 DeepSeek 无关（DeepSeek 的钥匙不放在钥匙串里），另开一件修。
+- 已修：三种隔离都禁读钥匙串文件夹，自检加了钥匙串探针，见 [keychain-2026-10-02.md](keychain-2026-10-02.md)。
 
 ## 6. 还没做（简单版不做）
 
