@@ -253,8 +253,11 @@ await unreadable('credential-files', ${JSON.stringify(CREDENTIAL_FILES)});
 ${expectedProbes(mode).filter(n => n.startsWith('login-')).map(name => {
     // 文件夹由自检在外面先建好，所以查“能不能列出”，没登录时也有确定的结果。
     if (name === 'login-deepseek') return `await test('login-deepseek', () => readdir(${JSON.stringify(deepseekHome())}));`;
-    const path = { 'login-codex': '.codex/auth.json', 'login-grok': '.grok/auth.json', 'login-cursor': '.cursor/cli-config.json' }[name];
-    return `await test(${JSON.stringify(name)}, async () => { const fd = await open(join(homedir(), ${JSON.stringify(path)}), 'r'); await fd.close(); });`;
+    const path = { 'login-codex': '.codex/auth.json', 'login-grok': '.grok/auth.json', 'login-cursor': '.cursor/cli-config.json' }[name]!;
+    // 登录文件不存在（没登录）时，改查它所在的文件夹能不能列出：被挡住说明整个文件夹在隔离名单里，
+    // 将来登录生成的文件同样读不到，算挡住；能列出或文件夹也不存在，仍按原来的 ENOENT 算拿不准。
+    const dir = path.slice(0, path.lastIndexOf('/'));
+    return `await test(${JSON.stringify(name)}, async () => { try { const fd = await open(join(homedir(), ${JSON.stringify(path)}), 'r'); await fd.close(); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; await readdir(join(homedir(), ${JSON.stringify(dir)})); throw e; } });`;
   }).join('\n')}
 // 钥匙串：用系统的 security 读测试条目（条目只信任 security，读得到时不弹窗）。只比对读出的是不是那个值，不打印内容。
 // security 跑起来但读不出（退出码非 0）算挡住；读出别的、超时、启动不了都算拿不准。

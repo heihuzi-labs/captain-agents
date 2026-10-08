@@ -110,6 +110,22 @@ for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 最
   assert.equal(allowed.probes.find(p => p.name === 'listener')!.outcome, 'unknown');
 });
 
+// 没登录时登录文件不存在：所在文件夹也被挡住才算挡住；文件夹能列出或也不存在仍算拿不准。
+for (const mode of ['codex', 'cursor'] as Isolation[]) test(`${mode} 没登录 Grok 时按所在文件夹判定`, async () => {
+  const missing = { '.grok/auth.json': 'ENOENT' } as Record<string, 'ENOENT'>;
+  const blocked = await runProbe(mode, { shell: missing });
+  assert.ok(blocked.opened.includes('/fake/home/.grok'));
+  assert.equal(blocked.probes.find(p => p.name === 'login-grok')!.outcome, 'denied');
+  const listable = await runProbe(mode, { shell: missing, readable: ['/fake/home/.grok'] });
+  assert.equal(listable.probes.find(p => p.name === 'login-grok')!.outcome, 'unknown');
+  const noDir = await runProbe(mode, { shell: { ...missing, '.grok': 'ENOENT' } });
+  assert.equal(noDir.probes.find(p => p.name === 'login-grok')!.outcome, 'unknown');
+  // 文件在、被挡住：行为不变，也不去列文件夹。
+  const present = await runProbe(mode);
+  assert.equal(present.probes.find(p => p.name === 'login-grok')!.outcome, 'denied');
+  assert.ok(!present.opened.includes('/fake/home/.grok'));
+});
+
 for (const mode of ['grok', 'cursor'] as Isolation[]) test(`${mode} HTTP 代理发送 URL 解码后的 Basic 认证，403 挡住，407 拿不准，200 可通`, async () => {
   for (const [status, outcome] of [[403, 'denied'], [407, 'unknown'], [200, 'allowed']] as const) {
     const { requests, probes } = await runProbe(mode, { proxy: 'http://%E7%94%A8%E6%88%B7%20name:secret-password%40%3A@proxy.invalid:8080', status });

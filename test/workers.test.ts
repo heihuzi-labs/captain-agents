@@ -82,7 +82,8 @@ test('cursor-sonnet 沿用 Cursor 的隔离模板，不新开模板', async t =>
   const p = { denyReadExtra: ['.data'] } as Project;
   for (const ro of [false, true]) assert.deepEqual(await sandbox(job('cursor-sonnet', ro), p), await sandbox(job('cursor-grok', ro), p));
   const file = JSON.parse(await readFile(join(root, 'sandbox/cursor.json'), 'utf8'));
-  assert.ok(file.filesystem.denyRead.includes('~/.grok/auth.json') && file.filesystem.denyRead.includes('~/.ssh') && file.filesystem.denyRead.includes('~/.npmrc'));
+  // 整个 ~/.grok 都禁读：没登录 Grok 时自检能凭“文件夹也读不到”确认挡住（2026-10-08）。
+  assert.ok(file.filesystem.denyRead.includes('~/.grok') && file.filesystem.denyRead.includes('~/.ssh') && file.filesystem.denyRead.includes('~/.npmrc'));
   assert.ok(!file.filesystem.denyRead.includes('~/.cursor/cli-config.json'));
   assert.deepEqual((await readdir(join(root, 'sandbox'))).sort(), ['cursor.json', 'grok.json']);
 });
@@ -230,7 +231,7 @@ test('Codex 最终参数只换权限档，其余完全保留，绝不混用 -s �
 
 test('srt 新增 npmrc 禁读且不丢失任何已有禁读条目；选手自己的登录文件必须能读', async () => {
   const own = { grok: '~/.grok/auth.json', 'cursor-grok': '~/.cursor/cli-config.json' } as Record<string, string>;
-  const other = { grok: '~/.cursor/cli-config.json', 'cursor-grok': '~/.grok/auth.json' } as Record<string, string>;
+  const other = { grok: '~/.cursor/cli-config.json', 'cursor-grok': '~/.grok' } as Record<string, string>;
   for (const who of ['grok', 'cursor-grok'] as Who[]) {
     const config = await sandbox(job(who), { denyReadExtra: [] } as unknown as Project);
     for (const path of ['~/.ssh', '~/.codex', '~/.aws', '~/.claude', '~/.config/gh', '~/.npmrc', '~/Library/Keychains', '/Library/Keychains', other[who]]) assert.ok(config.filesystem.denyRead.includes(path), `${who}: ${path}`);
