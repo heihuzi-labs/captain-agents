@@ -7,7 +7,7 @@ import { updateJob, finish, listJobs } from './job.ts';
 import type { Job } from './job.ts';
 import { LiveProgress } from './live.ts';
 import { writeAtomic, hasCode, readOptional } from './fsx.ts';
-import { saveDiff } from './worktree.ts';
+import { saveDiff, worktreeMissing } from './worktree.ts';
 import { keepAwake } from './awake.ts';
 import { SleepMonitor } from './sleeps.ts';
 import { readQuotaCache } from './quota.ts';
@@ -115,7 +115,8 @@ export async function runWorker(id: string) {
         const dir = jobDir(id);
         const parsed = progress.parser.result(await readOptional(join(dir, 'final.md')));
         await writeAtomic(join(dir, 'report.md'), parsed.report ? parsed.report + '\n' : '');
-        try { await saveDiff(job); }
+        if (await worktreeMissing(job)) console.error('副本已不在，没法保存改动。');
+        else try { await saveDiff(job); }
         catch (e) { console.error(`保存改动失败：${(e as Error).message}。请运行 collect 重试。`); }
         await updateJob(id, j => {
           Object.assign(j, { quota_after: quotaAfter });

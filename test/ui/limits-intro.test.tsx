@@ -10,7 +10,7 @@ import { fixtureBridge, fixtureView } from './fixtures.tsx';
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); });
 function setup(page: string) {
   localStorage.setItem('xa.settings-page', page);
-  let current: Values = { keepAwake: true, notifications: true, appearance: 'system', openAtLogin: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 }, workers: fixtureView().settings.workers };
+  let current: Values = { keepAwake: true, notifications: true, appearance: 'system', openAtLogin: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, workers: fixtureView().settings.workers };
   const setSettings = vi.fn(async (patch: SettingsPatch) => { current = { ...current, ...patch } as Values; return structuredClone(current); });
   const copyIntro = vi.fn(async () => {});
   window.xa = fixtureBridge({ getSettings: vi.fn(async () => structuredClone(current)), setSettings, copyIntro });
@@ -18,14 +18,14 @@ function setup(page: string) {
   return { setSettings, copyIntro };
 }
 
-test('选手与模型页最上面是“派活限制”：同时最多跑 1–6 件、额度停派线 50–80%，点了整组两项一起存', async () => {
+test('选手与模型页最上面是“派活限制”：同时最多跑 1–12 件、额度停派线 50–80%，点了整组两项一起存', async () => {
   const { setSettings } = setup('workers');
   const group = (await screen.findByText('派活限制')).closest('.setting-group') as HTMLElement;
   expect(document.querySelectorAll('.setting-group')[0]).toBe(group);
   const run = within(group).getByRole('combobox', { name: '同时最多跑' }) as HTMLSelectElement, stop = within(group).getByRole('combobox', { name: '额度停派线' }) as HTMLSelectElement;
-  expect([...run.options].map(o => o.textContent)).toEqual(['1 件', '2 件', '3 件', '4 件', '5 件', '6 件']);
+  expect([...run.options].map(o => o.textContent)).toEqual(['1 件', '2 件', '3 件', '4 件', '5 件', '6 件', '7 件', '8 件', '9 件', '10 件', '11 件', '12 件']);
   expect([...stop.options].map(o => o.textContent)).toEqual(['50%', '60%', '70%', '80%']);
-  expect([run.value, stop.value]).toEqual(['6', '80']);
+  expect([run.value, stop.value]).toEqual(['12', '80']);
   expect(within(group).queryByRole('tablist')).toBeNull(); expect(group.querySelector('.setting-foot')).toBeNull();
   fireEvent.change(run, { target: { value: '3' } });
   await waitFor(() => expect(setSettings).toHaveBeenLastCalledWith({ limits: { maxRunning: 3, quotaStop: 80 } }));

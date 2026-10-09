@@ -293,7 +293,8 @@ test('派活限制：设置页的选项和核心是同一组；主进程只收�
   assert.deepEqual(RUN_CHOICES, Array.from({ length: LIMIT_CAPS.maxRunning }, (_, i) => i + 1));
   assert.deepEqual(STOP_CHOICES, [...quotaStops]); assert.equal(Math.max(...STOP_CHOICES), LIMIT_CAPS.quotaStop);
   assert.deepEqual(settingsPatch({ limits: { maxRunning: 3, quotaStop: 60 } }), { limits: { maxRunning: 3, quotaStop: 60 } });
-  for (const bad of [{ maxRunning: 7, quotaStop: 80 }, { maxRunning: 0, quotaStop: 80 }, { maxRunning: 2.5, quotaStop: 80 }, { maxRunning: 3, quotaStop: 90 }, { maxRunning: 3, quotaStop: 55 }, { maxRunning: 3 }, { maxRunning: 3, quotaStop: 60, extra: 1 }, [3, 60], null]) {
+  assert.deepEqual(settingsPatch({ limits: { maxRunning: 12, quotaStop: 80 } }), { limits: { maxRunning: 12, quotaStop: 80 } });
+  for (const bad of [{ maxRunning: 13, quotaStop: 80 }, { maxRunning: 0, quotaStop: 80 }, { maxRunning: 2.5, quotaStop: 80 }, { maxRunning: 3, quotaStop: 90 }, { maxRunning: 3, quotaStop: 55 }, { maxRunning: 3 }, { maxRunning: 3, quotaStop: 60, extra: 1 }, [3, 60], null]) {
     assert.throws(() => settingsPatch({ limits: bad }), JSON.stringify(bad));
   }
 });

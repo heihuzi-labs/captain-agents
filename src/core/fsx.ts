@@ -1,4 +1,4 @@
-import { open, rename, rm, readFile, mkdir, stat } from 'node:fs/promises';
+import { open, rename, rm, readFile, mkdir, stat, lstat, chmod, readdir } from 'node:fs/promises';
 import { writeFileSync, mkdirSync, rmSync, readFileSync, statSync, openSync, closeSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -6,6 +6,27 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 export function hasCode(error: unknown, code: string) {
   return (error as NodeJS.ErrnoException)?.code === code;
+}
+// 只修复树内目录的属主权限；lstat 不跟随链接，文件和链接目标都不改权限。
+export async function removeTree(dir: string): Promise<void> {
+  async function writableDirectories(path: string): Promise<void> {
+    let info;
+    try { info = await lstat(path); }
+    catch (e) { if (hasCode(e, 'ENOENT')) return; throw e; }
+    if (!info.isDirectory()) return;
+    await chmod(path, (info.mode & 0o7777) | 0o300);
+    for (const name of await readdir(path)) await writableDirectories(join(path, name));
+  }
+  try {
+    try { await rm(dir, { recursive: true, force: true }); }
+    catch (e) {
+      if (!hasCode(e, 'EACCES') && !hasCode(e, 'EPERM')) throw e;
+      await writableDirectories(dir);
+      await rm(dir, { recursive: true, force: true });
+    }
+  } catch (e) {
+    throw new Error(`删除目录树失败：${dir}；${e instanceof Error ? e.message : String(e)}`, { cause: e });
+  }
 }
 export async function readJson<T = unknown>(file: string): Promise<T> {
   const text = await readFile(file, 'utf8');

@@ -6,7 +6,7 @@ import { fixtureBridge } from './fixtures.tsx';
 afterEach(() => { cleanup(); localStorage.clear(); });
 
 test('设置里通用页最上面一行是“外观”，跟随系统、浅色、深色三选一；选了立刻显示并保存，标题不是 label（点标题不会误选）', async () => {
-  const setSettings = vi.fn(async (patch: object) => ({ keepAwake: true, notifications: true, openAtLogin: false, appearance: 'dark' as const, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 6, quotaStop: 80 as const }, workers: {} as never, ...patch }));
+  const setSettings = vi.fn(async (patch: object) => ({ keepAwake: true, notifications: true, openAtLogin: false, appearance: 'dark' as const, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: {} as never, ...patch }));
   window.xa = fixtureBridge({ setSettings: setSettings as never });
   render(<Settings close={() => {}} />);
   const group = await screen.findByRole('group', { name: '外观' });

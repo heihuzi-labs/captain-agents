@@ -126,7 +126,7 @@ test('xagents guide：登记处是空的也能用，额度没查过时提示先�
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /还没有额度数据，先运行 `xagents quota`/);
   assert.match(result.stdout, /在跑或排队：0 件/);
-  assert.match(result.stdout, /派活限制：同时最多 6 件；额度用到 80% 停派/);
+  assert.match(result.stdout, /派活限制：同时最多 12 件；额度用到 80% 停派/);
   assert.match(result.stdout, /：0 条/);
   for (const who of whos) assert.ok(result.stdout.includes(`（${who}）`));
   assert.equal((result.stdout.match(/：还没做过活$/gm) ?? []).length, whos.length);

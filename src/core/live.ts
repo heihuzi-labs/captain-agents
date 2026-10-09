@@ -3,7 +3,7 @@ import { StreamParser, LogTail } from './activity.ts';
 import { jobDir } from './paths.ts';
 import { updateJob } from './job.ts';
 import type { Job } from './job.ts';
-import { changedFiles } from './worktree.ts';
+import { changedFiles, worktreeMissing } from './worktree.ts';
 
 // 串行调用 sample/persist，避免慢磁盘上的两次采集互相覆盖。
 export class LiveProgress {
@@ -31,8 +31,8 @@ export class LiveProgress {
     if (this.parser.timing(undefined, at).toolSeconds !== previous.toolSeconds) this.dirty = true;
     if (final || now - this.lastCount >= 30_000) {
       this.lastCount = now;
-      this.files = await changedFiles(this.job);
-      this.dirty = true;
+      // 副本不在时保留上次的数字，不让这一轮的进度跟着丢。
+      if (!(await worktreeMissing(this.job))) { this.files = await changedFiles(this.job); this.dirty = true; }
     }
   }
   apply(job: Job) {

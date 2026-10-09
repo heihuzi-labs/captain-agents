@@ -51,7 +51,7 @@ test('设置拒绝未知字段、非布尔和非法颜色，允许恢复默认',
   expect(settingsPatch({ columns: { done: '#12AbEf' } })).toEqual({ columns: { done: '#12AbEf' } });
 });
 test('设置只通过核心写入，自启只交给系统，数量错误不产生副作用', async () => {
-  const mock = { readSettings: vi.fn(async () => ({ keepAwake: true, notifications: true, appearance: 'system' as const, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 6, quotaStop: 80 as const }, workers: effectiveWorkers(undefined) })), writeSettings: vi.fn(async () => {}), getLogin: () => false, setLogin: vi.fn() }, updated = vi.fn(async () => {});
+  const mock = { readSettings: vi.fn(async () => ({ keepAwake: true, notifications: true, appearance: 'system' as const, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: effectiveWorkers(undefined) })), writeSettings: vi.fn(async () => {}), getLogin: () => false, setLogin: vi.fn() }, updated = vi.fn(async () => {});
   const settings = settingsActions(mock, updated);
   await expect(settings.get([1])).rejects.toThrow();
   await expect(settings.set([])).rejects.toThrow();
@@ -218,7 +218,7 @@ describe('界面：文案与设置', () => {
   });
   test('取色：拖动时不保存，松手才存；保存中来的新值存完再存最新的一个；保存时不禁用整组', async () => {
     const calls: SettingsPatch[] = [], finishes: (() => void)[] = [];
-    let current: Values = { keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 as const }, workers: effectiveWorkers(undefined) };
+    let current: Values = { keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: effectiveWorkers(undefined) };
     window.xa = fixtureBridge({ setSettings: vi.fn((patch: SettingsPatch) => new Promise<Values>(resolve => {
       calls.push(patch); finishes.push(() => { current = { ...current, ...patch, workers: { ...current.workers, ...patch.workers } }; resolve(current); });
     })) });

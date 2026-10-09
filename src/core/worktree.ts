@@ -71,6 +71,11 @@ export async function changedFiles(job: Job) {
   const status = await git(job.worktree, ['status', '--porcelain', '--untracked-files=all']);
   return status.split('\n').filter(Boolean).length;
 }
+// 副本被外面删掉后再进去跑 git 只会报英文错误，调用方先用它判断。
+export async function worktreeMissing(job: Pick<Job, 'worktree'>) {
+  try { await lstat(job.worktree); return false; }
+  catch (e) { if (hasCode(e, 'ENOENT')) return true; throw e; }
+}
 export async function saveDiff(job: Job) {
   if (!job.cleaned) await writeAtomic(join(jobDir(job.id), 'diff.patch'), await diff(job));
 }

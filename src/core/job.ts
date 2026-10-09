@@ -27,6 +27,9 @@ export type Job = {
   state: State; created: string; started?: string; ended?: string; seconds?: number; exit?: number | null;
   pid?: number; workerPid?: number; setupPid?: number; queuedBy?: number; command?: Command; error?: string; usage?: Usage;
   cleaned?: string; stopRequested?: boolean; decision?: { kind: 'adopt' | 'drop'; note?: string; at: string; by: 'owner' | 'lead'; handled?: string; merged?: string }; verify?: unknown;
+  worktreeRemoved?: string; // 副本和分支已删除的时间，后续清理失败时供重试使用。
+  // 删除副本前解析出的会话路径，清理中断后仍能找到真实路径对应的会话。
+  pendingGrokSessions?: string[];
   redo?: { at: string; by: 'owner'; handled?: string };
   sleeps?: { from: string; to: string }[];
   comments?: Comment[];

@@ -19,8 +19,8 @@ export type SettingsPatch = Partial<Omit<Settings, 'workers'>> & { workers?: Par
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const columns = (value: unknown): value is Record<string, string> => object(value) && Object.values(value).every(v => typeof v === 'string');
 // 派活限制：只能往严了调，不能超过 LIMIT_CAPS（原来写死的值）。
-// maxRunning：同时在跑加排队的上限，1–6；quotaStop：某家本期额度用到这个百分比就不再派给它，只许 50、60、70、80。
-export const LIMIT_CAPS = { maxRunning: 6, quotaStop: 80 } as const;
+// maxRunning：同时在跑加排队的上限，1–12；quotaStop：某家本期额度用到这个百分比就不再派给它，只许 50、60、70、80。
+export const LIMIT_CAPS = { maxRunning: 12, quotaStop: 80 } as const;
 export const quotaStops = [50, 60, 70, 80] as const;
 export type QuotaStop = typeof quotaStops[number];
 export type Limits = { maxRunning: number; quotaStop: QuotaStop };
@@ -80,7 +80,7 @@ export async function writeSettings(update: SettingsPatch | ((current: Settings)
     const patch = typeof update === 'function' ? update(structuredClone(current)) : update;
     if (!object(patch) || Object.entries(patch).some(([key, value]) =>
       key === 'workers' ? false : key === 'columns' ? !columns(value) : key === 'appearance' ? !isAppearance(value) : key === 'storage' ? !isStorage(value) : key === 'limits' ? !isLimits(value) : key === 'archivedProjects' ? !isArchived(value) : !['keepAwake', 'notifications'].includes(key) || typeof value !== 'boolean')) {
-      throw new Error('设置不合法：防休眠和通知须为开或关，外观须为跟随系统、浅色或深色，自动清理须为开或关、天数只能 7、14、30，同时最多跑 1–6 件、额度停派线只能 50%、60%、70%、80%，归档项目须为项目名列表，列颜色须为文字映射。');
+      throw new Error(`设置不合法：防休眠和通知须为开或关，外观须为跟随系统、浅色或深色，自动清理须为开或关、天数只能 7、14、30，同时最多跑 1–${LIMIT_CAPS.maxRunning} 件、额度停派线只能 50%、60%、70%、80%，归档项目须为项目名列表，列颜色须为文字映射。`);
     }
     const workersPatch = Object.hasOwn(patch, 'workers') ? validateWorkersPatch(patch.workers) : {};
     const workers = { ...current.workers, ...workersPatch };

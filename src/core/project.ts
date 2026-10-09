@@ -56,10 +56,15 @@ export async function findProject(name?: string, cwd = process.cwd()) {
   const common = await realpath((await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
   const matches: Project[] = [];
   for (const p of await listProjects()) {
-    if (await realpath(p.repo) === root) matches.push(p);
-    else {
-      const other = await realpath((await git(p.repo, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
-      if (other === common) matches.push(p);
+    try {
+      if (await realpath(p.repo) === root) matches.push(p);
+      else {
+        const other = await realpath((await git(p.repo, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
+        if (other === common) matches.push(p);
+      }
+    } catch {
+      // 已登记的仓库可能已删除或不再是 Git 仓库，不影响其他项目的识别。
+      continue;
     }
   }
   if (matches.length !== 1) throw new Error(matches.length ? '同一个仓库登记了多个项目，请用 --project 指定名字。' : '当前仓库还没登记，请先运行 xagents project add <名字> <仓库路径>。');

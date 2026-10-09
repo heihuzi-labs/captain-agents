@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { context, until } from './helpers.ts';
+import { context, exec, root, until } from './helpers.ts';
 import type { QuotaSnapshot } from '../src/core/quota.ts';
 
 async function quota(home: string, used: number) {
@@ -52,13 +52,13 @@ test('同时最多跑读设置：2 件占满就拒绝，环境变量 5 不能放
   assert.equal((await c.cli(['stop', jobs[1].id])).code, 0);
 });
 
-test('缺省最多 6 件，环境变量不能突破；非法环境变量拒绝且不登记', async t => {
+test('缺省最多 12 件，环境变量不能突破；非法环境变量拒绝且不登记', async t => {
   const c = await context(t); assert.equal((await c.add()).code, 0);
   await quota(c.home, 55);
   const args = ['run', c.task, '--summary', '上限底线测试', '--who', 'codex:high'];
   const before = await inventory(c);
-  const denied = await c.cli([...args, ...Array.from({ length: 6 }, () => ['--who', 'codex:high']).flat()], { XAGENTS_MAX_RUNNING: '99' });
-  assert.equal(denied.code, 1); assert.match(denied.stderr, /同时最多跑 6 件/);
+  const denied = await c.cli([...args, ...Array.from({ length: 12 }, () => ['--who', 'codex:high']).flat()], { XAGENTS_MAX_RUNNING: '99' });
+  assert.equal(denied.code, 1); assert.match(denied.stderr, /同时最多跑 12 件/);
   assert.deepEqual(await inventory(c), before);
   for (const value of ['0', '-1', '1.5', 'bad']) {
     const invalid = await c.cli(args, { XAGENTS_MAX_RUNNING: value });
@@ -96,11 +96,25 @@ test('额度停派线读设置：60% 时拒绝 65%、放行 55%，force 能跳�
 
 test('workers 和帮助显示当前派活限制与环境变量只能收紧', async t => {
   const c = await context(t, false);
-  for (const limits of [{ maxRunning: 2, quotaStop: 60 }, { maxRunning: 6, quotaStop: 80 }]) {
+  for (const limits of [{ maxRunning: 2, quotaStop: 60 }, { maxRunning: 12, quotaStop: 80 }]) {
     await writeFile(join(c.home, 'config.json'), JSON.stringify({ limits }));
     const workers = await c.cli(['workers']); assert.equal(workers.code, 0, workers.stderr);
     assert.ok(workers.stdout.trimEnd().endsWith(`派活限制：同时最多 ${limits.maxRunning} 件；额度用到 ${limits.quotaStop}% 停派（设置 → 选手与模型）`));
   }
   const help = await c.cli(['--help']); assert.equal(help.code, 0, help.stderr);
-  assert.match(help.stdout, /XAGENTS_MAX_RUNNING：正整数.*临时收紧.*较小值.*不能放宽设置或超过 6/);
+  assert.match(help.stdout, /XAGENTS_MAX_RUNNING：正整数.*临时收紧.*较小值.*不能放宽设置或超过 12/);
+});
+
+test('设置边界：12 件合法，13 件拒绝且保留原设置', async t => {
+  const c = await context(t, false);
+  const result = await exec(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { readSettings, writeSettings } from './src/core/settings.ts';
+    assert.equal((await readSettings()).limits.maxRunning, 12);
+    await writeSettings({ limits: { maxRunning: 12, quotaStop: 80 } });
+    assert.deepEqual((await readSettings()).limits, { maxRunning: 12, quotaStop: 80 });
+    await assert.rejects(writeSettings({ limits: { maxRunning: 13, quotaStop: 80 } }), /同时最多跑 1–12 件/);
+    assert.deepEqual((await readSettings()).limits, { maxRunning: 12, quotaStop: 80 });
+  `], root, c.env);
+  assert.equal(result.code, 0, result.stderr);
 });

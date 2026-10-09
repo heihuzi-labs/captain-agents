@@ -7,7 +7,7 @@ import type { ConnectStatus } from '../../src/core/intro.ts';
 // 缺省选手设置，直接用核心算出来的，不另写一份。
 const workerPolicies = effectiveWorkers(undefined);
 export const fixtureView = (): View => ({
-  settings: { keepAwake: true, notifications: true, storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 }, workers: structuredClone(workerPolicies) },
+  settings: { keepAwake: true, notifications: true, storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, workers: structuredClone(workerPolicies) },
   storage: { slimmedJobs: 0, freedBytes: 0, due: 0 },
   dashboard: [],
   roster: whos.map(who => ({ who, name: spec(who).name, model: spec(who).shown, efforts: allowedEfforts(who), fastSupported: supportsFast(who) })),
@@ -109,7 +109,7 @@ export const fixtureBridge = (extra: Partial<XaBridge> = {}): XaBridge => ({
   refreshQuota: vi.fn(async () => {}), copyIntro: vi.fn(async () => {}),
   connectStatus: vi.fn(async () => connectFixture()), connect: vi.fn(async () => connectFixture()), disconnect: vi.fn(async () => connectFixture()),
   decide: vi.fn(async () => {}), comment: vi.fn(async () => {}), redo: vi.fn(async () => {}), stop: vi.fn(async () => {}),
-  getSettings: vi.fn(async () => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 6, quotaStop: 80 as const }, workers: structuredClone(workerPolicies) })),
-  setSettings: vi.fn(async patch => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 6, quotaStop: 80 as const }, ...patch, workers: { ...structuredClone(workerPolicies), ...patch.workers } })),
+  getSettings: vi.fn(async () => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: structuredClone(workerPolicies) })),
+  setSettings: vi.fn(async patch => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, ...patch, workers: { ...structuredClone(workerPolicies), ...patch.workers } })),
   onOpen: () => () => {}, getView: vi.fn(async () => fixtureView()), onView: () => () => {}, ...extra,
 });

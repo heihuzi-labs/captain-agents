@@ -113,7 +113,7 @@ export async function verify(id: string, run: Executor = execute): Promise<Verif
   return withVerifyLock(original.repo, async () => {
     const job = await readJob(id);
     if (active(job)) throw new Error('任务还在运行，请等结束后再验收。');
-    if (job.cleaned) throw new Error('副本已清理，不能再验收。');
+    if (job.cleaned || job.worktreeRemoved) throw new Error('副本已清理，不能再验收。');
     const project = await loadProject(job.project) as Awaited<ReturnType<typeof loadProject>> & { verifyTimeoutMinutes?: number };
     if (!Array.isArray(project.verify) || !project.verify.length || project.verify.some(c => typeof c !== 'string' || !c.trim())) throw new Error('项目还没有有效的 verify 命令，请先补全项目设置。');
     const result = await verifyCommands(project.verify, job.worktree, join(jobDir(id), 'verify.log'), project.verifyTimeoutMinutes ?? 20, run);

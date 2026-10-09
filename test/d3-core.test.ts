@@ -196,7 +196,7 @@ test('读一次设置不建锁，监视目录 300 毫秒内没有事件', async 
     finally { await delay(30); stop = true; await polling; assert.equal(seen, false); }
   };
   await quiet();
-  assert.deepEqual(await readOnce(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
+  assert.deepEqual(await readOnce(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
   await delay(300);
   assert.deepEqual(events, []);
   await writeFile(join(c.home, 'config.json'), JSON.stringify({ keepAwake: false, notifications: true }));
@@ -212,12 +212,12 @@ test('读一次设置不建锁，监视目录 300 毫秒内没有事件', async 
 
 test('设置默认开启；部分写入、并发修改和旧颜色兼容，保留未知配置；损坏可恢复', async t => {
   const c = await registry(t), file = join(c.home, 'config.json');
-  assert.deepEqual(await readSettings(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
+  assert.deepEqual(await readSettings(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
   await assert.rejects(readFile(file), { code: 'ENOENT' });
   await writeFile(file, JSON.stringify({ board: { columns: { running: '#123456' } }, custom: 42 }));
   assert.equal((await readSettings()).columns?.running, '#123456');
   await Promise.all([writeSettings({ keepAwake: false }), writeSettings({ notifications: false }), writeSettings({ columns: { running: '#abcdef' } })]);
-  assert.deepEqual(await readSettings(), { keepAwake: false, notifications: false, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 }, archivedProjects: [], columns: { running: '#abcdef' }, workers: effectiveWorkers(undefined) });
+  assert.deepEqual(await readSettings(), { keepAwake: false, notifications: false, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], columns: { running: '#abcdef' }, workers: effectiveWorkers(undefined) });
   assert.equal(JSON.parse(await readFile(file, 'utf8')).custom, 42);
   await writeSettings({ keepAwake: true }); assert.equal((await readSettings()).notifications, false);
   for (const invalid of [{ keepAwake: 'no' }, { notifications: 0 }, { columns: { x: 5 } }, { other: true }, null, []]) {
@@ -225,10 +225,10 @@ test('设置默认开启；部分写入、并发修改和旧颜色兼容，保�
   }
   for (const raw of ['{', 'null', '[]', '42', '{"keepAwake":"false","notifications":null,"columns":[]}']) {
     await writeFile(file, raw);
-    assert.deepEqual(await readSettings(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
+    assert.deepEqual(await readSettings(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
     assert.equal(await readFile(file, 'utf8'), raw);
     await writeSettings({ notifications: false });
-    assert.deepEqual(await readSettings(), { keepAwake: true, notifications: false, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
+    assert.deepEqual(await readSettings(), { keepAwake: true, notifications: false, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
   }
   assert.ok(!(await readdir(c.home)).some(name => name.endsWith('.tmp') || name === '.lock'));
 });
@@ -261,7 +261,7 @@ test('buildView 输出新增数据和设置；旧任务标题兜底、旧决定�
   const view = await buildView(), record = await readJob('one');
   assert.equal(view.jobs[0].summary, c.job.summary); assert.deepEqual(view.jobs[0].decision, record.decision);
   assert.deepEqual(view.jobs[0].redo, record.redo); assert.deepEqual(view.jobs[0].sleeps, [period]);
-  assert.deepEqual(view.settings, { keepAwake: false, notifications: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 }, workers: effectiveWorkers(undefined) }); assert.deepEqual(view.storage, { slimmedJobs: 0, freedBytes: 0, due: 0 }); assert.equal(view.theme?.columns.running, '#aabbcc');
+  assert.deepEqual(view.settings, { keepAwake: false, notifications: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, workers: effectiveWorkers(undefined) }); assert.deepEqual(view.storage, { slimmedJobs: 0, freedBytes: 0, due: 0 }); assert.equal(view.theme?.columns.running, '#aabbcc');
   const { summary: _summary, ...legacy } = c.job;
   await writeFile(join(c.home, 'jobs/one/job.json'), JSON.stringify({ ...legacy, decision: { kind: 'adopt', at: c.job.created } }));
   await writeFile(join(c.home, 'batches/old.json'), JSON.stringify({ id: 'old', title: '旧批次', started: c.job.created, jobs: ['one'] }));

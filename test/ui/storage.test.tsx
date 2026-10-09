@@ -11,7 +11,7 @@ const NOTE = (days: number) => `活结束 ${days} 天后，把选手的原始日
 const viewWith = (storage: { slimmedJobs: number; freedBytes: number; due: number }) => ({ ...fixtureView(), storage });
 // 假的设置存取：保存后返回合并过的整份设置。
 function setup(storage: Values['storage'] = { slim: true, days: 14 }, view = fixtureView()) {
-  let current: Values = { keepAwake: true, notifications: true, appearance: 'system', openAtLogin: false, storage, limits: { maxRunning: 6, quotaStop: 80 }, workers: fixtureView().settings.workers };
+  let current: Values = { keepAwake: true, notifications: true, appearance: 'system', openAtLogin: false, storage, limits: { maxRunning: 12, quotaStop: 80 }, workers: fixtureView().settings.workers };
   const setSettings = vi.fn(async (patch: SettingsPatch) => { current = { ...current, ...patch } as Values; return structuredClone(current); });
   window.xa = fixtureBridge({ getSettings: vi.fn(async () => structuredClone(current)), setSettings });
   const shown = render(<Settings close={() => {}} view={view} />);

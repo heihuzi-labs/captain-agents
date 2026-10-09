@@ -9,7 +9,7 @@ afterEach(() => { cleanup(); localStorage.clear(); });
 type Workers = Values['workers'];
 // 假的设置存取：先记下每次保存，按约定“选手逐个整体替换”合并；hold 时保存一直挂着，由测试放行；reject 时保存被核心拒绝。
 function setup({ view = fixtureView(), workers, reject, hold }: { view?: ReturnType<typeof fixtureView>; workers?: Workers; reject?: string; hold?: boolean } = {}) {
-  let current: Values = { keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 6, quotaStop: 80 as const }, workers: structuredClone(workers ?? view.settings.workers) };
+  let current: Values = { keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: structuredClone(workers ?? view.settings.workers) };
   const release: (() => void)[] = [];
   const apply = (patch: SettingsPatch) => { current = { ...current, ...patch, workers: { ...current.workers, ...patch.workers } }; return structuredClone(current); };
   const setSettings = vi.fn((patch: SettingsPatch) => reject ? Promise.reject(new Error(reject))
@@ -190,7 +190,7 @@ test('保存失败：退回原值，并在这一页顶部用一句话写原因�
   expect(on(power('grok'))).toBe(true);                                        // 都退回原值
   expect(on(control('grok', '中档'))).toBe(true); expect(row('grok').dataset.off).toBeUndefined();
   expect(setSettings).toHaveBeenCalledTimes(1);
-  setSettings.mockImplementation(async patch => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 6, quotaStop: 80 as const }, workers: { ...fixtureView().settings.workers, ...patch.workers } }));
+  setSettings.mockImplementation(async patch => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: { ...fixtureView().settings.workers, ...patch.workers } }));
   fireEvent.click(control('cursor-grok', '快速版'));
   await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   await waitFor(() => expect(on(control('cursor-grok', '快速版'))).toBe(false));

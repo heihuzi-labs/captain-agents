@@ -1,12 +1,12 @@
 import { join } from 'node:path';
-import { lstat, rm } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { active, selectJobs, updateJob, finish } from './job.ts';
 import type { Job } from './job.ts';
-import { alive, hasCode, writeAtomic } from './fsx.ts';
+import { alive, hasCode, writeAtomic, removeTree } from './fsx.ts';
 import { jobDir } from './paths.ts';
 import { result } from './workers.ts';
-import { saveDiff, changedFiles, removeWorktree } from './worktree.ts';
+import { saveDiff, changedFiles, removeWorktree, worktreeMissing } from './worktree.ts';
 import { cursorStateDir, grokSessionDirs, jobTmpDir } from './sandbox.ts';
 import { isolationOf } from './roster.ts';
 import { moveToTrash } from './trash.ts';
@@ -25,7 +25,7 @@ export async function collect(id: string, report: (text: string) => void = () =>
       current.usage = parsed.usage;
       current.activity = parsed.activity; current.lastActivityAt = parsed.lastActivityAt;
       // 整份日志在同一时间补读，不能拿它回填或覆盖实时采集的 timing。
-      if (!current.cleaned) {
+      if (!current.cleaned && !current.worktreeRemoved && !(await worktreeMissing(current))) {
         current.changedFiles = await changedFiles(current);
         await saveDiff(current);
       }
@@ -67,29 +67,55 @@ export async function clean(id?: string, done = false, report: (text: string) =>
   checkRated(jobs);
   for (const job of jobs) {
     if (job.cleaned) continue;
-    let warning = '';
+    let note = '';
+    let failure: { error: unknown } | undefined;
     // 清理完成并释放任务锁后才修正状态，避免重复申请任务锁。
     await updateJob(job.id, async j => {
       checkClean(j);
       checkRated([j]);
-      try { j.changedFiles = await changedFiles(j); await saveDiff(j); }
-      catch (e) {
-        // setup 或 worktree add 失败时可能根本没有副本。
-        if (j.state !== 'failed' && j.state !== 'stopped') throw e;
+      try {
+        const missing = j.worktreeRemoved || !(await exists(j.worktree));
+        if (missing) {
+          note = await exists(join(jobDir(j.id), 'diff.patch'))
+            ? '；副本已不在，沿用之前存的 diff.patch' : '；副本已不在，没有可存的改动';
+        }
+        if (!j.worktreeRemoved) {
+          if (!missing) {
+            try { j.changedFiles = await changedFiles(j); await saveDiff(j); }
+            catch (e) {
+              // 保留准备失败、人工停止任务原有的清理行为。
+              if (j.state !== 'failed' && j.state !== 'stopped') throw e;
+            }
+          }
+          // 真实路径要在副本删除前解析；失败重试时沿用已保存的路径。
+          if (isolationOf(j.who) === 'grok' && !j.pendingGrokSessions) j.pendingGrokSessions = await grokSessionsOf(j.worktree);
+          await removeWorktree(j);
+          j.worktreeRemoved = new Date().toISOString();
+        }
+        const sessions = j.pendingGrokSessions ?? (isolationOf(j.who) === 'grok' ? await grokSessionsOf(j.worktree) : []);
+        const remaining = [];
+        for (const path of sessions) if (await exists(path)) remaining.push(path);
+        // 移不进废纸篓只提醒，不挡住清理，否则任务会一直清不掉。
+        if (remaining.length) await moveToTrash(remaining, `Grok会话-${j.id}`).catch(e => { note += `；没能把 Grok 会话文件夹移进废纸篓：${(e as Error).message}`; });
+        delete j.pendingGrokSessions;
+        await removeTree(cursorStateDir(j));
+        // 2026-09-30 之前的 Cursor 状态放在任务目录下。
+        await removeTree(join(jobDir(j.id), 'cursor-state'));
+        await removeTree(jobTmpDir(j));
+        j.cleaned = new Date().toISOString();
+      } catch (error) {
+        // 回调必须正常返回，才能在锁内保存已经完成的进度；出锁后再报错。
+        failure = { error };
       }
-      // 副本还在时先算出 Grok 的会话文件夹（算真实路径要用到副本），删完副本再移走。
-      const sessions = isolationOf(j.who) === 'grok' ? await grokSessionsOf(j.worktree) : [];
-      await removeWorktree(j);
-      if (sessions.length) await moveToTrash(sessions, `Grok会话-${j.id}`).catch(e => { warning = `；没能把 Grok 会话文件夹移进废纸篓：${(e as Error).message}`; });
-      await rm(cursorStateDir(j), { recursive: true, force: true });
-      // 2026-09-30 之前的 Cursor 状态放在任务目录下。
-      await rm(join(jobDir(j.id), 'cursor-state'), { recursive: true, force: true });
-      await rm(jobTmpDir(j), { recursive: true, force: true });
-      j.cleaned = new Date().toISOString();
     });
-    report(`已清理副本和分支，任务记录保留：${job.id}${warning}`);
+    if (failure) throw failure.error;
+    report(`已清理副本和分支，任务记录保留：${job.id}${note}`);
   }
   await reconcileSafely();
+}
+async function exists(path: string): Promise<boolean> {
+  try { await lstat(path); return true; }
+  catch (e) { if (hasCode(e, 'ENOENT')) return false; throw e; }
 }
 // Grok 在 ~/.grok/sessions 下给每个副本建一个会话文件夹（派活时只放开它写，见 sandbox.ts）。清理时一起移进废纸篓，
 // 用派活时同一个算法算路径，只移确实存在的；算不出来（路径不规范）就不动。

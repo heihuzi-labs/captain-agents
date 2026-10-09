@@ -66,7 +66,7 @@ export function settingsPatch(value: unknown): SettingsPatch {
       if (entries.length !== 2 || typeof slim !== 'boolean' || !slimDays.includes(days as SlimDays)) throw new Error('自动清理只能填开或关，天数只能是 7、14 或 30。');
       patch.storage = { slim, days: days as SlimDays };
     } else if (key === 'limits') {
-      // 派活限制：只能在上限以内（同时最多跑 1–6 件、停派线 50/60/70/80%），两项都要给、不许多字段。
+      // 派活限制：只能在上限以内（同时最多跑 1–12 件、停派线 50/60/70/80%），两项都要给、不许多字段。
       if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).some(k => k !== 'maxRunning' && k !== 'quotaStop')) throw new Error('派活限制须包含“同时最多跑”和“额度停派线”两项。');
       const { maxRunning, quotaStop } = v as Record<string, unknown>;
       if (!Number.isInteger(maxRunning) || (maxRunning as number) < 1 || (maxRunning as number) > LIMIT_CAPS.maxRunning) throw new Error(`同时最多跑只能是 1–${LIMIT_CAPS.maxRunning} 件。`);

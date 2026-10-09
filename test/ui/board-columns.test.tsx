@@ -66,7 +66,7 @@ test('设置的“看板颜色”：三行（进行中、验收中、已完成�
   await waitFor(() => expect(window.xa.setSettings).toHaveBeenCalledWith({ columns: { attention: '#123456' } }));
 });
 test('设置的“看板颜色”：旧设置里留着的 queued 键被忽略，不显示、不报错，存别的列时也不再带上它', async () => {
-  window.xa = fixtureBridge({ getSettings: vi.fn(async () => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 6, quotaStop: 80 as const }, columns: { queued: '#a0a097', running: '#111111' }, workers: {} as never })) });
+  window.xa = fixtureBridge({ getSettings: vi.fn(async () => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, columns: { queued: '#a0a097', running: '#111111' }, workers: {} as never })) });
   render(<Settings close={() => {}} />);
   fireEvent.click(await screen.findByRole('tab', { name: '看板颜色' }));
   await screen.findByLabelText('进行中');
