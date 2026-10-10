@@ -65,7 +65,7 @@ button.plain { border: 0; background: transparent; padding: 0; text-align: inher
 @media (prefers-reduced-motion: reduce) { .dot-running { animation: none; } }
 
 /* ---------- 按钮：主要 / 次要 / 危险 ---------- */
-.btn { padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--panel); color: var(--text); line-height: 1.2; }
+.btn { flex: none; white-space: nowrap; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--panel); color: var(--text); line-height: 1.2; }
 .btn:hover:not(:disabled) { background: var(--sunk); }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
