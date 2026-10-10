@@ -1,3 +1,5 @@
+import { refreshModelsWithBaseline, readModelsCache } from '../../src/core/models.ts';
+import { modelsRefresher, modelsRefreshHandler, modelsKeepHandler, modelsScheduler } from './models.ts';
 import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeTheme, protocol, screen, session, shell } from 'electron';
 import { connect, connectArgument, connectStatus, disconnect } from '../../src/core/connect.ts';
 import { INTRO_TEXT } from '../../src/core/intro.ts';
@@ -10,13 +12,16 @@ import { readJob } from '../../src/core/job.ts';
 import { decide, requestRedo } from '../../src/core/decide.ts';
 import { stop } from '../../src/core/commands.ts';
 import { addComment, cleanComment } from '../../src/core/comments.ts';
-import { readSettings, writeSettings } from '../../src/core/settings.ts';
+import { createChat, renameChat, sayInChat } from '../../src/core/chat.ts';
+import { stopChat } from '../../src/core/chat-engine.ts';
+import { sayInTeam, stopTeam } from '../../src/core/team.ts';
+import { readSettings, writeSettings, setNetworkAllowed, keepModels, loadConfiguredRoster } from '../../src/core/settings.ts';
 import { queryQuota, readQuotaCache } from '../../src/core/quota.ts';
 import type { View } from '../../src/core/view-types.ts';
-import type { Destination } from '../shared/ipc.ts';
+import type { Destination, CliStatus } from '../shared/ipc.ts';
 import { applyAppearance, syncBackground, windowBackground } from './appearance.ts';
-import { jobActions, quotaRefreshHandler, quotaRefresher, settingsActions } from './actions.ts';
-import { notificationTracker } from './notifications.ts';
+import { jobActions, quotaRefreshHandler, quotaRefresher, settingsActions, teamActions, chatActions } from './actions.ts';
+import { noticeTitle, notificationTracker } from './notifications.ts';
 import type { Notice } from './notifications.ts';
 import { createTray } from './tray.ts';
 import { readIcon } from './icons.ts';
@@ -27,8 +32,17 @@ import { watchRegistry } from './watch.ts';
 import { startDesktop } from './startup.ts';
 import { slimScheduler } from './slim.ts';
 import { slimOld } from '../../src/core/slim.ts';
+// Electron 自带的“原始文件函数”：不把路径里的 .asar 当虚拟目录（更新包里有 app.asar，见 update-install.ts）。
+import originalFs from 'original-fs';
+import { desktopUpdater } from './update-runtime.ts';
+import { cliLauncherStatus, installCliLauncher } from './cli-launcher.ts';
+import { updateActions } from './updater.ts';
+import type { Updater } from './updater.ts';
 
 declare const __XA_DEVELOPMENT__: boolean;
+declare const __XA_UPDATE_FEED__: string;
+declare const __XA_UPDATE_PUBLIC_KEY__: string;
+declare const __XA_UPDATE_HOSTS__: string[];
 protocol.registerSchemesAsPrivileged([{ scheme: 'xa-icon', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 app.setName('派活工作台');
 process.env.PATH = desktopPath(process.env.PATH);
@@ -39,9 +53,11 @@ if (process.env.XAGENTS_USER_DATA) app.setPath('userData', process.env.XAGENTS_U
 let window: BrowserWindow | null = null;
 let opening: Promise<void> | undefined;
 let closeWatch: (() => void) | undefined;
+let modelSchedule: ReturnType<typeof modelsScheduler> | undefined;
 let quotaTimer: ReturnType<typeof setInterval> | undefined;
 const QUOTA_EVERY_MS = 15 * 60_000;
 let slimmer: ReturnType<typeof slimScheduler> | undefined;
+let updater: Updater | undefined;
 let saving = Promise.resolve();
 let exiting = false;
 let tray: ReturnType<typeof createTray> | undefined;
@@ -70,7 +86,7 @@ function publish(view: View) {
 function sendNotice(notice: Notice) {
   if (e2eNotices) { e2eNotices.push(notice); return; }
   if (!Notification.isSupported()) return;
-  const notification = new Notification({ title: '派活工作台', body: notice.body });
+  const notification = new Notification({ title: noticeTitle(notice), body: notice.body });
   liveNotifications.add(notification);
   notification.on('click', () => reveal(notice.target));
   notification.on('close', () => liveNotifications.delete(notification));
@@ -139,8 +155,10 @@ else {
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('before-quit', event => {
     closeWatch?.();
+    modelSchedule?.stop();
     if (quotaTimer) clearInterval(quotaTimer);
     slimmer?.stop();
+    updater?.stop();
     tray?.destroy(); tray = undefined;
     if (!exiting) {
       event.preventDefault(); exiting = true;
@@ -152,6 +170,7 @@ else {
     }
   });
   void app.whenReady().then(async () => {
+    await loadConfiguredRoster();
     await migrateIcons().catch(console.error);
     applyAppearance(nativeTheme, (await readSettings()).appearance);
     nativeTheme.on('updated', () => syncBackground(nativeTheme, window));
@@ -168,16 +187,41 @@ else {
       catch { return new Response(null, { status: 404 }); }
     });
     const actions = jobActions({ readJob, decide, requestRedo, stop, comment: addComment, checkComment: cleanComment });
-    const settings = settingsActions({ readSettings, writeSettings,
+    const chatBridge = chatActions({ create: createChat, say: sayInChat, stop: stopChat, rename: renameChat });
+    const teamBridge = teamActions({ say: sayInTeam, stop: stopTeam, checkText: cleanComment });
+    const settings = settingsActions({ readSettings, writeSettings, setNetworkAllowed,
       getLogin: () => app.getLoginItemSettings().openAtLogin,
       setLogin: value => app.setLoginItemSettings({ openAtLogin: value }),
       setAppearance: value => applyAppearance(nativeTheme, value, window),
       storageChanged: () => { void slimmer?.now(); },
     }, async () => publish(await readDesktopView()));
+    const models = modelsRefresher({ query: () => refreshModelsWithBaseline(), readCache: readModelsCache }, async () => publish(await readDesktopView()));
     const quota = quotaRefresher({ query: () => queryQuota() }, async () => publish(await readDesktopView()));
     const guard = (event: Electron.IpcMainInvokeEvent) => {
       if (!trustedSender(event, window, pageUrl)) throw new Error('不允许的请求来源。');
     };
+    updater = await desktopUpdater({
+      development: __XA_DEVELOPMENT__, packaged: app.isPackaged,
+      feed: __XA_UPDATE_FEED__, publicKey: __XA_UPDATE_PUBLIC_KEY__, hosts: __XA_UPDATE_HOSTS__,
+      version: app.getVersion(), platform: process.platform, arch: process.arch,
+      executable: process.execPath, userData: app.getPath('userData'), quit: () => app.quit(),
+      files: originalFs.promises,
+      publish: state => { if (window && !window.isDestroyed()) window.webContents.send(channels.onUpdate, state); },
+    });
+    const updates = updateActions(updater);
+    // 命令行启动脚本：开发版不提供；参数只认一个开关，路径都由后台自己定，窗口传不进来。
+    const cliStatus = async (): Promise<CliStatus> => app.isPackaged ? cliLauncherStatus() : 'unavailable';
+    ipcMain.handle(channels.cliStatus, (event, ...args: unknown[]) => { guard(event); if (args.length) throw new Error('读取命令行状态不需要参数。'); return cliStatus(); });
+    ipcMain.handle(channels.cliInstall, async (event, ...args: unknown[]) => {
+      guard(event);
+      if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('安装命令行只能接收一个开关。');
+      if (!app.isPackaged) throw new Error('开发版不安装命令行。');
+      await installCliLauncher({ replace: args[0] });
+      return cliStatus();
+    });
+    for (const action of ['appInfo', 'updateCheck', 'updateDownload', 'updateRestart', 'setAutoUpdateCheck'] as const) {
+      ipcMain.handle(channels[action], (event, ...args: unknown[]) => { guard(event); return updates[action](args); });
+    }
     ipcMain.handle(channels.getView, async (event, ...args: unknown[]) => {
       guard(event);
       if (args.length) throw new Error('读取看板不需要参数。');
@@ -190,6 +234,14 @@ else {
     for (const action of ['decide', 'redo', 'stop', 'comment'] as const) ipcMain.handle(channels[action], async (event, ...args: unknown[]) => {
       guard(event); await actions(action, args);
     });
+    ipcMain.handle(channels.chatCreate, async (event, ...args: unknown[]) => { guard(event); return chatBridge('create', args); });
+    ipcMain.handle(channels.chatSay, async (event, ...args: unknown[]) => { guard(event); await chatBridge('say', args); });
+    ipcMain.handle(channels.chatStop, async (event, ...args: unknown[]) => { guard(event); await chatBridge('stop', args); });
+    ipcMain.handle(channels.chatRename, async (event, ...args: unknown[]) => { guard(event); await chatBridge('rename', args); });
+    ipcMain.handle(channels.teamSay, async (event, ...args: unknown[]) => { guard(event); await teamBridge('say', args); });
+    ipcMain.handle(channels.teamStop, async (event, ...args: unknown[]) => { guard(event); await teamBridge('stop', args); });
+    ipcMain.handle(channels.modelsRefresh, modelsRefreshHandler(models, event => trustedSender(event, window, pageUrl)));
+    ipcMain.handle(channels.modelsKeep, modelsKeepHandler({ keep: keepModels }, async () => { await loadConfiguredRoster(); publish(await readDesktopView()); }, event => trustedSender(event, window, pageUrl)));
     ipcMain.handle(channels.quotaRefresh, quotaRefreshHandler(quota, event => trustedSender(event, window, pageUrl)));
     // 复制对接提示词：只写固定的那一份，不收参数；窗口自己没有剪贴板权限（security.ts 拒绝一切权限请求）。
     ipcMain.handle(channels.copyIntro, (event, ...args: unknown[]) => { guard(event); if (args.length) throw new Error('复制对接提示词不需要参数。'); clipboard.writeText(INTRO_TEXT); });
@@ -198,6 +250,7 @@ else {
     ipcMain.handle(channels.disconnect, (event, ...args: unknown[]) => { guard(event); return disconnect(connectArgument(args)); });
     ipcMain.handle(channels.settingsGet, (event, ...args: unknown[]) => { guard(event); return settings.get(args); });
     ipcMain.handle(channels.settingsSet, (event, ...args: unknown[]) => { guard(event); return settings.set(args); });
+    ipcMain.handle(channels.networkAllowed, (event, ...args: unknown[]) => { guard(event); return settings.allowNetwork(args); });
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: '派活工作台', submenu: [{ label: '设置…', accelerator: 'CmdOrCtrl+,', click: () => reveal({ kind: 'settings' }) }, { type: 'separator' }, { label: '退出', role: 'quit' }] },
       { label: '编辑', submenu: [{ label: '撤销', role: 'undo' }, { label: '重做', role: 'redo' }, { type: 'separator' }, { label: '剪切', role: 'cut' }, { label: '复制', role: 'copy' }, { label: '粘贴', role: 'paste' }, { label: '全选', role: 'selectAll' }] },
@@ -212,6 +265,11 @@ else {
       refresh: async () => { publish(await readDesktopView()); await notificationWork; },
       onError: console.error,
     });
+    updater.start();
+    if (!e2eHidden) {
+      modelSchedule = modelsScheduler({ readCache: readModelsCache }, models, console.error);
+      modelSchedule.start();
+    }
     // 应用开着时每 15 分钟查一次额度；启动时数据已经超过 15 分钟也查一次（冒烟测试里不查）。
     quotaTimer = setInterval(() => { void quota.auto(console.error); }, QUOTA_EVERY_MS);
     if (!e2eNotices) {

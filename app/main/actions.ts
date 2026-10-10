@@ -1,9 +1,12 @@
+import { checkChatOptions, cleanChatText, cleanChatTitle } from '../../src/core/chat.ts';
+import type { CreateChatOptions } from '../../src/core/chat.ts';
 import type { IpcMainInvokeEvent } from 'electron';
+import { safeName } from '../../src/core/paths.ts';
 import type { Settings, SettingsPatch } from '../shared/ipc.ts';
 import { defaultColumns } from '../shared/ipc.ts';
 import { validateWorkersPatch } from '../../src/core/policy.ts';
-import { isAppearance, LIMIT_CAPS, quotaStops, slimDays } from '../../src/core/settings.ts';
-import type { Appearance, QuotaStop, SlimDays } from '../../src/core/settings.ts';
+import { isAppearance, isQuotaStop, LIMIT_CAPS, slimDays } from '../../src/core/settings.ts';
+import type { Appearance, SlimDays } from '../../src/core/settings.ts';
 
 // 归档名单：和核心 settings.ts 同一条线（数组、每个是合法项目名、最多 200 个）。名字规则同登记项目。
 const PROJECT_NAME = /^[\p{L}\p{N}_-]+$/u;
@@ -53,6 +56,7 @@ export function settingsPatch(value: unknown): SettingsPatch {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error('设置格式不对。');
   const patch: SettingsPatch = {};
   for (const [key, v] of Object.entries(value)) {
+    if (key === 'autoUpdateCheck') throw new Error('自动检查更新不能通过普通设置补丁修改，请使用专门的开关。');
     if (key === 'keepAwake' || key === 'notifications' || key === 'openAtLogin') {
       if (typeof v !== 'boolean') throw new Error('开关只能是开或关。');
       patch[key] = v;
@@ -66,12 +70,12 @@ export function settingsPatch(value: unknown): SettingsPatch {
       if (entries.length !== 2 || typeof slim !== 'boolean' || !slimDays.includes(days as SlimDays)) throw new Error('自动清理只能填开或关，天数只能是 7、14 或 30。');
       patch.storage = { slim, days: days as SlimDays };
     } else if (key === 'limits') {
-      // 派活限制：只能在上限以内（同时最多跑 1–12 件、停派线 50/60/70/80%），两项都要给、不许多字段。
+      // 派活限制：同时最多跑 1–12 件、停派线 50/60/70/80/90% 或不设限，两项都要给、不许多字段。
       if (!v || typeof v !== 'object' || Array.isArray(v) || Object.keys(v).some(k => k !== 'maxRunning' && k !== 'quotaStop')) throw new Error('派活限制须包含“同时最多跑”和“额度停派线”两项。');
       const { maxRunning, quotaStop } = v as Record<string, unknown>;
       if (!Number.isInteger(maxRunning) || (maxRunning as number) < 1 || (maxRunning as number) > LIMIT_CAPS.maxRunning) throw new Error(`同时最多跑只能是 1–${LIMIT_CAPS.maxRunning} 件。`);
-      if (!quotaStops.includes(quotaStop as QuotaStop)) throw new Error('额度停派线只能是 50%、60%、70%、80%。');
-      patch.limits = { maxRunning: maxRunning as number, quotaStop: quotaStop as QuotaStop };
+      if (!isQuotaStop(quotaStop)) throw new Error('额度停派线只能是 50%、60%、70%、80%、90%、不设限。');
+      patch.limits = { maxRunning: maxRunning as number, quotaStop };
     } else if (key === 'workers') {
       patch.workers = validateWorkersPatch(v);
     } else if (key === 'columns') {
@@ -91,6 +95,7 @@ export function settingsPatch(value: unknown): SettingsPatch {
 export function settingsActions(core: {
   readSettings(): Promise<Omit<Settings, 'openAtLogin'>>;
   writeSettings(patch: Omit<SettingsPatch, 'openAtLogin'>): Promise<void>;
+  setNetworkAllowed(on: unknown): Promise<void>;
   getLogin(): boolean;
   setLogin(value: boolean): void;
   // 外观改了立刻生效（主进程给 nativeTheme 赋值、换窗口底色）；保存成功后才调用。
@@ -105,6 +110,7 @@ export function settingsActions(core: {
   };
   const set = async (args: unknown[]) => {
     if (args.length !== 1) throw new Error('设置参数数量不对。');
+    await core.readSettings(); // 同步配置里新保留的选手，再校验补丁。
     const { openAtLogin, ...patch } = settingsPatch(args[0]);
     if (pending) throw new Error('设置正在保存，请稍等。');
     pending = true;
@@ -117,19 +123,30 @@ export function settingsActions(core: {
       return await get([]);
     } finally { pending = false; }
   };
-  return { get, set };
+  // 联网总开关单独保存，和普通设置共用保存锁。
+  const allowNetwork = async (args: unknown[]) => {
+    if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('联网总开关只能是开或关。');
+    if (pending) throw new Error('设置正在保存，请稍等。');
+    pending = true;
+    try {
+      await core.setNetworkAllowed(args[0]);
+      await updated();
+      return await get([]);
+    } finally { pending = false; }
+  };
+  return { get, set, allowNetwork };
 }
 
 // 刷新额度：同一时间只跑一次，两次之间（按上一次结束算）至少隔 gapMs。
 // 查询本身是核心的 queryQuota（和 xagents quota 同一个）；它会启动各家自己的命令行，应用不联网、不开端口。
 export const QUOTA_GAP_MS = 60_000;
-export function quotaRefresher(core: { query(): Promise<unknown>; now?(): number }, updated: () => Promise<void>, gapMs = QUOTA_GAP_MS) {
+export function quotaRefresher(core: { query(): Promise<unknown>; now?(): number }, updated: () => Promise<void>, gapMs = QUOTA_GAP_MS, subject = '额度') {
   const now = core.now ?? Date.now;
   let running = false, finished = -Infinity;
   const cooling = () => finished + gapMs - now();
   const refresh = async (args: unknown[]) => {
-    if (args.length) throw new Error('刷新额度不需要参数。');
-    if (running) throw new Error('正在刷新额度，请稍等。');
+    if (args.length) throw new Error(`刷新${subject}不需要参数。`);
+    if (running) throw new Error(`正在刷新${subject}，请稍等。`);
     if (cooling() > 0) throw new Error('刚刷新过，请稍后再试。');
     running = true;
     try { await core.query(); }
@@ -143,10 +160,70 @@ export function quotaRefresher(core: { query(): Promise<unknown>; now?(): number
   };
   return { refresh, auto };
 }
+// 队号先检查：必须是字符串、不能空、不能超长，还要过 safeName。文字规则同留言（1–500 字）。
+const TEAM_ID_MAX = 200;
+function teamId(value: unknown): string {
+  if (typeof value !== 'string' || !value || value.length > TEAM_ID_MAX) throw new Error('队号无效。');
+  return safeName(value);
+}
+export function teamActions(core: {
+  say(id: string, text: string, by: 'owner'): Promise<unknown>;
+  stop(id: string): Promise<unknown>;
+  checkText(text: unknown): string;
+}) {
+  const pending = new Set<string>();
+  return async (action: 'say' | 'stop', args: unknown[]) => {
+    if (args.length !== (action === 'say' ? 2 : 1)) throw new Error('请求参数数量不对。');
+    const id = teamId(args[0]);
+    const text = action === 'say' ? core.checkText(args[1]) : '';
+    if (pending.has(id)) throw new Error('这件事正在处理，请稍等。');
+    pending.add(id);
+    try {
+      if (action === 'say') await core.say(id, text, 'owner');
+      else await core.stop(id);
+    } finally { pending.delete(id); }
+  };
+}
 // IPC 入口：先验来源窗口，再交给刷新器（它拒绝任何参数）。
 export function quotaRefreshHandler(refresher: Pick<ReturnType<typeof quotaRefresher>, 'refresh'>, trusted: (event: IpcMainInvokeEvent) => boolean) {
   return async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
     if (!trusted(event)) throw new Error('不允许的请求来源。');
     await refresher.refresh(args);
+  };
+}
+
+// 群聊桥只接受三个白名单动作；建群不允许夹带路径、联网或跳过检查的选项。
+export function chatActions(core: {
+  create(options: CreateChatOptions): Promise<{ id: string }>;
+  say(id: string, text: string, by: 'owner'): Promise<unknown>;
+  stop(id: string): Promise<unknown>;
+  rename(id: string, title: string): Promise<unknown>;
+}) {
+  const pending = new Set<string>();
+  return async (action: 'create' | 'say' | 'stop' | 'rename', args: unknown[]) => {
+    if (args.length !== (action === 'say' || action === 'rename' ? 2 : 1)) throw new Error('请求参数数量不对。');
+    let options: CreateChatOptions | undefined, id = '', text = '';
+    if (action === 'create') {
+      const value = args[0];
+      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype
+        || Object.keys(value).some(k => !['project', 'title', 'members'].includes(k))) throw new Error('建群参数格式不对。');
+      options = value as CreateChatOptions;
+      checkChatOptions(options);
+      options = { project: options.project, title: options.title, members: [...options.members] };
+    } else {
+      if (typeof args[0] !== 'string' || !args[0] || args[0].length > 200) throw new Error('群号无效。');
+      id = safeName(args[0]);
+      if (action === 'say') text = cleanChatText(args[1]);
+      if (action === 'rename') text = cleanChatTitle(args[1]);
+    }
+    const key = options ? `create:${options.project}` : id;
+    if (pending.has(key)) throw new Error('这件事正在处理，请稍等。');
+    pending.add(key);
+    try {
+      if (options) return (await core.create(options)).id;
+      if (action === 'say') await core.say(id, text, 'owner');
+      else if (action === 'rename') await core.rename(id, text);
+      else await core.stop(id);
+    } finally { pending.delete(key); }
   };
 }

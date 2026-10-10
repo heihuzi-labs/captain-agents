@@ -5,6 +5,7 @@ import { readJson, writeJson, withLock, alive, hasCode } from './fsx.ts';
 
 import { isWho } from './roster.ts';
 import type { Who } from './roster.ts';
+import type { RoundRecord } from './team.ts';
 export type { Who };
 export type State = 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lost';
 export type Usage = { read: number; cached: number; out: number; cacheWrite?: number };
@@ -27,6 +28,8 @@ export type Job = {
   state: State; created: string; started?: string; ended?: string; seconds?: number; exit?: number | null;
   pid?: number; workerPid?: number; setupPid?: number; queuedBy?: number; command?: Command; error?: string; usage?: Usage;
   cleaned?: string; stopRequested?: boolean; decision?: { kind: 'adopt' | 'drop'; note?: string; at: string; by: 'owner' | 'lead'; handled?: string; merged?: string }; verify?: unknown;
+  // 负责人写明“这件活不用跑验收命令”的理由（xagents verify --skip）。再跑一次验收，它就让位给真实的结果。
+  verifySkip?: { reason: string; at: string };
   worktreeRemoved?: string; // 副本和分支已删除的时间，后续清理失败时供重试使用。
   // 删除副本前解析出的会话路径，清理中断后仍能找到真实路径对应的会话。
   pendingGrokSessions?: string[];
@@ -41,8 +44,26 @@ export type Job = {
   };
   activity?: Activity[]; lastActivityAt?: string; changedFiles?: number;
   timing?: Timing;
+  // 派活时的联网快照；缺省就是关，之后的设置变更不影响本任务。
+  network?: true;
   // 自动清理旧日志后记下：什么时候、腾出多少字节、移走了哪些文件（相对任务目录）。
   slimmed?: { at: string; bytes: number; files: string[] };
+  // 小队里的队员（docs/design-team.md）。有它的活由小队推进，看板画在小队卡里，不单独成卡。
+  team?: { id: string; role: 'writer' | 'reviewer' };
+  // 项目群里的成员（docs/design-team.md 第 16 节）：这件活是某位选手在这个群里的“席位”，每被 @ 一次就续接一轮；
+  // 副本是群共用的，清理这件活时不删副本（群收起后由 xagents chat clean 删）。
+  chat?: { id: string };
+  // 这位选手在自家程序里的会话号（第 1 轮结束后从输出里取），叫醒时用它续接。
+  session?: string;
+  // 每轮独立运行包；只有整包准备成功才在任务锁里切换。切换成功后只留当前和上一轮的包（run-package.ts 的 prunePackages）。
+  runtime?: string;
+  isolation?: { denyReadExtra: string[]; denyReadHome: string[] };
+  // 包内也保存命令；这里从第一轮起记下每轮实际启动的命令（续接已经变形）。
+  launches?: { round: number; runtime: string; command: Command }[];
+  // 第 2 轮起有：看管进程按它把 command 改成续接（workers.ts 的 resumeCommand），提示词读 prompt 这个文件（任务目录里的文件名）。
+  resume?: { round: number; prompt: string };
+  // 已经做完的各轮（叫醒下一轮前抄下来）；当前这一轮仍在 started/ended/usage 等字段里。
+  rounds?: RoundRecord[];
 };
 export type Batch = { id: string; kind: string; title: string; summary: string; started: string; base: string; jobs: string[] };
 export const active = (job: Job) => job.state === 'queued' || job.state === 'running';

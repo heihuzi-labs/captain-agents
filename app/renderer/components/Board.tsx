@@ -14,6 +14,21 @@ export type Open = (target: Target) => void;
 export function ProjectTag({ name }: { name?: string }) {
   return name ? <Chip title={'项目：' + name}>{name}</Chip> : null;
 }
+// 群聊小标签：这件活来自协作页的一个项目群（第 14 节）。和项目标签一起靠右，排在它前面。
+export function ChatTag({ on }: { on: boolean }) {
+  return on ? <Chip tone="acc" title="协作页里的项目群聊，点开回到群里">群聊</Chip> : null;
+}
+// 群里排队等动手的成员，一行写完（和“正在 …”同一种写法）。
+function Waiting({ names }: { names?: string[] }) {
+  return names?.length ? <div className="doing"><span>排队</span><b>{names.join('、')}</b></div> : null;
+}
+// 群里这一刻没人在跑、只有人排着（两位交接的间隙）：一张紧凑卡，只写群名和排队的人。
+export function ChatWaitingCard({ id, title, waiting, project, open }: { id: string; title: string; waiting: string[]; project?: string; open: Open }) {
+  return <Card compact onClick={() => open({ kind: 'chat', id })} data-chat={id}>
+    <div className="ctitle"><span className="ellip">{title}</span><ChatTag on /><ProjectTag name={project} /></div>
+    <Waiting names={waiting} />
+  </Card>;
+}
 // 看板的列名：和设置里的列颜色同一份。
 export type ColumnName = keyof typeof defaultColumns;
 // 列头任何宽度都不折行；列窄时先收“· 近 24 小时”，再把“全部历史 →”收成“历史 →”（docs/ui-spec.md 第 14 节，靠 layout.css 里的容器查询）。
@@ -46,6 +61,7 @@ export const RunningCard = memo(function RunningCard({
   hue,
   group = false,
   project,
+  chat,
   open
 }: {
   job: ViewJob;
@@ -54,6 +70,7 @@ export const RunningCard = memo(function RunningCard({
   hue?: string;
   group?: boolean;
   project?: string;
+  chat?: { id: string; title: string; waiting: string[] };   // 群里的活：题目是群的现名、标“群聊”、点了回群里；waiting 是排队的成员
   open: Open;
 }) {
   const card = useRef<HTMLButtonElement>(null),
@@ -78,14 +95,16 @@ export const RunningCard = memo(function RunningCard({
     const start = Date.parse(job.started);
     return { ...job, started: new Date(start + sleptSeconds(job.sleeps, start, Date.now()) * 1000).toISOString() };
   }, [job]);
-  const doing = [...job.activity].reverse().find(a => a.kind !== 'say');
+  // “正在…”只看这一轮开始之后的动作（成员被再次叫醒时，上一轮最后在干什么不算）。
+  const doing = [...job.activity].reverse().find(a => a.kind !== 'say' && a.at >= job.started);
   const body = <>
     <WorkerRow job={job} workers={workers} detail="setting" end={<Elapsed job={awake} className="elapsed" />} />
-    {!group && <div className="ctitle"><span className="ellip">{job.title}</span><ProjectTag name={project} /></div>}
+    {!group && <div className="ctitle"><span className="ellip">{chat?.title ?? job.title}</span><ChatTag on={!!chat} /><ProjectTag name={project} /></div>}
     {typical && <div className="prog" ref={progress}><div className="track"><i ref={bar} /></div><div className="plabel"><span className="r" ref={label} /><span>通常 {fmtDur(typical, true)}</span></div></div>}
     <div className="doing"><span>正在</span><b>{doing ? human(doing).replace(/^在/, '') : '看题目'}</b></div>
+    <Waiting names={chat?.waiting} />
   </>;
-  const onClick = () => open({ kind: 'job', id: job.id });
+  const onClick = () => open(chat ? { kind: 'chat', id: chat.id } : { kind: 'job', id: job.id });
   return group
     ? <MemberRow ref={card} marked={awaitingReply(job)} onClick={onClick} data-job={job.id}>{body}</MemberRow>
     : <Card ref={card} hue={hue} marked={awaitingReply(job)} onClick={onClick} data-job={job.id}>{body}</Card>;
@@ -118,10 +137,10 @@ type EntryProps = {
 export function sameEntry(a: EntryProps, b: EntryProps) {
   return a.workers === b.workers && a.hue === b.hue && a.project === b.project && a.open === b.open && a.entry.title === b.entry.title && a.entry.type === b.entry.type && a.entry.target.kind === b.entry.target.kind && a.entry.target.id === b.entry.target.id && a.entry.members.length === b.entry.members.length && a.entry.members.every((j, i) => j === b.entry.members[i]);
 }
-// 一批的验收小结：没有一家通过只说做完了几家；有通过的写几家通过；全部通过写“都”。
-export function checkSummary(members: ViewJob[]) {
+// 一批的验收小结：没有一家通过只说做完了几家；有通过的写几家通过；全部通过写“都”。群聊里说“位”。
+export function checkSummary(members: ViewJob[], unit = '家') {
   const n = members.length, passed = members.filter(m => m.check?.ok).length;
-  return passed === n ? `${n} 家都做完了，都通过验收` : passed ? `${n} 家做完了，${passed} 家通过验收` : `${n} 家做完了`;
+  return passed === n ? `${n} ${unit}都做完了，都通过验收` : passed ? `${n} ${unit}做完了，${passed} ${unit}通过验收` : `${n} ${unit}做完了`;
 }
 export const AttentionCard = memo(function AttentionCard({
   entry: e,
@@ -133,10 +152,10 @@ export const AttentionCard = memo(function AttentionCard({
   const j = e.members[0],
     decide = e.type === 'decide';
   const word = decide ? '负责人在挑' : e.type === 'lost' ? '中途断了' : e.type === 'check' ? '验收没过' : '出错了';
-  const note = e.members.length > 1 ? checkSummary(e.members) : '';
+  const note = e.members.length > 1 ? checkSummary(e.members, e.target.kind === 'chat' ? '位' : '家') : '';
   return <Card hue={hue} marked={e.members.some(awaitingReply)} onClick={() => open(e.target)}>
     <div className="crow"><Chip tone={decide || e.type === 'lost' ? 'neutral' : 'bad'}>{word}</Chip><span className="faint when">{fmtAgo(secondsSince(j.ended || j.started))}</span></div>
-    <div className="ctitle"><span className="who ellip">{e.title}</span><ProjectTag name={project} /></div>
+    <div className="ctitle"><span className="who ellip">{e.title}</span><ChatTag on={e.target.kind === 'chat'} /><ProjectTag name={project} /></div>
     {note && <div className="muted card-note">{note}</div>}
     <div className="lines">{e.members.map(m => <WorkerRow key={m.id} job={m} workers={workers} detail={decide ? 'full' : 'setting'} />)}</div>
     {!decide && <div className="faint card-note">{e.type === 'lost' ? '做到一半停了' : e.type === 'check' ? '有检查没通过' : '没能做完'}</div>}
@@ -157,7 +176,7 @@ function DoneRow({ entry: e, workers, open }: { entry: Entry; workers: Workers; 
   const dropped = e.members.every(m => m.decision?.kind === 'drop');
   return <MemberRow className={'done-row' + (dropped ? ' done-dropped' : '')} marked={e.members.some(awaitingReply)} onClick={() => open(e.target)} title={e.title}>
     <span className="done-icons">{e.members.map(m => <span key={m.id} className={dimmed(e, m) ? 'icon-dim' : undefined}><WorkerIdentity job={m} workers={workers} size="sm" iconOnly /></span>)}</span>
-    <span className="ellip done-title">{e.title}</span>
+    {e.target.kind === 'team' || e.target.kind === 'chat' ? <span className="done-title crow"><span className="ellip">{e.title}</span>{e.target.kind === 'chat' ? <ChatTag on /> : <Chip>搭档审改</Chip>}</span> : <span className="ellip done-title">{e.title}</span>}
     {seconds != null && <span className="faint num done-time">{fmtDur(seconds, true)}</span>}
     {result != null && <span className="done-end">{result}</span>}
   </MemberRow>;

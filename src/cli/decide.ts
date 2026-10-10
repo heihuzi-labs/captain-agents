@@ -21,7 +21,8 @@ export async function decisionMessage(job: Job): Promise<string> {
       `git -C ${quote(job.worktree)} diff --cached`,
       `git -C ${quote(job.worktree)} commit -m ${quote(`采用任务 ${id}`)}`,
       `git -C ${quote(job.repo)} switch main`,
-      `git -C ${quote(job.repo)} merge -- ${quote(`xa/${id}`)}`);
+      // 分支以任务记录为准：群成员的活共用群的分支，不是 xa/<任务号>。
+      `git -C ${quote(job.repo)} merge -- ${quote(job.branch || `xa/${id}`)}`);
   }
   return lines.join('\n');
 }

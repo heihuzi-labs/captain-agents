@@ -2,7 +2,7 @@ import type { Activity, Batch } from '../../../src/core/job.ts';
 import type { View, ViewJob } from '../../../src/core/view-types.ts';
 import type { Profile } from '../../../src/core/profiles.ts';
 import { describeTiming, sleptSeconds, timeSplit } from '../../../src/core/duration.ts';
-import { isOpen, ownerAttention, single } from '../../shared/attention.ts';
+import { chatBusy, isOpen, ownerAttention, single } from '../../shared/attention.ts';
 import type { Entry, Target } from '../../shared/attention.ts';
 export { entries, isOpen, single } from '../../shared/attention.ts';
 export type { Entry, Target } from '../../shared/attention.ts';
@@ -88,10 +88,17 @@ export function averageTimingLine(p: Pick<Profile, 'avgSeconds' | 'avgToolSecond
 export const typicalTimes = (_jobs?: ViewJob[]) => (job: ViewJob) => job.typical;
 // 额度的数据时间超过这个秒数，用提醒色。
 export const QUOTA_STALE_SECONDS = 30 * 60;
+// 派活看板不放小队（旧功能，docs/ui-spec.md 第 17 节）：队员的活不出现、不算件数；收场的小队整队算一件，只进历史页。
+// 项目群聊一个群算一件（第 14 节），群的卡从群记录来：谁在动手看成员的活在不在跑，谁在排队看群自己的队列。
+const teamJobIds = (view: View) => new Set((view.teams ?? []).flatMap(t => [t.writer, t.reviewer]).filter((id): id is string => !!id));
+const chatJobIds = (view: View) => new Set((view.chats ?? []).flatMap(c => c.members.flatMap(m => m.job ? [m.job] : [])));
 export function derive(view: View, now = Date.now()) {
-  const queued = view.jobs.filter(j => j.state === 'queued'),
-    running = view.jobs.filter(j => j.state === 'running');
-  const { attention, done, groups } = ownerAttention(view);
+  const members = teamJobIds(view), inChat = chatJobIds(view);
+  // 排队：群成员不看活的状态（那只是续接时的一瞬），看群的队列，写在群的卡上。
+  const queued = view.jobs.filter(j => j.state === 'queued' && !members.has(j.id) && !inChat.has(j.id)),
+    running = view.jobs.filter(j => j.state === 'running' && !members.has(j.id));
+  const owner = ownerAttention(view), solo = (e: Entry) => e.target.kind !== 'team';
+  const attention = owner.attention.filter(solo), done = owner.done.filter(solo), groups = owner.groups;
   const runningGroups: Entry[] = [],
     placed = new Set<string>();
   const byJob = new Map(groups.flatMap(e => e.members.map(j => [j.id, e] as const)));
@@ -100,18 +107,23 @@ export function derive(view: View, now = Date.now()) {
     if (placed.has(e.target.kind + e.target.id)) continue;
     placed.add(e.target.kind + e.target.id);
     const members = e.members.filter(m => m.state === 'running');
-    runningGroups.push(members.length > 1 ? {
+    // 群聊哪怕只有一位在动手，也留着群这个去处（点了回群里）。
+    runningGroups.push(members.length > 1 || e.target.kind === 'chat' ? {
       ...e,
       members
     } : single(j));
   }
+  // 群里这一刻没人在跑、但还有人排着（两位交接的间隙）：这个群仍在进行中，卡上只写排队的。
+  for (const e of groups) if (e.chat && chatBusy(e) && !placed.has(e.target.kind + e.target.id)) runningGroups.push({ ...e, members: [] });
+  const chatQueued = groups.reduce((n, e) => n + (e.chat?.queued.length ?? 0), 0);
   return {
     queued,
+    chatQueued,
     running,
     runningGroups,
     attention,
     done: done.filter(e => e.at >= now - 86400e3).sort((a, b) => b.at - a.at),
-    history: groups.filter(e => !e.members.some(isOpen)).sort((a, b) => Date.parse(b.started) - Date.parse(a.started))
+    history: groups.filter(e => !e.members.some(isOpen) && !chatBusy(e)).sort((a, b) => Date.parse(b.started) - Date.parse(a.started))
   };
 }
 // 一列的自定义颜色：核心的看板数据按列名放（进行中、验收中、已完成）。
@@ -151,7 +163,7 @@ export function shareView(previous: View | null, next: View): View {
     workers: JSON.stringify(previous.workers) === JSON.stringify(next.workers) ? previous.workers : next.workers
   };
 }
-export type Page = 'board' | 'history' | 'stats';
+export type Page = 'board' | 'collab' | 'history' | 'stats';
 export function loadPosition(): {
   page: Page;
   filter: string;
@@ -161,7 +173,7 @@ export function loadPosition(): {
     if (p && typeof p === 'object') {
       const v = p as Record<string, unknown>;
       return {
-        page: v.page === 'history' || v.page === 'stats' ? v.page : 'board',
+        page: v.page === 'collab' || v.page === 'history' || v.page === 'stats' ? v.page : 'board',
         filter: typeof v.filter === 'string' ? v.filter : '全部'
       };
     }

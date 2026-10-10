@@ -9,7 +9,7 @@ afterEach(() => { cleanup(); localStorage.clear(); });
 type Workers = Values['workers'];
 // 假的设置存取：先记下每次保存，按约定“选手逐个整体替换”合并；hold 时保存一直挂着，由测试放行；reject 时保存被核心拒绝。
 function setup({ view = fixtureView(), workers, reject, hold }: { view?: ReturnType<typeof fixtureView>; workers?: Workers; reject?: string; hold?: boolean } = {}) {
-  let current: Values = { keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: structuredClone(workers ?? view.settings.workers) };
+  let current: Values = { keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: structuredClone(workers ?? view.settings.workers), networkAllowed: false };
   const release: (() => void)[] = [];
   const apply = (patch: SettingsPatch) => { current = { ...current, ...patch, workers: { ...current.workers, ...patch.workers } }; return structuredClone(current); };
   const setSettings = vi.fn((patch: SettingsPatch) => reject ? Promise.reject(new Error(reject))
@@ -37,7 +37,7 @@ test('按厂家分组（Codex、Grok、Cursor、DeepSeek），组内一张对齐
   ];
   setup({ view }); await ready();
   // 分页：通用、选手与模型、看板颜色
-  expect(within(screen.getByRole('tablist', { name: '设置分页' })).getAllByRole('tab').map(t => t.textContent)).toEqual(['通用', '选手与模型', '看板颜色', '接入 AI']);
+  expect(within(screen.getByRole('tablist', { name: '设置分页' })).getAllByRole('tab').map(t => t.textContent)).toEqual(['通用', '选手与模型', '联网', '看板颜色', '接入 AI']);
   // 分组：按 roster 首次出现的顺序，Cursor 三个模型在同一组
   const groups = [...document.querySelectorAll<HTMLElement>('.setting-group')].filter(g => g.getAttribute('aria-label')); // 最上面的“派活限制”不是厂家组
   expect(groups.map(g => g.getAttribute('aria-label'))).toEqual(['Codex', 'Grok', 'Cursor', 'DeepSeek']);
@@ -81,7 +81,7 @@ test('按厂家分组（Codex、Grok、Cursor、DeepSeek），组内一张对齐
 test('没有选手名单时不画“选手与模型”这一页（设置其余部分照常）', async () => {
   window.xa = fixtureBridge(); render(<Settings close={() => {}} />);
   await screen.findByLabelText('系统通知');
-  expect(within(screen.getByRole('tablist', { name: '设置分页' })).getAllByRole('tab').map(t => t.textContent)).toEqual(['通用', '看板颜色', '接入 AI']);
+  expect(within(screen.getByRole('tablist', { name: '设置分页' })).getAllByRole('tab').map(t => t.textContent)).toEqual(['通用', '联网', '看板颜色', '接入 AI']);
 });
 
 test('关掉、打开、改强度、开关快速版，都发出这位选手的整份设置', async () => {
@@ -190,7 +190,7 @@ test('保存失败：退回原值，并在这一页顶部用一句话写原因�
   expect(on(power('grok'))).toBe(true);                                        // 都退回原值
   expect(on(control('grok', '中档'))).toBe(true); expect(row('grok').dataset.off).toBeUndefined();
   expect(setSettings).toHaveBeenCalledTimes(1);
-  setSettings.mockImplementation(async patch => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: { ...fixtureView().settings.workers, ...patch.workers } }));
+  setSettings.mockImplementation(async patch => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: { ...fixtureView().settings.workers, ...patch.workers }, networkAllowed: false }));
   fireEvent.click(control('cursor-grok', '快速版'));
   await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
   await waitFor(() => expect(on(control('cursor-grok', '快速版'))).toBe(false));

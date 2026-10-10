@@ -144,10 +144,8 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   }
   const gf = await command(job('grok', false, 'grok:medium:fast'), '题目', { denyReadExtra: [] });
   assert.equal(gf.args[gf.args.indexOf('-m') + 1], 'grok-4.7-build-fast'); assert.equal(gf.args[gf.args.indexOf('--effort') + 1], 'medium');
-  // 真实启动参数要过 Cursor 数据目录的长度检查，测试的临时登记处太长，这里换一个短的。
-  const { mkdtemp: shortTemp, rm: rmTemp } = await import('node:fs/promises');
-  const shortHome = await shortTemp('/tmp/xa-'); t.after(() => rmTemp(shortHome, { recursive: true, force: true }));
-  process.env.XAGENTS_HOME = shortHome;
+  // 任务专用 TMPDIR 可能很长，参数测试用替身跳过长度限制；真实长度边界在下面单独验证。
+  process.env.XAGENTS_FAKE_WORKER = join(root, 'test/fixtures/worker.ts');
   for (const [spec, model] of [['cursor-sonnet:medium', 'claude-sonnet-5-5-medium'], ['cursor-sonnet:xhigh', 'claude-sonnet-5-5-xhigh'], ['cursor-grok:high:fast', 'grok-4.7-high-fast'], ['cursor-opus:medium:fast', 'claude-opus-5-5-medium-fast']]) {
     const cursor = await command(job(spec.split(':')[0] as Who, false, spec), '题目', { denyReadExtra: [] });
     assert.equal(cursor.args[cursor.args.indexOf('--model') + 1], model);
@@ -171,6 +169,7 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
     const cmd = await command(job(who, ro), '题目', { denyReadExtra: [] });
     for (const name of Object.keys(cmd.env)) assert.ok(!isSecretName(name) || PLATFORM_SWITCHES.includes(name), `${who}: ${name}`);
   }
+  delete process.env.XAGENTS_FAKE_WORKER;
   process.env.XAGENTS_SRT = join(c.temp, 'missing.js');
   await assert.rejects(command(job('grok'), '', { denyReadExtra: [] }), /找不到 srt/);
   process.env.XAGENTS_FAKE_WORKER = join(root, 'test/fixtures/worker.ts');

@@ -18,7 +18,7 @@ function HistoryMember({ job: j, workers, open }: { job: ViewJob; workers: Worke
   // 正常的不写、只标例外：负责人采用了不挂标签，没用写淡色“没用”；主人自己点的决定照写。
   const verdict = j.decision?.by === 'owner' ? <Chip>{decisionText(j)}</Chip> : j.decision?.kind === 'drop' ? <span className="faint">没用</span> : null;
   return <div className="hmember">
-    <button type="button" className="hopen plain" title="打开详情" onClick={() => open({ kind: 'job', id: j.id })}><WorkerRow job={j} workers={workers} detail="full" end={<>{verdict}{j.check && <CheckChip job={j} />}{real && <Chip tone={real.tone}>真实验收：{real.label}</Chip>}</>} /></button>{awaitingReply(j) && <ReplyDot />}
+    <button type="button" className="hopen plain" title="打开详情" onClick={() => open({ kind: 'job', id: j.id })}><WorkerRow job={j} workers={workers} detail="full" end={<>{verdict}{(j.check || j.checkSkipped) && <CheckChip job={j} />}{real && <Chip tone={real.tone}>真实验收：{real.label}</Chip>}</>} /></button>{awaitingReply(j) && <ReplyDot />}
     {note && <p className="hnote">{note}</p>}
     <div className="hrate">{r && (r.score !== undefined || r.external) ? <>
       <div className="crow hrate-top">{r.score !== undefined ? <b className="hscore">{r.score} 分</b> : <span className="muted">没有打分</span>}{r.tags.map(t => <Chip key={t.tag} tone={t.kind === 'good' ? 'ok' : t.kind === 'bad' ? 'bad' : 'neutral'}>{t.tag}</Chip>)}</div>
@@ -41,8 +41,8 @@ function HistoryRow({
     ms = e.members,
     outcome = outcomeOf(e),
     checked = ms.filter(m => m.check);
-  return <div className="hrow"><button type="button" className="hsum" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}><span className="date num">{fmtTime(e.started)}</span><span className="crow htitle"><Chip>{e.kind}</Chip><span className="ellip">{e.title}</span></span><span className="right">{project && <Chip title={'项目：' + project}>{project}</Chip>}<span className="crow">{ms.map(m => <span key={m.id} className={dimmed(e, m) ? 'icon-dim' : undefined}><WorkerIdentity job={m} workers={workers} size="sm" iconOnly /></span>)}</span>{checked.length > 0 && <span>合格 {checked.filter(m => m.check?.ok).length}/{checked.length}</span>}{outcome && (outcome.dropped ? <span className="faint">{outcome.text}</span> : <Chip tone={outcome.tone}>{outcome.text}</Chip>)}</span></button>
-  {expanded && <div className="hmembers">{ms.map(j => <HistoryMember key={j.id} job={j} workers={workers} open={open} />)}{ms.length > 1 && <div className="hfoot"><button type="button" className="plain" onClick={() => open(e.target)}>打开这一批 →</button></div>}</div>}</div>;
+  return <div className="hrow"><button type="button" className="hsum" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}><span className="date num">{fmtTime(e.started)}</span><span className="crow htitle"><Chip tone={e.target.kind === 'chat' ? 'acc' : 'neutral'}>{e.kind}</Chip><span className="ellip">{e.title}</span>{e.target.kind === 'team' && <Chip>搭档审改</Chip>}</span><span className="right">{project && <Chip title={'项目：' + project}>{project}</Chip>}<span className="crow">{ms.map(m => <span key={m.id} className={dimmed(e, m) ? 'icon-dim' : undefined}><WorkerIdentity job={m} workers={workers} size="sm" iconOnly /></span>)}</span>{checked.length > 0 && <span>合格 {checked.filter(m => m.check?.ok).length}/{checked.length}</span>}{outcome && (outcome.dropped ? <span className="faint">{outcome.text}</span> : <Chip tone={outcome.tone}>{outcome.text}</Chip>)}</span></button>
+  {expanded && <div className="hmembers">{ms.map(j => <HistoryMember key={j.id} job={j} workers={workers} open={open} />)}{e.target.kind === 'chat' ? <div className="hfoot"><button type="button" className="plain" onClick={() => open(e.target)}>去群里看 →</button></div> : ms.length > 1 && e.target.kind !== 'team' && <div className="hfoot"><button type="button" className="plain" onClick={() => open(e.target)}>打开这一批 →</button></div>}</div>}</div>;
 }
 export function History({
   view,

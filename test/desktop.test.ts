@@ -8,7 +8,12 @@ import { readIcon } from '../app/main/icons.ts';
 import { httpsLink, productionCsp, securePreferences, trustedSender } from '../app/main/security.ts';
 import { loadBounds, saveBounds } from '../app/main/window-state.ts';
 import { watchRegistry } from '../app/main/watch.ts';
-import { settingsActions, settingsPatch } from '../app/main/actions.ts';
+import { settingsActions, settingsPatch, teamActions, chatActions } from '../app/main/actions.ts';
+import { cleanComment } from '../src/core/comments.ts';
+import { sayInTeam, stopTeam } from '../src/core/team.ts';
+import type { Team } from '../src/core/team.ts';
+import { channels } from '../app/shared/ipc.ts';
+import { noticeTitle } from '../app/main/notifications.ts';
 import { SLIM_EVERY_MS, SLIM_FIRST_MS, slimScheduler } from '../app/main/slim.ts';
 import { SLIM_CHOICES } from '../app/renderer/lib/storage.ts';
 import { RANGE_CHOICES } from '../app/renderer/lib/dashboard.ts';
@@ -67,7 +72,7 @@ test('buildView 只读登记处、兼容旧记录并仅暴露应用所需字段'
   assert.equal(view.jobs[0].summary, source.title);
   assert.equal(view.batches[0].summary, '题目');
   assert.equal(view.jobs[0].base, source.base);
-  assert.deepEqual(Object.keys(view.jobs[0]).sort(), 'id batch project who model effort kind title state base started ended seconds typical check decision summary redo sleeps comments activity realCheck rating timing'.split(' ').sort());
+  assert.deepEqual(Object.keys(view.jobs[0]).sort(), 'id batch project who model effort kind title state base started ended seconds typical check checkSkipped decision summary redo sleeps comments activity network realCheck rating timing'.split(' ').sort());
 });
 
 test('桌面视图保留批次归并、失联、验收失败、旧决定默认负责人和 24 小时边界', async t => {
@@ -140,7 +145,7 @@ test('递归监视单元测试：合并连续变更，无窗口时不计算，�
       assert.equal(options.recursive, true); events.set(directory, changed);
       return Object.assign(new EventEmitter(), { close() { closed++; } }) as FSWatcher;
     });
-  assert.deepEqual([...events.keys()], ['jobs', 'batches', 'cache'].map(dir => join(home, dir)));
+  assert.deepEqual([...events.keys()], ['jobs', 'batches', 'cache', 'teams', 'chats'].map(dir => join(home, dir)));
   t.after(close);
   await writeJson(join(home, 'jobs/one/job.json'), job('one'));
   events.get(join(home, 'jobs'))!();
@@ -158,11 +163,15 @@ test('递归监视单元测试：合并连续变更，无窗口时不计算，�
   await writeJson(join(home, 'batches/b.json'), { id: 'b', jobs: ['one'], started: new Date().toISOString() });
   events.get(join(home, 'batches'))!();
   await until(async () => published, value => value === 3, 2000);
+  events.get(join(home, 'teams'))!();
+  await until(async () => published, value => value === 4, 2000);
+  events.get(join(home, 'chats'))!();
+  await until(async () => published, value => value === 5, 2000);
   close();
-  assert.equal(closed, 3);
+  assert.equal(closed, 5);
   await writeJson(join(home, 'jobs/one/job.json'), job('one'));
   events.get(join(home, 'jobs'))!();
-  await sleep(450); assert.equal(published, 3); assert.deepEqual(errors, []);
+  await sleep(450); assert.equal(published, 5); assert.deepEqual(errors, []);
 });
 
 test('buildView：每件活带项目名和打分（只有当前一版、标签好坏由核心分好），项目名单合并登记处和任务里出现的，读取不落盘', async t => {
@@ -291,10 +300,119 @@ test('表现页的时间范围选项和核心 dashboard.ts 是同一组（窗口
 
 test('派活限制：设置页的选项和核心是同一组；主进程只收上限以内、两项齐全的值', () => {
   assert.deepEqual(RUN_CHOICES, Array.from({ length: LIMIT_CAPS.maxRunning }, (_, i) => i + 1));
-  assert.deepEqual(STOP_CHOICES, [...quotaStops]); assert.equal(Math.max(...STOP_CHOICES), LIMIT_CAPS.quotaStop);
+  assert.deepEqual(STOP_CHOICES, [...quotaStops]); assert.deepEqual(STOP_CHOICES, [50, 60, 70, 80, 90, null]);
   assert.deepEqual(settingsPatch({ limits: { maxRunning: 3, quotaStop: 60 } }), { limits: { maxRunning: 3, quotaStop: 60 } });
   assert.deepEqual(settingsPatch({ limits: { maxRunning: 12, quotaStop: 80 } }), { limits: { maxRunning: 12, quotaStop: 80 } });
-  for (const bad of [{ maxRunning: 13, quotaStop: 80 }, { maxRunning: 0, quotaStop: 80 }, { maxRunning: 2.5, quotaStop: 80 }, { maxRunning: 3, quotaStop: 90 }, { maxRunning: 3, quotaStop: 55 }, { maxRunning: 3 }, { maxRunning: 3, quotaStop: 60, extra: 1 }, [3, 60], null]) {
+  for (const bad of [{ maxRunning: 13, quotaStop: 80 }, { maxRunning: 0, quotaStop: 80 }, { maxRunning: 2.5, quotaStop: 80 }, { maxRunning: 3, quotaStop: 100 }, { maxRunning: 3, quotaStop: 55 }, { maxRunning: 3 }, { maxRunning: 3, quotaStop: 60, extra: 1 }, [3, 60], null]) {
     assert.throws(() => settingsPatch({ limits: bad }), JSON.stringify(bad));
   }
+});
+
+test('小队桥登记在白名单里，主进程先 guard 再校验；通知标题用题目', async () => {
+  assert.equal(channels.teamSay, 'xa:team-say');
+  assert.equal(channels.teamStop, 'xa:team-stop');
+  const main = await readFile(resolve('app/main/index.ts'), 'utf8');
+  assert.match(main, /ipcMain\.handle\(channels\.teamSay, async \(event, \.\.\.args: unknown\[\]\) => \{ guard\(event\); await teamBridge\('say', args\); \}\)/);
+  assert.match(main, /ipcMain\.handle\(channels\.teamStop, async \(event, \.\.\.args: unknown\[\]\) => \{ guard\(event\); await teamBridge\('stop', args\); \}\)/);
+  assert.match(main, /new Notification\(\{ title: noticeTitle\(notice\), body: notice.body \}\)/);
+  assert.equal(noticeTitle({ key: 'k', title: '题目', body: '正文', target: { kind: 'team', id: 't' } }), '题目');
+  assert.equal(noticeTitle({ key: 'k', title: '', body: '正文', target: { kind: 'team', id: 't' } }), '派活工作台');
+  assert.equal(noticeTitle({ key: 'k', body: '正文', target: { kind: 'job', id: 'j' } }), '派活工作台');
+});
+
+test('小队桥：拒绝非字符串、空、超长和不合 safeName 的参数，不调用核心', async () => {
+  const said: unknown[][] = [], stopped: unknown[] = [];
+  const actions = teamActions({
+    say: async (id, text, by) => { said.push([id, text, by]); },
+    stop: async id => { stopped.push(id); },
+    checkText: cleanComment,
+  });
+  const badSay: unknown[][] = [
+    [], ['队'], ['队', '你好', '多'], [1, '你好'], [null, '你好'], [{}, '你好'], [true, '你好'],
+    ['', '你好'], [' ', '你好'], ['.', '你好'], ['..', '你好'], ['../x', '你好'], ['a/b', '你好'], ['a b', '你好'], ['队。1', '你好'],
+    ['x'.repeat(201), '你好'], ['队', 1], ['队', null], ['队', ''], ['队', '   '], ['队', 'a\u0000b'], ['队', '文'.repeat(501)],
+  ];
+  for (const args of badSay) await assert.rejects(actions('say', args), `不该收下 ${JSON.stringify(args)}`);
+  const badStop: unknown[][] = [[], ['队', '多'], [1], [null], [''], ['..'], ['.'], ['x'.repeat(201)], ['a/b'], [' ']];
+  for (const args of badStop) await assert.rejects(actions('stop', args), `不该停下 ${JSON.stringify(args)}`);
+  assert.deepEqual(said, []); assert.deepEqual(stopped, []);
+  await actions('say', ['a'.repeat(200), '  你好\n世界  ']);
+  await actions('stop', ['队-1']);
+  assert.deepEqual(said, [['a'.repeat(200), '你好\n世界', 'owner']]);
+  assert.deepEqual(stopped, ['队-1']);
+});
+
+test('小队桥：同一队说话和收场互斥，失败后释放', async () => {
+  let finish: (() => void) | undefined;
+  const actions = teamActions({
+    say: () => new Promise<void>(resolve => { finish = resolve; }),
+    stop: async () => {},
+    checkText: cleanComment,
+  });
+  const pending = actions('say', ['队', '一']);
+  await Promise.resolve();
+  await assert.rejects(actions('stop', ['队']), /正在处理/);
+  await assert.rejects(actions('say', ['队', '二']), /正在处理/);
+  await actions('stop', ['另一队']);
+  finish!(); await pending;
+  let fail = true;
+  const again = teamActions({
+    say: async () => { if (fail) throw new Error('失败'); },
+    stop: async () => {},
+    checkText: cleanComment,
+  });
+  await assert.rejects(again('say', ['队', '三']), /失败/);
+  fail = false;
+  await again('say', ['队', '四']);
+  await again('stop', ['队']);
+});
+
+test('小队桥：主人的话写入频道，收场按签名调用 stopTeam', async t => {
+  const home = await registry(t);
+  const id = '1010-1200-pair';
+  const record: Team = {
+    id, mode: 'pair', project: 'xagents', repo: '/repo', base: 'abc', kind: '实现', title: '题目', summary: '说明', task: '题',
+    writer: { who: 'grok', effort: 'high' }, reviewer: { who: 'deepseek', effort: 'high' },
+    round: 2, phase: 'review', maxRounds: 3, maxMinutes: 60, state: 'running', created: '2026-10-10T00:00:00.000Z',
+  };
+  await writeJson(join(home, 'teams', id, 'team.json'), record);
+  const actions = teamActions({ say: sayInTeam, stop: stopTeam, checkText: cleanComment });
+  await actions('say', [id, '  主人说一句  ']);
+  const list = (await readFile(join(home, 'teams', id, 'channel.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { from: string; kind: string; text: string; round: number });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].from, 'owner'); assert.equal(list[0].kind, 'say'); assert.equal(list[0].text, '主人说一句'); assert.equal(list[0].round, 2);
+  await actions('stop', [id]);
+  assert.equal((JSON.parse(await readFile(join(home, 'teams', id, 'team.json'), 'utf8')) as Team).state, 'ended');
+});
+
+test('群聊桥参数先检查：类型、长度、安全名字、成员写法、白名单字段', async () => {
+  const calls: unknown[] = [];
+  const actions = chatActions({ create: async o => { calls.push(o); return { id: 'new-chat' }; }, say: async (...args) => { calls.push(args); }, stop: async id => { calls.push(id); }, rename: async (...args) => { calls.push(args); } });
+  for (const args of [[], [null], [[]], [{ project: '../bad', members: ['grok:high'] }], [{ project: 'p', members: ['grok:high'], network: true }],
+    [{ project: 'p', members: [] }], [{ project: 'p', members: ['grok:high:ro:fast'] }], [{ project: 'p', members: ['cursor-grok:high'] }],
+    [{ project: 'p', members: ['grok:high'], title: 'x'.repeat(101) }], [{ project: 'p', members: ['grok:high', 'grok:high'] }]]) await assert.rejects(actions('create', args));
+  for (const args of [[1, 'text'], ['../bad', 'text'], ['x'.repeat(201), 'text'], ['id', null], ['id', ''], ['id', 'x'.repeat(2001)], ['id', 'a\tb'], ['id'], ['id', 'a', 'extra']]) await assert.rejects(actions('say', args));
+  for (const args of [[], [null], ['../bad'], ['id', 'extra']]) await assert.rejects(actions('stop', args));
+  assert.equal(calls.length, 0);
+  assert.equal(await actions('create', [{ project: 'p', title: '群', members: ['grok:high:fast:ro'] }]), 'new-chat');
+  await actions('say', ['id', '  主人的话\r\n第二行  ']);
+  assert.deepEqual(calls[1], ['id', '主人的话\n第二行', 'owner']);
+  await actions('stop', ['id']); assert.equal(calls[2], 'id');
+  // 改名：两个参数，群名 1–100 字、不能含控制字符，去掉首尾空白后交给核心
+  for (const args of [['id'], ['id', ''], ['id', '   '], ['id', 'x'.repeat(101)], ['id', 'a\nb'], ['../bad', '名字'], ['id', 5], ['id', 'a', 'b']]) await assert.rejects(actions('rename', args));
+  await actions('rename', ['id', '  新名字  ']); assert.deepEqual(calls[3], ['id', '新名字']);
+  assert.equal(channels.chatRename, 'xa:chat-rename');
+  assert.equal(channels.chatCreate, 'xa:chat-create'); assert.equal(channels.chatSay, 'xa:chat-say'); assert.equal(channels.chatStop, 'xa:chat-stop');
+  const main = await readFile(new URL('../app/main/index.ts', import.meta.url), 'utf8');
+  for (const action of ['Create', 'Say', 'Stop', 'Rename']) assert.match(main, new RegExp(`ipcMain\\.handle\\(channels\\.chat${action}, async \\(event, \\.\\.\\.args: unknown\\[\\]\\) => \\{ guard\\(event\\);`));
+});
+
+test('群聊桥同群并发拦截，失败后释放锁', async () => {
+  let release!: () => void;
+  const actions = chatActions({ create: async () => ({ id: 'new' }), say: async () => new Promise<void>(resolve => { release = resolve; }), stop: async () => { throw new Error('测试故障'); }, rename: async () => {} });
+  const waiting = actions('say', ['id', '消息']);
+  await assert.rejects(actions('stop', ['id']), /正在处理/);
+  release(); await waiting;
+  await assert.rejects(actions('stop', ['id']), /测试故障/);
+  await assert.rejects(actions('stop', ['id']), /测试故障/);
 });

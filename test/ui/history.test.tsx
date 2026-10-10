@@ -22,7 +22,7 @@ const archive = (label: string) => {
   fireEvent.click(screen.getByRole('button', { name: `更多操作：${label}` }));
   fireEvent.click(screen.getByRole('menuitem', { name: '归档' }));
 };
-const toHistory = async () => { await screen.findByRole('tablist', { name: '页面' }); fireEvent.keyDown(document, { key: '2', metaKey: true }); await screen.findByRole('tablist', { name: '项目' }); };
+const toHistory = async () => { await screen.findByRole('tablist', { name: '页面' }); fireEvent.keyDown(document, { key: '3', metaKey: true }); await screen.findByRole('tablist', { name: '项目' }); };
 const rail = () => within(screen.getByRole('tablist', { name: '项目' })).getAllByRole('tab').map(t => [t.querySelector('.sidenav-label')!.textContent, t.querySelector('.sidenav-badge')!.textContent, t.querySelector('.sidenav-note')!.textContent]);
 const rowTitles = () => [...document.querySelectorAll('.hsum .ellip')].map(e => e.textContent);
 function twoProjects() {
@@ -80,7 +80,7 @@ test('点一行展开：每家一行，看得到分数、优点毛病标签、�
   const v = fixtureView();
   const rating = { score: 4 as const, good: '一次做对', improve: '第一版漏了触控板', at: '', tags: [{ tag: '一次做对', kind: 'good' as const }, { tag: '需要返工', kind: 'bad' as const }, { tag: '别的', kind: 'other' as const }] };
   v.jobs = [done('rated', 'P', { rating, decision: { ...lead, note: '这份能用' }, check: { ok: true, label: '通过', note: '' }, realCheck: { needed: true, steps: [], result: { ok: true, note: '', at: '', shotCount: 0 }, skipped: null } }),
-    done('plain', 'P', { started: at(0, 8) }), done('external', 'P', { started: at(0, 7), rating: { external: '网络不好', at: '', tags: [] } })];
+    done('plain', 'P', { started: at(0, 8) }), done('skipped', 'P', { started: at(0, 6), checkSkipped: { reason: '在主线上跑过完整验收', at: '' } }), done('external', 'P', { started: at(0, 7), rating: { external: '网络不好', at: '', tags: [] } })];
   show(v); await toHistory();
   fireEvent.click(screen.getByText('rated').closest('button')!);
   expect(screen.queryByRole('dialog')).toBeNull();
@@ -91,6 +91,10 @@ test('点一行展开：每家一行，看得到分数、优点毛病标签、�
   expect(member.textContent).toContain('这份能用'); expect(member.textContent).toContain('真实验收：通过'); expect(member.textContent).toContain('通过');
   for (const word of ['结果', '决定', '未验收']) expect(member.textContent).not.toContain(word);
   fireEvent.click(screen.getByText('plain').closest('button')!); expect(document.body.textContent).toContain('还没打分');
+  // 负责人写了免验理由的：中性色照实写“免验”，理由在提示里，不冒充“通过”。
+  fireEvent.click(screen.getByText('skipped').closest('button')!);
+  const chip = [...document.querySelectorAll('.hmember .chip')].find(c => c.textContent === '免验')!;
+  expect(chip.className).toBe('chip chip-neutral'); expect(chip.getAttribute('title')).toBe('负责人：在主线上跑过完整验收');
   fireEvent.click(screen.getByText('external').closest('button')!); expect(document.body.textContent).toContain('外部原因：网络不好');
   // 点身份那一行才打开这家的详情。
   fireEvent.click(within(member).getByTitle('打开详情')); expect(screen.getByRole('dialog')).toBeTruthy();

@@ -4,8 +4,13 @@ import { resolve } from 'node:path';
 import { productionCsp } from './app/main/security.ts';
 
 export default defineConfig(({ command }) => ({
-  main: { define: { __XA_DEVELOPMENT__: JSON.stringify(command === 'serve') },
-    build: { rollupOptions: { input: resolve('app/main/index.ts'), output: { entryFileNames: 'index.js', format: 'es' } } } },
+  main: { define: { __XA_DEVELOPMENT__: JSON.stringify(command === 'serve'),
+    __XA_UPDATE_FEED__: JSON.stringify(process.env.XA_UPDATE_FEED ?? ''),
+    __XA_UPDATE_PUBLIC_KEY__: JSON.stringify(process.env.XA_UPDATE_PUBLIC_KEY ?? ''),
+    __XA_UPDATE_HOSTS__: JSON.stringify((process.env.XA_UPDATE_HOSTS ?? '').split(',').map(host => host.trim()).filter(Boolean)),
+  },
+    // original-fs 是 Electron 自带的模块，不打进包里（更新功能用它，见 app/main/update-install.ts）。
+    build: { rollupOptions: { input: resolve('app/main/index.ts'), external: ['original-fs'], output: { entryFileNames: 'index.js', format: 'es' } } } },
   // 开启 sandbox 的预加载只能使用一个 CommonJS 文件；桥内模块都打进这个文件。
   preload: { build: { rollupOptions: { input: resolve('app/preload/index.ts'), output: { entryFileNames: 'index.cjs', format: 'cjs' } } } },
   renderer: {

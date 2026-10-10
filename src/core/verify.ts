@@ -1,3 +1,4 @@
+import { externalEnvironment } from './node-runtime.ts';
 import { spawn } from 'node:child_process';
 import { open, realpath } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -6,8 +7,11 @@ import { createHash } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { hasCode, withLock } from './fsx.ts';
 import { paths, jobDir } from './paths.ts';
-import { readJob, updateJob, active } from './job.ts';
+import { readJob, updateJob, changeJob, active } from './job.ts';
+import type { Job } from './job.ts';
+import { singleLine } from './text.ts';
 import { loadProject } from './project.ts';
+import { guardTeamJob } from './team.ts';
 
 export type Execution = { exit: number | null; output: string; timedOut: boolean; signal?: string; error?: string };
 export type Executor = (file: string, args: string[], cwd: string, timeoutMs: number, onData?: (text: string) => void, env?: NodeJS.ProcessEnv) => Promise<Execution>;
@@ -18,7 +22,7 @@ export type Verification = { ok: boolean; at: string; seconds: number; steps: Ve
 export const execute: Executor = async (file, args, cwd, timeoutMs, onData, env) => {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new Error('命令超时必须是有效的正数。');
   return new Promise(resolve => {
-    const child = spawn(file, args, { cwd, env: { ...process.env, ...env }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(file, args, { cwd, env: { ...externalEnvironment(), ...env }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', timedOut = false, error: string | undefined, interrupted: string | undefined;
     const kill = () => {
       if (child.pid) try { process.kill(-child.pid, 'SIGKILL'); }
@@ -58,6 +62,26 @@ export function checkFor(value: unknown) {
   const failed = v.steps.filter(s => !s.ok);
   const sums = counts.reduce<{ total: number; passed: number; failed: number }>((a, n) => ({ total: a.total + (n?.total || 0), passed: a.passed + (n?.passed || 0), failed: a.failed + (n?.failed || 0) }), { total: 0, passed: 0, failed: 0 });
   return { ok: v.ok, label: v.ok ? (counts.length && counts.every(Boolean) ? `通过 ${sums.passed}/${sums.total}` : `通过 ${v.steps.length} 项`) : `没过 ${sums.failed || failed.length || 1} 项`, note: v.ok ? '' : failed.map(s => s.summary).join('；') };
+}
+// 一件活的验收现状。采用的把关、命令行状态表、手册末尾的件数都读这一处。
+// 派活时能改文件的活要验收（missing）；只读的活（审查、调研）不用（exempt）。不去猜“到底改没改”：
+// 登记的改动文件数在负责人提交后会归零，靠不住。写了免验理由的算 skipped，哪怕之前有一次没过的记录。
+export type VerifyState = 'passed' | 'failed' | 'skipped' | 'missing' | 'exempt';
+export function verifyState(job: Pick<Job, 'mode' | 'verify' | 'verifySkip'>): VerifyState {
+  const ok = (job.verify as Verification | undefined)?.ok;
+  if (ok === true) return 'passed';
+  if (job.verifySkip) return 'skipped';
+  if (ok === false) return 'failed';
+  return job.mode === 'workspace-write' ? 'missing' : 'exempt';
+}
+// 能改文件的活，负责人采用前要有通过的验收记录，或写明不验收的理由。返回拦下的原因；可以采用时返回空。
+export function adoptBlockedByVerify(job: Job): string | null {
+  if (job.mode !== 'workspace-write') return null;
+  const state = verifyState(job), skip = `xagents verify ${job.id} --skip "理由"`;
+  if (state === 'failed') return `这件活的验收没过，不能采用。修好后重新运行 xagents verify ${job.id}；没过的原因确实和这件活无关，用 ${skip} 写明。`;
+  if (state !== 'missing') return null;
+  if (job.cleaned || job.worktreeRemoved) return `这件活没有验收记录，副本又已清理，没法再跑验收。用 ${skip} 写明当时是怎么验的。`;
+  return `这件活能改文件，采用前要先验收：xagents verify ${job.id}。确实不用验（比如没改文件、只改了文档），用 ${skip} 写明。`;
 }
 // 沿用带死锁回收的登记锁，但排队不受它的 10 秒上限影响。
 export async function withVerifyLock<T>(repo: string, fn: () => Promise<T>): Promise<T> {
@@ -110,6 +134,7 @@ export async function verifyCommands(commands: string[], cwd: string, logfile: s
 }
 export async function verify(id: string, run: Executor = execute): Promise<Verification> {
   const original = await readJob(id);
+  await guardTeamJob(original);
   return withVerifyLock(original.repo, async () => {
     const job = await readJob(id);
     if (active(job)) throw new Error('任务还在运行，请等结束后再验收。');
@@ -117,7 +142,16 @@ export async function verify(id: string, run: Executor = execute): Promise<Verif
     const project = await loadProject(job.project) as Awaited<ReturnType<typeof loadProject>> & { verifyTimeoutMinutes?: number };
     if (!Array.isArray(project.verify) || !project.verify.length || project.verify.some(c => typeof c !== 'string' || !c.trim())) throw new Error('项目还没有有效的 verify 命令，请先补全项目设置。');
     const result = await verifyCommands(project.verify, job.worktree, join(jobDir(id), 'verify.log'), project.verifyTimeoutMinutes ?? 20, run);
-    await updateJob(id, current => { current.verify = result; });
+    await updateJob(id, current => { current.verify = result; delete current.verifySkip; });
     return result;
+  });
+}
+// 不跑验收命令，只记下理由。副本清理后也能记（在副本之外合并、补记采用时用）；不算进合格率。
+export async function skipVerify(id: string, reason: string): Promise<Job> {
+  const text = singleLine(reason, '不验收的理由：', 200);
+  await guardTeamJob(await changeJob(id, () => {}));
+  return changeJob(id, current => {
+    if (active(current)) throw new Error('任务还在运行，请等结束后再记。');
+    current.verifySkip = { reason: text, at: new Date().toISOString() };
   });
 }

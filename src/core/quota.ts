@@ -1,3 +1,4 @@
+import { nodeCommand, externalEnvironment } from './node-runtime.ts';
 import { spawn } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
@@ -5,12 +6,13 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import { paths, toolRoot, unpackedPath } from './paths.ts';
+import { paths, toolRoot } from './paths.ts';
 import { readJson, writeJson, hasCode } from './fsx.ts';
 import type { Who } from './job.ts';
 import { isolationOf, isolations, spec, vendorOf } from './roster.ts';
 import { cursorState } from './sandbox.ts';
-import { LIMIT_CAPS } from './settings.ts';
+import { defaultLimits } from './settings.ts';
+import type { QuotaStop } from './settings.ts';
 
 import type { Isolation } from './roster.ts';
 export type Provider = Isolation;
@@ -32,9 +34,10 @@ export const executeQuery: QueryExecutor = command => new Promise((resolve, reje
     reject(new Error('测试替身未提供查询结果')); return;
   }
   const replacement = process.env.XAGENTS_QUERY_EXEC;
-  const child = spawn(replacement ? process.execPath : command.file,
-    replacement ? [replacement, command.file, ...command.args] : command.args,
-    { cwd: command.cwd, env: { ...process.env, ...command.env }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const env = externalEnvironment({ ...process.env, ...command.env });
+  const launch = replacement ? nodeCommand([replacement, command.file, ...command.args], env) : { ...command, env };
+  const child = spawn(launch.file, launch.args,
+    { cwd: command.cwd, env: launch.env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let output = '', settled = false, completed = false, failure: Error | undefined;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const kill = (signal: NodeJS.Signals = 'SIGKILL') => {
@@ -198,7 +201,7 @@ export async function queryQuota(options: QuotaOptions = {}): Promise<QuotaSnaps
         await mkdir(cwd);
         // 配置和项目状态（含信任标记）同派活一样搬进这次的临时目录，查完一起删，不在 ~/.cursor/projects 留目录；登录不受影响。
         // 窗口大小 60×140 与实测能用的参考实现一致；不用 script，原因见 pty-bridge.py 开头。
-        return parseCursorQuota(await execute({ file: 'python3', args: [unpackedPath(join(toolRoot, 'src/core/pty-bridge.py')), '60', '140', 'cursor-agent', '--trust', '--mode', 'ask'], cwd,
+        return parseCursorQuota(await execute({ file: 'python3', args: [join(toolRoot, 'src/core/pty-bridge.py'), '60', '140', 'cursor-agent', '--trust', '--mode', 'ask'], cwd,
           env: { TERM: 'xterm-256color', CURSOR_CONFIG_DIR: state.config, CURSOR_DATA_DIR: state.data }, timeoutMs: 27_500, graceMs: 3000,
           writes: [{ afterMs: 6000, text: '/usage' }, { afterMs: 7500, text: '\r' }], complete: output => cleanTerminal(output).includes('Esc to close') }), at);
       } finally { await rm(root, { recursive: true, force: true }); }
@@ -237,12 +240,12 @@ export function quotaBar(snapshot: QuotaSnapshot | null | undefined, who: Who) {
   const { label } = quotaPool(who);
   return entry.bars.find(b => isolationOf(who) === 'codex' ? b.windowMinutes === 10080 : b.label === label);
 }
-export function checkQuota(snapshot: QuotaSnapshot, chosen: { who: Who }[], force = false, quotaStop: number = LIMIT_CAPS.quotaStop) {
+export function checkQuota(snapshot: QuotaSnapshot, chosen: { who: Who }[], force = false, quotaStop: QuotaStop = defaultLimits.quotaStop) {
   if (force) return;
   for (const { who } of chosen) {
     const bar = quotaBar(snapshot, who);
     const codex = vendorOf(who) === 'codex' ? snapshot.providers.find(p => p.icon === 'codex') : undefined, reached = !codex?.error && codex?.reached;
-    if (reached || (bar && !bar.approx && bar.used !== null && bar.used >= quotaStop)) {
+    if (reached || (quotaStop !== null && bar && !bar.approx && bar.used !== null && bar.used >= quotaStop)) {
       throw new Error(`${quotaPool(who).name} 的${bar?.label ?? '额度'}${reached ? '已触顶' : `已用 ${bar!.used}%，到了设置里的停派线 ${quotaStop}%`}，本次未派发。确实要派请加 --force。`);
     }
   }

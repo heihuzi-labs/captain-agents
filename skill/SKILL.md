@@ -19,6 +19,7 @@ description: 用派活工作台（xagents）把目标清楚的实现、修复、
 - 了解情况：`xagents guide`、`status`、`inbox`、`workers`、`quota`、`profiles`、`stats`
 - 派活：`xagents project add`（登记项目）、`run`
 - 盯进度：`xagents wait`、`status`、`stop`、`collect`
+- 搭档审改小队：`xagents team`（start / status / log / say / round / stop）
 - 验收和记录：`xagents verify`、`real`、`adopt`、`drop`、`rate`、`clean`
 - 主人的留言和拍板：`xagents inbox`、`reply`、`handled`
 - 隔离和模型：`xagents selfcheck`、`models`

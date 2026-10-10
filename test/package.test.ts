@@ -1,25 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { desktopPath, unpackedPath } from '../src/core/paths.ts';
+import { desktopPath, resolveToolRoot } from '../src/core/paths.ts';
 import { externalPackages } from '../scripts/check-desktop-bundle.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-
-test('外部程序路径：只替换完整 app.asar 路径段，开发路径和已解包路径不变', () => {
-  assert.equal(unpackedPath('/Applications/派活工作台.app/Contents/Resources/app.asar/src/core/pty-bridge.py'),
-    '/Applications/派活工作台.app/Contents/Resources/app.asar.unpacked/src/core/pty-bridge.py');
-  for (const path of ['/repo/src/core/pty-bridge.py', '/app.asar.unpacked/src/core/pty-bridge.py', '/my-app.asar/file']) {
-    assert.equal(unpackedPath(path), path);
-  }
-  assert.equal(unpackedPath('app.asar/file'), 'app.asar.unpacked/file');
-});
 
 test('桌面 PATH：只追加存在的目录，保留原顺序，重复调用不重复追加', async t => {
   const home = await mkdtemp(join(tmpdir(), 'xagents-path-'));
@@ -43,28 +35,40 @@ test('桌面 PATH：只追加存在的目录，保留原顺序，重复调用不
   assert.equal(desktopPath('', home, () => false), '');
 });
 
-test('打包后的模块位置仍把 toolRoot 指向 app.asar，Python 使用解包路径', async t => {
-  const temp = await realpath(await mkdtemp(join(tmpdir(), 'xagents-asar-')));
+test('平台根目录：源码、开发构建、打包后台及运行快照各取自己的平台', async t => {
+  const temp = await realpath(await mkdtemp(join(tmpdir(), 'xagents-platform-path-')));
   t.after(() => rm(temp, { recursive: true, force: true }));
-  const appRoot = join(temp, '派活工作台.app/Contents/Resources/app.asar');
-  const module = join(appRoot, 'out/main/paths.ts');
-  await mkdir(join(appRoot, 'out/main'), { recursive: true });
-  await writeFile(module, await readFile(join(root, 'src/core/paths.ts')));
-  const packed = await import(pathToFileURL(module).href);
-  assert.equal(packed.toolRoot, `${appRoot}/`);
-  assert.equal(packed.unpackedPath(join(packed.toolRoot, 'src/core/pty-bridge.py')), `${appRoot}.unpacked/src/core/pty-bridge.py`);
+  const resourcesPath = join(temp, '派活 工作台.app/Contents/Resources');
+  const platform = join(resourcesPath, 'platform');
+  await mkdir(platform, { recursive: true });
+  const runtime = { versions: { electron: '44' }, resourcesPath };
+  const url = (path: string) => pathToFileURL(path).href;
+  assert.equal(resolveToolRoot(url(join(root, 'src/core/paths.ts')), { versions: {} }), root);
+  assert.equal(resolveToolRoot(url(join(root, 'out/main/index.js')), runtime), root);
+  assert.equal(resolveToolRoot(url(join(resourcesPath, 'app.asar/out/main/index.js')), runtime), platform);
+  assert.equal(resolveToolRoot(url(join(platform, 'src/core/paths.ts')), runtime), platform);
+  const snapshot = join(temp, 'registry/runtime');
+  assert.equal(resolveToolRoot(url(join(snapshot, 'src/core/paths.ts')), runtime), snapshot);
+  await rm(platform, { recursive: true });
+  assert.throws(() => resolveToolRoot(url(join(resourcesPath, 'app.asar/out/main/index.js')), runtime), /缺少平台目录/);
+  assert.equal(resolveToolRoot(url(join(root, 'src/core/paths.ts')), runtime), root);
 });
 
-test('打包配置：中文名、固定应用标识、图标、Python 解包、只出 arm64 目录', () => {
+test('打包配置：中文名、固定应用标识、图标、独立平台资源、只出 arm64 目录', () => {
   const config = pkg.build;
   assert.equal(config.productName, '派活工作台'); assert.equal(config.appId, 'app.xagents.desk');
   assert.equal(config.mac.icon, 'build/icon.icns'); assert.equal(config.mac.identity, null);
   assert.deepEqual(config.mac.target, [{ target: 'dir', arch: ['arm64'] }]);
-  assert.deepEqual(config.files.filter((p: string) => !p.startsWith('!')), ['out/**', 'package.json', 'src/core/pty-bridge.py']);
+  assert.deepEqual(config.files.filter((p: string) => !p.startsWith('!')), ['out/main/**', 'out/preload/**', 'out/renderer/**', 'package.json']);
   assert.ok(config.files.includes('!node_modules{,/**/*}'));
-  assert.ok(config.asarUnpack.includes('src/core/pty-bridge.py'));
+  assert.equal(config.asarUnpack, undefined);
+  // 平台不走 extraResources：打包工具会悄悄丢掉所有 node_modules 目录（srt 正好在里面）。改由打包最后一步自己放进去并核对。
+  assert.equal(config.extraResources, undefined);
+  assert.equal(config.afterPack, 'scripts/after-pack.cjs');
+  const hook = readFileSync(new URL('../scripts/after-pack.cjs', import.meta.url), 'utf8');
+  assert.match(hook, /Contents\/Resources\/platform/); assert.match(hook, /应用里的平台和准备好的不一致/); assert.match(hook, /缺少 srt/);
   assert.equal(config.asar, true); assert.equal(config.npmRebuild, false);
-  assert.match(pkg.scripts.pack, /^electron-vite build && node scripts\/check-desktop-bundle.mjs && electron-builder --mac dir --arm64$/);
+  assert.match(pkg.scripts.pack, /^electron-vite build && node scripts\/prepare-platform.mjs && node scripts\/check-desktop-bundle.mjs && electron-builder --mac dir --arm64$/);
 });
 
 test('electron-builder 实际文件过滤器排除 pnpm 软链接背后的依赖文件', async t => {
@@ -121,6 +125,8 @@ test('安装脚本只匹配开发版和已装版主进程，不匹配其他 Elec
     // 改名前的已装版也要能关掉。
     '108 /Applications/派活台.app/Contents/MacOS/派活台',
     '109 /Applications/派活台.app/Contents/Frameworks/派活台 Helper.app/Contents/MacOS/派活台 Helper --type=gpu-process',
+    '110 /Applications/派活工作台.app/Contents/MacOS/派活工作台 /Applications/派活工作台.app/Contents/Resources/platform/src/core/node-entry.ts /registry/runtime/src/core/chat-entry.ts chat-one',
+    '111 /Applications/派活工作台.app/Contents/MacOS/派活工作台 /Applications/派活工作台.app/Contents/Resources/platform/bin/xagents workers',
   ];
   const result = spawnSync('awk', [awk], { input: commands.join('\n') + '\n', encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);

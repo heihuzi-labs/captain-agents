@@ -14,14 +14,16 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "pack": "electron-vite build && node scripts/check-desktop-bundle.mjs && electron-builder --mac dir --arm64",
+    "pack": "electron-vite build && node scripts/prepare-platform.mjs && node scripts/check-desktop-bundle.mjs && electron-builder --mac dir --arm64",
     "install-app": "bash scripts/install-app.sh",
     "typecheck": "tsc -p tsconfig.json && tsc -p app/main/tsconfig.json && tsc -p app/preload/tsconfig.json && tsc -p app/renderer/tsconfig.json",
     "test": "node --test \"test/*.test.ts\"",
     "test:ui": "vitest run",
     "test:e2e": "node --test test/e2e/smoke.ts",
     "verify": "npm run typecheck && npm test && npm run test:ui && npm run build && npm run test:e2e",
-    "icon": "electron scripts/make-icon.mjs"
+    "icon": "electron scripts/make-icon.mjs",
+    "update:key": "node scripts/release/generate-update-key.mjs",
+    "update:manifest": "node scripts/release/make-update.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.77",
@@ -58,15 +60,14 @@
       "output": "dist"
     },
     "files": [
-      "out/**",
+      "out/main/**",
+      "out/preload/**",
+      "out/renderer/**",
       "package.json",
-      "src/core/pty-bridge.py",
       "!node_modules{,/**/*}"
     ],
     "asar": true,
-    "asarUnpack": [
-      "src/core/pty-bridge.py"
-    ],
+    "afterPack": "scripts/after-pack.cjs",
     "npmRebuild": false,
     "mac": {
       "target": [

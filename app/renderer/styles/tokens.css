@@ -41,6 +41,8 @@
   --titlebar-inset: 86px;
   /* 顶栏（就是标题栏）高度；额度圆环直径。红黄绿按钮的位置在 app/main/index.ts，随顶栏高度一起改 */
   --topbar-h: 48px; --ring: 24px;
+  /* 协作页右边成员栏的宽度（docs/ui-spec.md 第 17 节） */
+  --chat-side: 260px;
 }
 @media (prefers-color-scheme: dark) {
   :root {

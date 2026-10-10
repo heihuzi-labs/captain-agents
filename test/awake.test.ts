@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, access } from 'node:fs/promises';
+import { readFile, writeFile, access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TestContext } from 'node:test';
-import { context, until } from './helpers.ts';
+import { context, until, exec, root } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
 
 async function setup(t: TestContext) {
@@ -84,25 +84,38 @@ test('关闭设置不起 caffeinate；找不到程序只记 supervisor.log，任
   assert.equal((await c.jobs()).find(j => j.id === missing.id)!.state, 'done');
 });
 
-test('派活校验后读设置抛错时按开启防休眠，选手照常跑完，supervisor.log 记一句', async t => {
+test('运行中读防休眠设置失败仍按开启处理，记录错误并能正常释放', async t => {
   const c = await setup(t);
-  // 派活前必须能读取主人策略；这里在副本准备时制造错误，只验证运行中的防休眠容错。
+  await mkdir(join(c.home, 'config.json'));
+  const script = `import { access } from 'node:fs/promises';
+    import { keepAwake } from './src/core/awake.ts';
+    const release = await keepAwake();
+    const deadline = Date.now() + 10_000;
+    while (true) {
+      try { await access(process.env.XA_AWAKE_MARKER); break; }
+      catch { if (Date.now() >= deadline) throw new Error('防休眠替身未启动'); await new Promise(r => setTimeout(r, 25)); }
+    }
+    await release();`;
+  const done = await exec(process.execPath, ['--input-type=module', '-e', script], root, { ...c.env, ...c.extra });
+  assert.equal(done.code, 0, done.stderr);
+  const awake = await c.observed();
+  assert.deepEqual(awake.args, ['-i', '-w', String(awake.watched)]);
+  assert.match(done.stderr, /读取防休眠设置失败：.+。按开启处理，任务继续执行。/);
+  await until(async () => !alive(awake.pid));
+  assert.equal(await readFile(c.ended, 'utf8'), 'SIGTERM');
+});
+
+test('副本准备后设置读不到，启动前重新装载失败就收尾，不能绕过最新主人策略', async t => {
+  const c = await setup(t);
   const prepare = join(c.temp, 'break-settings.mjs');
   await writeFile(prepare, "import { mkdir } from 'node:fs/promises'; import { join } from 'node:path'; await mkdir(join(process.env.XAGENTS_HOME, 'config.json'));\n");
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
   assert.equal((await c.add(['--setup', `${quote(process.execPath)} ${quote(prepare)}`])).code, 0);
-  const result = await c.cli(['run', c.task, '--summary', '读设置失败仍完成', '--who', 'codex:high'], { ...c.extra, XA_TEST_MODE: 'stream' });
+  const result = await c.cli(['run', c.task, '--summary', '读设置失败拒绝启动', '--who', 'codex:high'], c.extra);
   assert.equal(result.code, 0, result.stderr);
-  const job = await until(async () => (await c.jobs())[0], j => Boolean(j?.workerPid));
-  const awake = await c.observed();
-  assert.deepEqual(awake.args, ['-i', '-w', String(job.pid)]);
-  assert.equal(alive(job.workerPid), true);
-  for (const stage of [1, 2]) await writeFile(join(c.home, 'jobs', job.id, `continue-${stage}`), '');
-  assert.equal((await c.cli(['wait', job.id])).code, 0);
-  const done = (await c.jobs()).find(j => j.id === job.id)!;
-  assert.equal(done.state, 'done'); assert.equal(done.exit, 0); assert.equal(done.error, undefined);
-  const log = await readFile(join(c.home, 'jobs', job.id, 'supervisor.log'), 'utf8');
-  assert.match(log, /读取防休眠设置失败：.+。按开启处理，任务继续执行。/);
+  const done = await until(async () => (await c.jobs())[0], j => j?.state === 'failed');
+  assert.equal(done.workerPid, undefined); assert.match(done.error!, /装载选手设置失败/);
+  await assert.rejects(access(c.marker), { code: 'ENOENT' });
 });
 
 test('选手失败时也关闭防休眠；选手未能启动时不启动 caffeinate', async t => {

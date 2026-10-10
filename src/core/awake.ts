@@ -1,3 +1,4 @@
+import { externalEnvironment } from './node-runtime.ts';
 import { spawn } from 'node:child_process';
 import { readSettings } from './settings.ts';
 
@@ -10,7 +11,7 @@ export async function keepAwake(): Promise<() => Promise<void>> {
     try { enabled = (await readSettings()).keepAwake; }
     catch (error) { console.error(`读取防休眠设置失败：${(error as Error).message}。按开启处理，任务继续执行。`); }
     if (!enabled) return noop;
-    const child = spawn(process.env.XAGENTS_CAFFEINATE || 'caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' });
+    const child = spawn(process.env.XAGENTS_CAFFEINATE || 'caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore', env: externalEnvironment() });
     const closed = new Promise<void>(resolve => child.once('close', () => resolve()));
     const started = await new Promise<boolean>(resolve => {
       child.once('spawn', () => resolve(true));

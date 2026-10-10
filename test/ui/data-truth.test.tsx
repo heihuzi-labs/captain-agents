@@ -14,7 +14,7 @@ function show(v: View, bridge = {}) {
   window.xa = fixtureBridge({ getView: vi.fn(async () => v), ...bridge });
   return render(<App />);
 }
-const toStats = async () => { await screen.findByRole('tablist', { name: '页面' }); fireEvent.keyDown(document, { key: '3', metaKey: true }); await screen.findByRole('heading', { name: '表现', level: 1 }); };
+const toStats = async () => { await screen.findByRole('tablist', { name: '页面' }); fireEvent.keyDown(document, { key: '4', metaKey: true }); await screen.findByRole('heading', { name: '表现', level: 1 }); };
 const quotaView = (quotaAt: Date | null = OLD) => {
   const v = view();
   v.quotaAt = quotaAt?.toISOString() ?? null;
@@ -96,7 +96,7 @@ test('历史里一批的“合格 x/y”：分母只算有验收记录的', asyn
   const v = view();
   v.jobs = [job('a', { batch: 'b', check: { ok: true, label: '通过', note: '' } }), job('b', { batch: 'b', who: 'grok' }), job('c', { batch: 'b', who: 'cursor-grok' })];
   v.batches = [{ id: 'b', title: '一批', summary: '', kind: '实现', base: '', started: v.jobs[0].started, jobs: ['a', 'b', 'c'] }];
-  show(v); await screen.findByRole('tablist', { name: '页面' }); fireEvent.keyDown(document, { key: '2', metaKey: true });
+  show(v); await screen.findByRole('tablist', { name: '页面' }); fireEvent.keyDown(document, { key: '3', metaKey: true });
   expect((await screen.findByText(/^合格 \d/)).textContent).toBe('合格 1/1');
 });
 test('在跑的卡片：样本不够（核心没给通常用时）只显示已用时；给了才显示“通常 X”；用时不含休眠', async () => {

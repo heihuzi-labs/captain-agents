@@ -46,6 +46,12 @@ function useActions() {
     confirmLabel={confirm.action === 'stop' ? '确认停下' : '确认不要'} onCancel={() => setConfirm(null)} onConfirm={() => void run(confirm.action, confirm.jobs)} />}</>;
   return { busy, choose, feedback };
 }
+// 联网：派出时总开关开着才出现，只写一句说明，纯文字。
+export function NetworkNote() {
+  return <Section title="联网">
+    <p>这件活派出时允许联网</p>
+  </Section>;
+}
 // 真实验收：只在 realCheck 存在时出现。标题一行写状态；下面是负责人的说明、检查步骤、截图张数。“待做”是负责人的事，不催主人，也没有按钮。全是纯文字。
 export function RealCheck({ check }: { check: NonNullable<ViewJob['realCheck']> }) {
   const state = realState(check), { result, skipped } = check;
@@ -59,8 +65,9 @@ export function RealCheck({ check }: { check: NonNullable<ViewJob['realCheck']> 
 function JobBody({ job: j, workers }: { job: ViewJob; workers: Workers }) {
   const live = isOpen(j) || j.state === 'lost', result = resultText(j), actions = useActions();
   return <>
-    <div className="jhead"><WorkerRow job={j} workers={workers} size="lg" detail="setting" elapsed={(isOpen(j) || j.seconds != null) ? <Elapsed job={j} /> : undefined} end={<><span>{STATE[j.state]}</span>{j.check && <CheckChip job={j} />}</>} /></div>
+    <div className="jhead"><WorkerRow job={j} workers={workers} size="lg" detail="setting" elapsed={(isOpen(j) || j.seconds != null) ? <Elapsed job={j} /> : undefined} end={<><span>{STATE[j.state]}</span>{(j.check || j.checkSkipped) && <CheckChip job={j} />}</>} /></div>
     <Section title="要做什么"><p>{j.summary || '负责人还没留下说明'}</p></Section>
+    {j.network && <NetworkNote />}
     {(live || j.timing) && <Section title="进展"><TimingNote job={j} />{live && <ActivityList activity={j.activity} sleeps={j.sleeps} />}</Section>}
     {result && <Section title="结果"><p>{result}</p></Section>}
     {j.realCheck && <RealCheck check={j.realCheck} />}
@@ -81,7 +88,7 @@ function BatchBody({ entry, workers, open, summary }: { entry: Entry; workers: W
     <Section title="要做什么"><p>{summary || '负责人还没留下说明'}</p></Section>
     {entry.members.some(awaitingLead) && <div className="faint card-note">{HAND}</div>}
     <div className="panel cmp">{entry.members.map(j => <div className="cmp-row" key={j.id}>
-      <button className="batch-member plain" onClick={() => open({ kind: 'job', id: j.id })}><WorkerRow job={j} workers={workers} detail="full" end={j.check && <CheckChip job={j} />} /></button>
+      <button className="batch-member plain" onClick={() => open({ kind: 'job', id: j.id })}><WorkerRow job={j} workers={workers} detail="full" end={(j.check || j.checkSkipped) && <CheckChip job={j} />} /></button>
       {j.state === 'done' && available(j) && <Button variant="primary" size="sm" disabled={actions.busy} onClick={() => actions.choose('adopt', [j])}>用这份</Button>}
     </div>)}</div>
     {remaining.length > 0 && <div className="actions"><Button variant="danger" disabled={actions.busy} onClick={() => actions.choose('drop', remaining, true)}>都不要</Button></div>}

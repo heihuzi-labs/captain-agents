@@ -4,11 +4,27 @@ import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { statSync } from 'node:fs';
 
-export const toolRoot = fileURLToPath(new URL('../../', import.meta.url));
-// Python 等外部程序不能读取 asar 虚拟文件，必须使用解包后的真实路径。
-export function unpackedPath(path: string) {
-  return path.replace(/(^|\/)app\.asar\//, '$1app.asar.unpacked/');
+type PlatformProcess = { versions: { [name: string]: string | undefined }; resourcesPath?: string };
+const isDirectory = (path: string) => {
+  try { return statSync(path).isDirectory(); } catch { return false; }
+};
+// 只认 Electron 自己提供的资源目录，不接受环境变量指定平台根目录。
+export function packagedPlatformRoot(runtime: PlatformProcess = process): string | undefined {
+  if (!runtime.versions.electron || !runtime.resourcesPath) return;
+  const root = join(runtime.resourcesPath, 'platform');
+  if (isDirectory(root)) return root;
 }
+export function resolveToolRoot(moduleUrl = import.meta.url, runtime: PlatformProcess = process): string {
+  const sourceRoot = resolve(fileURLToPath(new URL('../../', moduleUrl)));
+  // 只有 asar 中的后台才切到资源平台；开发构建与正在跑的代码快照仍取自己的根目录。
+  if (runtime.versions.electron && runtime.resourcesPath && sourceRoot === join(runtime.resourcesPath, 'app.asar')) {
+    const root = packagedPlatformRoot(runtime);
+    if (!root) throw new Error('应用缺少平台目录，请重新安装完整的派活工作台。');
+    return root;
+  }
+  return sourceRoot;
+}
+export const toolRoot = resolveToolRoot();
 // 只给桌面入口调用；不启动登录 shell，也不改变原 PATH 的优先级。
 export function desktopPath(current: string | undefined, home = homedir(), isDirectory = (path: string) => {
   try { return statSync(path).isDirectory(); } catch { return false; }

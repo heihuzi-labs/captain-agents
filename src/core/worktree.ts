@@ -1,3 +1,4 @@
+import { externalEnvironment } from './node-runtime.ts';
 import { spawn } from 'node:child_process';
 import { open, mkdir, lstat, readlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -9,7 +10,7 @@ import { updateJob } from './job.ts';
 
 export async function git(repo: string, args: string[], allowed = [0]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-C', repo, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } });
+    const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-C', repo, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...externalEnvironment(), GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } });
     const out: Buffer[] = [], err: Buffer[] = [];
     child.stdout.on('data', b => out.push(b)); child.stderr.on('data', b => err.push(b));
     child.on('error', reject);
@@ -30,30 +31,36 @@ export async function setupCommands(commands: string[], logfile: string, step: (
     }
   } finally { await fd.close(); }
 }
-export async function setup(job: Job, commands: string[], logfile: string) {
+// 开群准备副本时还没有成员任务，省略 id；原任务入口仍在任务锁里登记 setupPid。
+export async function setup(job: Pick<Job, 'worktree'> & { id?: string }, commands: string[], logfile: string) {
   await setupCommands(commands, logfile, async (command, fd) => {
     let finished: Promise<void> | undefined, pid: number | undefined;
     try {
-      await updateJob(job.id, j => {
-        if (j.state !== 'queued') return;
-        const child = spawn('/bin/sh', ['-c', command], { cwd: job.worktree, detached: true, stdio: ['ignore', fd.fd, fd.fd] });
-        j.setupPid = pid = child.pid;
+      const start = (j?: Job) => {
+        if (j && j.state !== 'queued') return;
+        const child = spawn('/bin/sh', ['-c', command], { cwd: job.worktree, env: externalEnvironment(), detached: true, stdio: ['ignore', fd.fd, fd.fd] });
+        pid = child.pid;
+        if (j) j.setupPid = pid;
         finished = new Promise<void>((resolve, reject) => {
           child.on('error', reject);
           child.on('close', (code, signal) => code === 0 ? resolve() : reject(new Error(`准备副本失败（${signal || code}），请查看 ${logfile}，修正项目 setup 后重新派发。`)));
         });
         finished.catch(() => {});
-      });
+      };
+      if (job.id) await updateJob(job.id, start); else start();
       if (!finished) return false;
       await finished;
     } finally {
       if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch (e) { if (!hasCode(e, 'ESRCH')) throw e; } }
-      await updateJob(job.id, j => { delete j.setupPid; });
+      if (job.id) await updateJob(job.id, j => { delete j.setupPid; });
     }
   });
 }
-export async function diff(job: Job) {
-  let result = await git(job.worktree, ['diff', '--no-ext-diff', '--no-textconv', job.base, '--']);
+// --binary 让图片等二进制改动也能用 git apply 打回去；--full-index 让文本部分在别处做三方合并时也能准确找到原文件；
+// 前缀和颜色写死，不让本机 git 设置（diff.noprefix、color.ui=always 等）改掉补丁格式。
+const DIFF = ['diff', '--no-ext-diff', '--no-textconv', '--binary', '--full-index', '--no-color', '--src-prefix=a/', '--dst-prefix=b/'];
+export async function diff(job: Pick<Job, 'worktree' | 'base'>) {
+  let result = await git(job.worktree, [...DIFF, job.base, '--']);
   const files = (await git(job.worktree, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
   for (const file of files) {
     const full = join(job.worktree, file);
@@ -62,7 +69,7 @@ export async function diff(job: Job) {
       const quoted = JSON.stringify(`b/${file}`);
       result += `diff --git ${JSON.stringify(`a/${file}`)} ${quoted}\nnew file mode 120000\n--- /dev/null\n+++ ${quoted}\n@@ -0,0 +1 @@\n+${await readlink(full)}\n\\ No newline at end of file\n`;
     } else {
-      result += await git(job.worktree, ['diff', '--no-ext-diff', '--no-textconv', '--no-index', '--', '/dev/null', file], [0, 1]);
+      result += await git(job.worktree, [...DIFF, '--no-index', '--', '/dev/null', file], [0, 1]);
     }
   }
   return result;
@@ -79,7 +86,8 @@ export async function worktreeMissing(job: Pick<Job, 'worktree'>) {
 export async function saveDiff(job: Job) {
   if (!job.cleaned) await writeAtomic(join(jobDir(job.id), 'diff.patch'), await diff(job));
 }
-export async function removeWorktree(job: Pick<Job, 'repo' | 'worktree' | 'branch'>) {
+export async function removeWorktree(job: Pick<Job, 'repo' | 'worktree' | 'branch' | 'chat'>) {
+  if (job.chat) return; // 群副本和分支归群所有，只有 cleanChat 能删除。
   const entries = (await git(job.repo, ['worktree', 'list', '--porcelain', '-z'])).split('\0');
   if (entries.includes(`worktree ${job.worktree}`)) await git(job.repo, ['worktree', 'remove', '--force', job.worktree]);
   else {

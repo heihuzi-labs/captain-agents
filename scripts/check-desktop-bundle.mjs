@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { createRequire, isBuiltin } from 'node:module';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkPlatform } from './prepare-platform.mjs';
 // 复用已安装的 Vite 构建工具链，不额外增加依赖。
 const require = createRequire(createRequire(import.meta.url).resolve('vite'));
 const { parseAst } = require('rollup/parseAst');
@@ -13,7 +14,8 @@ export function externalPackages(source, name) {
   const check = value => {
     if (!value || value.type !== 'Literal' || typeof value.value !== 'string') { missing.add(`${name}：无法静态确认的动态依赖`); return; }
     const id = value.value;
-    if (id !== 'electron' && !isBuiltin(id) && !id.startsWith('./') && !id.startsWith('../')) missing.add(id);
+    // original-fs 是 Electron 自带的模块（不带 asar 处理的文件函数），和 electron 一样不需要打进包里。
+    if (id !== 'electron' && id !== 'original-fs' && !isBuiltin(id) && !id.startsWith('./') && !id.startsWith('../')) missing.add(id);
   };
   const visit = node => {
     if (['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration', 'ImportExpression'].includes(node.type) && node.source) check(node.source);
@@ -37,6 +39,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         if (dependencies.length) throw new Error(`${path} 仍引用外部依赖：${dependencies.join('、')}`);
       }
     }
-    console.log('主进程和预加载产物检查通过：只依赖 Electron、Node 内置模块和包内文件。');
+    await checkPlatform(resolve('out/platform'));
+    console.log('主进程和预加载产物检查通过：只依赖 Electron、Node 内置模块和包内文件；平台文件与 srt 依赖完整、无符号链接。');
   } catch (error) { console.error(`打包前检查失败：${error.message}`); process.exitCode = 1; }
 }

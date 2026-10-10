@@ -96,13 +96,20 @@ test('额度停派线读设置：60% 时拒绝 65%、放行 55%，force 能跳�
 
 test('workers 和帮助显示当前派活限制与环境变量只能收紧', async t => {
   const c = await context(t, false);
-  for (const limits of [{ maxRunning: 2, quotaStop: 60 }, { maxRunning: 12, quotaStop: 80 }]) {
+  for (const limits of [{ maxRunning: 2, quotaStop: 60 }, { maxRunning: 12, quotaStop: 80 }, { maxRunning: 12, quotaStop: 90 }, { maxRunning: 12, quotaStop: null }]) {
     await writeFile(join(c.home, 'config.json'), JSON.stringify({ limits }));
     const workers = await c.cli(['workers']); assert.equal(workers.code, 0, workers.stderr);
-    assert.ok(workers.stdout.trimEnd().endsWith(`派活限制：同时最多 ${limits.maxRunning} 件；额度用到 ${limits.quotaStop}% 停派（设置 → 选手与模型）`));
+    await quota(c.home, 95);
+    const guide = await c.cli(['guide']); assert.equal(guide.code, 0, guide.stderr);
+    const appendix = guide.stdout.slice(guide.stdout.indexOf('## 这台机器现在的情况'));
+    assert.ok(appendix.includes(limits.quotaStop === null ? '额度不设停派线（主人在设置里关掉了）' : `额度用到 ${limits.quotaStop}% 停派`));
+    assert.ok(appendix.includes(limits.quotaStop === null ? '主人没有设停派线：`xagents run` 不按用量拒绝；某家额度触顶时仍会拒绝' : `某家本期额度用到 ${limits.quotaStop}%，`));
+    assert.doesNotMatch(appendix, /null%/);
+    assert.ok(workers.stdout.split('\n').includes(`派活限制：同时最多 ${limits.maxRunning} 件；${limits.quotaStop === null ? '额度不设停派线（主人在设置里关掉了）' : `额度用到 ${limits.quotaStop}% 停派`}（设置 → 选手与模型）`));
+    const help = await c.cli(['--help']); assert.equal(help.code, 0, help.stderr);
+    assert.match(help.stdout, /额度停派线 50%、60%、70%、80%、90%、不设限（缺省 80%）/);
+    assert.match(help.stdout, /XAGENTS_MAX_RUNNING：正整数.*临时收紧.*较小值.*不能放宽设置或超过 12/);
   }
-  const help = await c.cli(['--help']); assert.equal(help.code, 0, help.stderr);
-  assert.match(help.stdout, /XAGENTS_MAX_RUNNING：正整数.*临时收紧.*较小值.*不能放宽设置或超过 12/);
 });
 
 test('设置边界：12 件合法，13 件拒绝且保留原设置', async t => {
@@ -115,6 +122,50 @@ test('设置边界：12 件合法，13 件拒绝且保留原设置', async t => 
     assert.deepEqual((await readSettings()).limits, { maxRunning: 12, quotaStop: 80 });
     await assert.rejects(writeSettings({ limits: { maxRunning: 13, quotaStop: 80 } }), /同时最多跑 1–12 件/);
     assert.deepEqual((await readSettings()).limits, { maxRunning: 12, quotaStop: 80 });
+  `], root, c.env);
+  assert.equal(result.code, 0, result.stderr);
+});
+
+
+test('不设限通过 dispatch 派出 95% 的选手，无需 force', async t => {
+  const c = await context(t); assert.equal((await c.add()).code, 0);
+  await writeFile(join(c.home, 'config.json'), JSON.stringify({ limits: { maxRunning: 12, quotaStop: null } }));
+  await quota(c.home, 95);
+  const launched = await c.cli(['run', c.task, '--summary', '不设限测试', '--who', 'codex:high']);
+  assert.equal(launched.code, 0, launched.stderr);
+  const [job] = await c.jobs(); assert.ok(job);
+  assert.equal((await c.cli(['wait', job.id])).code, 0);
+  assert.equal((await c.jobs())[0].state, 'done');
+});
+
+test('六档设置往返、旧文件只读不改写，桌面真实保存路径支持 90 和不设限，非法值拒绝', async t => {
+  const c = await context(t, false);
+  const result = await exec(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { readFile, writeFile } from 'node:fs/promises';
+    import { join } from 'node:path';
+    import { readSettings, writeSettings, setNetworkAllowed } from './src/core/settings.ts';
+    import { settingsActions } from './app/main/actions.ts';
+    const file = join(process.env.XAGENTS_HOME, 'config.json');
+    const old = '{ "limits": { "maxRunning": 12, "quotaStop": 80 } }';
+    await writeFile(file, old);
+    assert.equal((await readSettings()).limits.quotaStop, 80);
+    assert.equal(await readFile(file, 'utf8'), old);
+    const actions = settingsActions({ readSettings, writeSettings, setNetworkAllowed, getLogin: () => false, setLogin: () => {} }, async () => {});
+    for (const quotaStop of [50, 60, 70, 80, 90, null]) {
+      const limits = { maxRunning: 12, quotaStop };
+      await writeSettings({ limits });
+      assert.deepEqual((await readSettings()).limits, limits);
+      await writeSettings({ limits: { maxRunning: 12, quotaStop: quotaStop === 80 ? 60 : 80 } });
+      assert.deepEqual((await actions.set([{ limits }])).limits, limits);
+      assert.deepEqual(JSON.parse(await readFile(file, 'utf8')).limits, limits);
+    }
+    for (const quotaStop of [85, 100, 0, '90', '不设限', 'null', undefined, false, {}, []]) {
+      const before = await readFile(file, 'utf8'), limits = { maxRunning: 12, quotaStop };
+      await assert.rejects(writeSettings({ limits }), /额度停派线只能 50%、60%、70%、80%、90%、不设限/);
+      await assert.rejects(actions.set([{ limits }]), /额度停派线只能是 50%、60%、70%、80%、90%、不设限/);
+      assert.equal(await readFile(file, 'utf8'), before);
+    }
   `], root, c.env);
   assert.equal(result.code, 0, result.stderr);
 });

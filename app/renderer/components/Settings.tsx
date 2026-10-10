@@ -9,6 +9,8 @@ import { defaultColumns } from '../../shared/ipc.ts';
 import type { Settings as Values, SettingsPatch } from '../../shared/ipc.ts';
 import { Button, ColorField, Modal, Segmented, Select, SettingGroup, SettingRow, SideNavLayout, Switch } from '../ui/index.ts';
 import { policyOf, WorkerSettings } from './WorkerSettings.tsx';
+import { CliSettings, UpdateSettings } from './Update.tsx';
+import { NetworkSettings } from './NetworkSettings.tsx';
 
 type Who = keyof Values['workers'];
 // 界面先显示的新值：选手的改动按选手合并，其余整项替换。
@@ -23,7 +25,7 @@ const rememberPage = (id: string) => { try { window.localStorage.setItem(PAGE_KE
 const APPEARANCES: { id: Values['appearance']; label: string }[] = [{ id: 'system', label: '跟随系统' }, { id: 'light', label: '浅色' }, { id: 'dark', label: '深色' }];
 
 // view 里有“选手名单”和展示信息（看板数据），有了才显示“选手与模型”页；设置本身仍单独读、单独存。
-export function Settings({ close, view }: { close(): void; view?: Pick<View, 'roster' | 'workers' | 'quota' | 'storage'> }) {
+export function Settings({ close, view }: { close(): void; view?: Pick<View, 'roster' | 'workers' | 'quota' | 'storage' | 'projects' | 'models'> }) {
   const [values, setValues] = useState<Values | null>(null), [error, setError] = useState(''), [workersError, setWorkersError] = useState('');
   const latest = useRef<Values | null>(null), saved = useRef<Values | null>(null), queued = useRef<SettingsPatch | null>(null);
   const saving = useRef(false), mounted = useRef(true), [remembered, setRemembered] = useState(readPage);
@@ -74,7 +76,23 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
   // 存储：总是带完整的两个字段（开关和天数），以界面上最新的值为底。
   const storage = (change: Partial<Values['storage']>) => { if (latest.current) void save({ storage: { ...latest.current.storage, ...change } }); };
   const limits = (change: Partial<Values['limits']>) => { if (latest.current) void save({ limits: { ...latest.current.limits, ...change } }); };
-  const pages = [{ id: 'general', label: '通用' }, ...(view && view.roster.length > 0 ? [{ id: 'workers', label: '选手与模型' }] : []), { id: 'colors', label: '看板颜色' }, { id: 'intro', label: '接入 AI' }];
+  // 联网只走专用入口；保存中锁住开关，防止前后两次请求颠倒。
+  const [networkSaving, setNetworkSaving] = useState(false);
+  const allowNetwork = async (on: boolean) => {
+    if (!latest.current || networkSaving) return;
+    const previous = latest.current.networkAllowed;
+    setNetworkSaving(true); setError('');
+    show({ ...latest.current, networkAllowed: on });
+    try {
+      const result = await window.xa.setNetworkAllowed(on);
+      if (saved.current) saved.current = { ...saved.current, networkAllowed: result.networkAllowed };
+      if (latest.current) show({ ...latest.current, networkAllowed: result.networkAllowed });
+    } catch (e) {
+      if (latest.current) show({ ...latest.current, networkAllowed: previous });
+      if (mounted.current) setError('没能保存：' + errorReason(e));
+    } finally { if (mounted.current) setNetworkSaving(false); }
+  };
+  const pages = [{ id: 'general', label: '通用' }, ...(view && view.roster.length > 0 ? [{ id: 'workers', label: '选手与模型' }] : []), { id: 'network', label: '联网' }, { id: 'colors', label: '看板颜色' }, { id: 'intro', label: '接入 AI' }];
   const page = pages.find(p => p.id === remembered)?.id ?? 'general';
   return <Modal size="lg" flush label="设置" title="设置" onClose={close}>
     <SideNavLayout label="设置分页" items={pages} value={page} onChange={id => { setRemembered(id); rememberPage(id); }}>
@@ -90,16 +108,19 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
           <SettingRow title="多少天后清理" group><Segmented label="多少天后清理" disabled={!values.storage.slim} items={SLIM_CHOICES.map(d => ({ id: String(d), label: d + ' 天' }))} value={String(values.storage.days)}
             onChange={id => storage({ days: Number(id) as SlimDays })} /></SettingRow>
           {view?.storage && <p className="setting-row setting-foot">{storageLine(view.storage)}</p>}
-        </SettingGroup></>}
+        </SettingGroup>
+        <UpdateSettings />
+        <CliSettings /></>}
         {page === 'workers' && view && <>
           <SettingGroup head="派活限制">
             <SettingRow title="同时最多跑" note="在跑的加排队的，满了就先不派新活"><Select label="同时最多跑" items={RUN_CHOICES.map(n => ({ id: String(n), label: n + ' 件' }))} value={String(values.limits.maxRunning)}
               onChange={id => limits({ maxRunning: Number(id) })} /></SettingRow>
-            <SettingRow title="额度停派线" note="某家用到这里就不再派给它"><Select label="额度停派线" items={STOP_CHOICES.map(n => ({ id: String(n), label: n + '%' }))} value={String(values.limits.quotaStop)}
-              onChange={id => limits({ quotaStop: Number(id) as Values['limits']['quotaStop'] })} /></SettingRow>
+            <SettingRow title="额度停派线" note={values.limits.quotaStop === null ? '不按用量停派；额度用尽的那家仍然派不出去' : '某家用到这里就不再派给它'}><Select label="额度停派线" items={STOP_CHOICES.map(n => ({ id: String(n), label: n === null ? '不设限' : n + '%' }))} value={String(values.limits.quotaStop)}
+              onChange={id => { const stop = STOP_CHOICES.find(n => String(n) === id); if (stop !== undefined) limits({ quotaStop: stop }); }} /></SettingRow>
           </SettingGroup>
           <WorkerSettings view={view} values={values.workers} error={workersError} change={worker} />
         </>}
+        {page === 'network' && <NetworkSettings allowed={values.networkAllowed} saving={networkSaving} setAllowed={on => void allowNetwork(on)} />}
         {page === 'intro' && <IntroPane />}
         {page === 'colors' && <>
           <SettingGroup>{([['running', '进行中'], ['attention', '验收中'], ['done', '已完成']] as const).map(([key, label]) =>

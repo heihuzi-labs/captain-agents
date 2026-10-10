@@ -132,13 +132,13 @@ test('80% 四家分别拦截，未知用量不拦，快照跨重置/近似/缺�
   assert.doesNotThrow(() => checkQuota(data, [{ who: 'codex' }]));
 });
 
-test('各选手按传入停派线判断：四档含边界，force、未知和近似用量保持原行为', async () => {
+test('各选手按传入停派线判断：五档含边界，force、未知和近似用量保持原行为', async () => {
   // DeepSeek 借 Codex 跑但扣自己的余额：没有额度条，Codex 的周额度用到多少都不拦它。
   for (const who of whos.filter(w => vendorOf(w) === 'deepseek')) {
     const data = await snapshot(); quotaBar(data, 'codex')!.used = 100;
     assert.equal(quotaBar(data, who), undefined); assert.doesNotThrow(() => checkQuota(data, [{ who }], false, 50));
   }
-  for (const who of whos.filter(w => vendorOf(w) !== 'deepseek')) for (const stop of quotaStops) {
+  for (const who of whos.filter(w => vendorOf(w) !== 'deepseek')) for (const stop of quotaStops.filter(stop => stop !== null)) {
     const data = await snapshot(), bar = quotaBar(data, who)!;
     bar.used = stop - 0.1; assert.doesNotThrow(() => checkQuota(data, [{ who }], false, stop));
     bar.used = stop; assert.throws(() => checkQuota(data, [{ who }], false, stop), new RegExp(`已用 ${stop}%，到了设置里的停派线 ${stop}%`));
@@ -343,4 +343,19 @@ test('某一家这次查不到：保留那家上一次的数据和时间，写�
 test('额度数据时间：CLI 用本地时间 MM-DD HH:mm', async () => {
   assert.match(formatQuota(await snapshot()), new RegExp(`数据时间 ${localTime(at)}`));
   assert.match(localTime(at), /^\d\d-\d\d \d\d:\d\d$/);
+});
+
+
+test('不设限放行 99%，仍拒绝已触顶；90% 的边界为 89 放行、90 拒绝', async () => {
+  const data = await snapshot(), bar = quotaBar(data, 'codex')!;
+  bar.used = 99;
+  assert.doesNotThrow(() => checkQuota(data, [{ who: 'codex' }], false, null));
+  data.providers.find(p => p.icon === 'codex')!.reached = '额度已用完';
+  assert.throws(() => checkQuota(data, [{ who: 'codex' }], false, null), /已触顶/);
+  assert.doesNotThrow(() => checkQuota(data, [{ who: 'codex' }], true, null));
+  delete data.providers.find(p => p.icon === 'codex')!.reached;
+  bar.used = 89;
+  assert.doesNotThrow(() => checkQuota(data, [{ who: 'codex' }], false, 90));
+  bar.used = 90;
+  assert.throws(() => checkQuota(data, [{ who: 'codex' }], false, 90), /停派线 90%/);
 });

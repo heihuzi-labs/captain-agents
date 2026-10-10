@@ -2,12 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { View } from '../../src/core/view-types.ts';
 import { batchColors, columnColor, derive, entries, loadPosition, normalizeTarget, savePosition, shareView, typicalTimes } from './lib/board.ts';
 import type { Entry, Page, Target } from './lib/board.ts';
-import { AttentionCard, BoardColumn, DoneList, ProjectTag, QueuedCard, RunningCard } from './components/Board.tsx';
+import { AttentionCard, BoardColumn, ChatWaitingCard, DoneList, ProjectTag, QueuedCard, RunningCard } from './components/Board.tsx';
+import { Chat, readSelectedChat, rememberSelectedChat } from './components/Chat.tsx';
+import { PAGE_KEYS } from './components/TopBar.tsx';
+import { loadWorkerHandles } from '../../src/core/chat-handles.ts';
 import { entryProject, projectLabel, projectOf, readHistoryProject, rememberHistoryProject } from './lib/history.ts';
 import { errorReason } from './lib/errors.ts';
 import { BatchGroup, EmptyState, Toast } from './ui/index.ts';
 import type { ToastAction, ToastMessage } from './ui/index.ts';
 import { Settings } from './components/Settings.tsx';
+import { UpdateDialog } from './components/Update.tsx';
 import { Detail } from './components/Detail.tsx';
 import { History, Stats } from './components/Pages.tsx';
 import { TopBar } from './components/TopBar.tsx';
@@ -16,6 +20,7 @@ export function App() {
     [error, setError] = useState(false),
     [position, setPosition] = useState(loadPosition),
     [target, setTarget] = useState<Target | null>(null),
+    [chatId, setChatId] = useState(readSelectedChat),
     [historyProject, setHistoryProject] = useState(readHistoryProject),
     [settings, setSettings] = useState(false),
     [now, setNow] = useState(Date.now),
@@ -33,6 +38,8 @@ export function App() {
   }, []);
   const dismissToast = useCallback((id: number) => setToast(current => current?.id === id ? null : current), []);
   const accept = useCallback((next: View) => {
+    // 选手清单会变（主人保留了新模型）：先把群聊 @ 的短名同步成最新的，再画界面。
+    loadWorkerHandles(next.workers);
     latestView.current = next;
     setView(old => shareView(old, next));
     setError(false);
@@ -46,10 +53,16 @@ export function App() {
       if (alive.current && generation.current === version) setError(true);
     });
   }, [accept]);
+  const selectChat = useCallback((id: string) => { setChatId(id); rememberSelectedChat(id); }, []),
+    // 群聊的卡（看板、历史、菜单栏、通知）：去协作页并选中那个群，不开弹窗。
+    showChat = useCallback((id: string) => { setSettings(false); setTarget(null); selectChat(id); setPosition(p => ({ ...p, page: 'collab' })); }, [selectChat]);
   useEffect(() => {
     alive.current = true;
     const unsubscribeOpen = window.xa.onOpen(destination => {
       if (destination.kind === 'settings') { setTarget(null); setSettings(true); }
+      // 群聊的通知：去协作页并打开那个群。
+      else if (destination.kind === 'chat') showChat(destination.id);
+      else if (destination.kind === 'team') { setSettings(false); setTarget(null); }
       else { setSettings(false); setTarget(destination); }
     });
     const unsubscribe = window.xa.onView(next => {
@@ -63,8 +76,13 @@ export function App() {
       unsubscribe();
       unsubscribeOpen();
     };
-  }, [accept, refresh]);
-  const open = useCallback((next: Target) => (setSettings(false), setTarget(next)), []),
+  }, [accept, refresh, showChat]);
+  // 收场的小队只在历史页展开看，不再单独打开。
+  const open = useCallback((next: Target) => {
+      if (next.kind === 'chat') return showChat(next.id);
+      setSettings(false);
+      if (next.kind !== 'team') setTarget(next);
+    }, [showChat]),
     close = useCallback(() => setTarget(null), []),
     closeSettings = useCallback(() => setSettings(false), []);
   const go = useCallback((page: Page) => {
@@ -89,9 +107,9 @@ export function App() {
     const key = (e: KeyboardEvent) => {
       if (!e.metaKey) return;
       if (e.key === ',') { e.preventDefault(); setTarget(null); setSettings(true); }
-      else if (['1', '2', '3'].includes(e.key)) {
+      else if (['1', '2', '3', '4'].includes(e.key)) {
         e.preventDefault();
-        go((['board', 'history', 'stats'] as const)[Number(e.key) - 1]);
+        go(PAGE_KEYS[Number(e.key) - 1]);
       } else if (e.key.toLowerCase() === 'r') {
         e.preventDefault();
         refresh();
@@ -132,24 +150,29 @@ export function App() {
     kind: 'job' as const,
     id: j.id
   })), ...columns.runningGroups.map(e => e.target), ...columns.attention.map(e => e.target), ...done.map(e => e.target)];
-  const unique = order.filter((t, i) => order.findIndex(x => x.kind === t.kind && x.id === t.id) === i);
+  // 弹窗里的“上一件 / 下一件”跳过群聊（群聊不开弹窗）。
+  const unique = order.filter((t, i) => t.kind !== 'chat' && order.findIndex(x => x.kind === t.kind && x.id === t.id) === i);
+  // 群的卡：群名、排队的人都从群记录来。
+  const chatCard = (e: Entry) => e.chat && { id: e.target.id, title: e.title, waiting: e.chat.queued.map(who => view.workers[who]?.model ?? who) };
   // 看板上同时有不止一个项目的活：进行中、验收中的卡片题目旁写项目小标签，已完成列按项目分组；只有一个项目时都不写。
   // 已归档且只出现在已完成里的项目，卡已经藏起来，不算进这个数。
-  const boardProjects = new Set([...columns.queued, ...columns.running, ...columns.attention.flatMap(e => e.members), ...done.flatMap(e => e.members)].map(projectOf)),
+  const boardProjects = new Set([...[...columns.queued, ...columns.running, ...columns.attention.flatMap(e => e.members), ...done.flatMap(e => e.members)].map(projectOf), ...columns.runningGroups.map(entryProject)]),
     several = boardProjects.size > 1,
     tag = (job: { project: string }) => several ? projectLabel(view, projectOf(job)) : undefined;
-  const entryHue = (e: Entry) => hue(e.target.kind === 'batch' ? e.target.id : e.members[0].batch);
+  const entryHue = (e: Entry) => hue(e.target.kind === 'job' ? e.members[0].batch : e.target.id);
   const shown = target ? normalizeTarget(view, target) : null;
   return <><div className="app" inert={target || settings ? true : undefined}><TopBar view={view} page={position.page} go={go} openSettings={() => { setTarget(null); setSettings(true); }} />{error && <div role="alert">读取登记处失败，显示上次读取的内容。</div>}<main className="main">{notice && <p role="alert" className="notice notice-bad">{notice}</p>}
     {position.page === 'board' ? <div id="v-board">
-      <BoardColumn name="running" title="进行中" count={columns.running.length} queued={columns.queued.length} color={columnColor(view, 'running')}>{columns.queued.map(j => <QueuedCard key={j.id} job={j} workers={view.workers} hue={jobHue(j.batch)} project={tag(j)} open={open} />)}{columns.runningGroups.length ? columns.runningGroups.map(e => e.members.length > 1
+      <BoardColumn name="running" title="进行中" count={columns.running.length} queued={columns.queued.length + columns.chatQueued} color={columnColor(view, 'running')}>{columns.queued.map(j => <QueuedCard key={j.id} job={j} workers={view.workers} hue={jobHue(j.batch)} project={tag(j)} open={open} />)}{columns.runningGroups.length ? columns.runningGroups.map(e => e.chat && !e.members.length
+        ? <ChatWaitingCard key={e.target.kind + e.target.id} {...chatCard(e)!} project={several ? projectLabel(view, entryProject(e)) : undefined} open={open} />
+        : e.members.length > 1
         ? <BatchGroup key={e.target.kind + e.target.id} hue={hue(e.target.id)} head={<button className="bhead" onClick={() => open(e.target)}><span className="t">{e.title}</span><ProjectTag name={tag(e.members[0])} /><span className="faint">{e.members.length} 家同时在做</span></button>}>{e.members.map(j => <RunningCard key={j.id} job={j} workers={view.workers} typical={typical(j)} group open={open} />)}</BatchGroup>
-        : <RunningCard key={e.target.kind + e.target.id} job={e.members[0]} workers={view.workers} typical={typical(e.members[0])} hue={jobHue(e.members[0].batch)} project={tag(e.members[0])} open={open} />) : columns.queued.length ? null : <EmptyState>现在没有在跑的活</EmptyState>}</BoardColumn>
+        : <RunningCard key={e.target.kind + e.target.id} job={e.members[0]} workers={view.workers} typical={typical(e.members[0])} hue={jobHue(e.members[0].batch)} project={tag(e.members[0])} chat={chatCard(e) || undefined} open={open} />) : columns.queued.length ? null : <EmptyState>现在没有在跑的活</EmptyState>}</BoardColumn>
       <BoardColumn name="attention" title="验收中" count={columns.attention.length} color={columnColor(view, 'attention')}>{columns.attention.length ? columns.attention.map(e => <AttentionCard key={e.type + e.target.kind + e.target.id} entry={e} workers={view.workers} hue={entryHue(e)} project={tag(e.members[0])} open={open} />) : <EmptyState>没有在验收的活</EmptyState>}</BoardColumn>
       <BoardColumn name="done" title="已完成" count={done.length} color={columnColor(view, 'done')} history={() => go('history')}>{done.length ? <DoneList entries={done} workers={view.workers} label={name => projectLabel(view, name)} open={open} showProject={name => { chooseProject(name); go('history'); }} onArchive={archiveProject} /> : <EmptyState>最近 24 小时没有完成的活</EmptyState>}</BoardColumn>
-    </div> : position.page === 'history' ? <History view={view} rows={columns.history} filter={position.filter} setFilter={filter => setPosition(p => ({
+    </div> : position.page === 'collab' ? <Chat view={view} selected={chatId} select={selectChat} open={open} notify={showToast} dismiss={dismissToast} /> : position.page === 'history' ? <History view={view} rows={columns.history} filter={position.filter} setFilter={filter => setPosition(p => ({
           ...p,
           filter
         }))} project={historyProject} setProject={chooseProject} now={now} open={open} onUnarchive={unarchiveProject} /> : <Stats view={view} />}
-  </main>{toast && <Toast message={toast} onClose={() => dismissToast(toast.id)} />}</div>{shown && <Detail target={shown} view={view} entries={groups} order={unique} colors={colors} open={open} close={close} />}{settings && <Settings close={closeSettings} view={view} />}</>;
+  </main>{toast && <Toast message={toast} onClose={() => dismissToast(toast.id)} />}</div>{shown && <Detail target={shown} view={view} entries={groups} order={unique} colors={colors} open={open} close={close} />}{settings && <Settings close={closeSettings} view={view} />}<UpdateDialog /></>;
 }

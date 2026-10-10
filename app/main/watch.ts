@@ -2,6 +2,8 @@ import { watch } from 'node:fs';
 import type { FSWatcher } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { paths } from '../../src/core/paths.ts';
+import { chatsDir } from '../../src/core/chat.ts';
+import { teamsDir } from '../../src/core/team.ts';
 import { buildView } from '../../src/core/view.ts';
 import type { View } from '../../src/core/view-types.ts';
 
@@ -20,7 +22,7 @@ export async function watchRegistry(hasWindow: () => boolean, publish: (view: Vi
     reading = true;
     try {
       const view = await read();
-      open = view.jobs.some(j => j.state === 'running' || j.state === 'queued');
+      open = view.jobs.some(j => j.state === 'running' || j.state === 'queued') || view.teams.some(team => team.state === 'running');
       if (!closed && hasWindow()) publish(view);
     }
     catch (error) { onError(error); }
@@ -33,13 +35,14 @@ export async function watchRegistry(hasWindow: () => boolean, publish: (view: Vi
   const close = () => { if (closed) return; closed = true; if (timer) clearTimeout(timer); if (poll) clearInterval(poll); watchers.forEach(w => w.close()); };
   try {
     const p = paths();
-    for (const dir of (watchSettings ? [p.home] : [p.jobs, p.batches, p.cache])) {
+    // 整份登记处一起看时，teams/ 在根目录下面，递归监视已经覆盖。分目录看时要单独加上，频道有新消息才能刷新。
+    for (const dir of (watchSettings ? [p.home] : [p.jobs, p.batches, p.cache, teamsDir(), chatsDir()])) {
       await mkdir(dir, { recursive: true });
       const watcher = watchDirectory(dir, { recursive: true }, changed);
       watcher.on('error', onError); watchers.push(watcher);
     }
   } catch (error) { close(); throw error; }
-  // 看管进程退出不一定改文件：有活在跑或排队时，每 5 秒只读检查一次，没有就不读。
+  // 看管进程或小队推进进程退出不一定改文件：有活在跑、在排队，或小队还在推进时，每 5 秒只读检查一次，没有就不读。
   poll = setInterval(() => { if (open) void flush(); }, 5000);
   return close;
 }

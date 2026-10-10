@@ -48,7 +48,7 @@ test('四家同批派发到完成、共同起点、收集、diff、清理与记�
     assert.ok((await readFile(join(dir, 'report.md'), 'utf8')).includes('测试替身完成'));
     assert.ok(j.command?.args[0].endsWith('worker.ts'));
     await access(join(dir, 'run.log')); await access(join(dir, 'tmp'));
-    await access(join(dir, 'runtime/src/core/runner.ts')); await access(join(dir, 'versions.json'));
+    await access(join(dir, j.runtime!, 'src/core/runner.ts')); await access(join(dir, j.runtime!, 'versions.json'));
     const changes = await readFile(join(dir, 'diff.patch'), 'utf8');
     assert.ok(changes.includes('+新增内容')); assert.ok(changes.includes('-起点')); assert.ok(changes.includes('new file.txt'));
   }
@@ -242,7 +242,7 @@ test('从仓库子目录和现有工作副本能匹配项目，拒绝指向仓�
   const j = (await c.jobs())[0]; await c.cli(['wait', j.id]);
   const r2 = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'grok:high', '--ro'], {}, j.worktree); assert.equal(r2.code, 0, r2.stderr);
   const j2 = (await c.jobs()).find(x => x.id !== j.id)!; await c.cli(['wait', j2.id]);
-  const settings = JSON.parse(await readFile(join(c.home, 'jobs', j2.id, 'sandbox.json'), 'utf8'));
+  const settings = JSON.parse(await readFile(join(c.home, 'jobs', j2.id, j2.runtime!, 'sandbox.json'), 'utf8'));
   assert.ok(!settings.filesystem.allowWrite.includes(j2.worktree));
   await symlink(c.temp, join(c.repo, 'escape'));
   assert.equal((await c.cli(['project', 'add', '测试', c.repo, '--worktree-root', 'escape'])).code, 0);
@@ -352,12 +352,17 @@ test('主目录有没提交的改动时派活被拦下，说明原因；加 --di
   const [job] = await c.jobs(); await c.cli(['wait', job.batch]);
 });
 
-test('副本已清理后，负责人用 --merged <提交号> 补记采用；提交必须真实存在；不绕过真实验收', async t => {
+test('副本已清理后，负责人用 --merged <提交号> 补记采用；提交必须真实存在；不绕过验收和真实验收', async t => {
   const c = await context(t);
   assert.equal((await c.add()).code, 0);
   assert.equal((await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'])).code, 0);
   const [job] = await c.jobs(); await c.cli(['wait', job.batch]);
   assert.equal((await c.cli(['clean', job.id])).code, 0);
+  // 没验收就清理了：补记合并也过不了验收这道关，只能写明当时是怎么验的。
+  const unverified = await c.cli(['adopt', job.id, '--merged', c.base.slice(0, 10), '--note', '结论']);
+  assert.equal(unverified.code, 1); assert.match(unverified.stderr + unverified.stdout, /没有验收记录，副本又已清理/);
+  assert.equal((await c.jobs())[0].decision, undefined);
+  assert.equal((await c.cli(['verify', job.id, '--skip', '合并前在主目录跑过全套测试'])).code, 0);
   const refused = await c.cli(['adopt', job.id, '--note', '结论']);
   assert.equal(refused.code, 1); assert.match(refused.stderr + refused.stdout, /--merged <合并提交号>/);
   const bogus = await c.cli(['adopt', job.id, '--merged', 'deadbeef', '--note', '结论']);

@@ -4,6 +4,8 @@ import type { KeyboardEvent } from 'react';
 export type SegmentedItem = {
   id: string; label: string;
   title?: string;        // 悬停提示，如“看板（⌘1）”
+  // 段右上角一个灰色小点（不写数字），dotLabel 是给读屏的说明，如“有小队等负责人”。
+  dot?: boolean; dotLabel?: string;
 };
 // 分段切换：一小排互斥的选项，当前项浮起。role="tablist" / "tab"，左右键切换并把焦点跟过去（首尾循环，Home / End 跳头尾），只有当前项在 Tab 序列里。
 // disabled：整排变灰、点不动，当前项保留。
@@ -20,6 +22,6 @@ export function Segmented({ label, items, value, onChange, disabled = false }: {
     return <button key={item.id} type="button" role="tab" className="seg-tab" aria-selected={on} tabIndex={on ? 0 : -1} disabled={disabled}
       title={item.title}
       ref={node => { if (node) tabs.current.set(item.id, node); else tabs.current.delete(item.id); }}
-      onClick={() => onChange(item.id)} onKeyDown={e => move(e, i)}>{item.label}</button>;
+      onClick={() => onChange(item.id)} onKeyDown={e => move(e, i)}>{item.label}{item.dot && <span className="seg-dot" role="img" aria-label={item.dotLabel ?? '有新动静'} />}</button>;
   })}</div>;
 }

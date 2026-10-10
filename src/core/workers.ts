@@ -1,3 +1,4 @@
+import { nodeRunner, externalEnvironment } from './node-runtime.ts';
 import { spawn } from 'node:child_process';
 import { access, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -61,7 +62,7 @@ export async function loginDeepseek(key: string) {
   if (!/^sk-[A-Za-z0-9_-]{8,}$/.test(key)) throw new Error('这不像 DeepSeek 的 API 钥匙（应以 sk- 开头），没有保存。');
   await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
   const ok = await new Promise<boolean>((done, fail) => {
-    const child = spawn(codexPath(), ['login', '--with-api-key', ...DEEPSEEK_LOGIN], { cwd: deepseekHome(), env: { ...process.env, ...deepseekEnv() }, stdio: ['pipe', 'ignore', 'ignore'] });
+    const child = spawn(codexPath(), ['login', '--with-api-key', ...DEEPSEEK_LOGIN], { cwd: deepseekHome(), env: { ...externalEnvironment(), ...deepseekEnv() }, stdio: ['pipe', 'ignore', 'ignore'] });
     child.once('error', fail); child.once('close', code => done(code === 0));
     child.stdin.end(key + '\n');
   });
@@ -102,8 +103,13 @@ export async function checkCursorLogin(run: Executor = execute) {
 }
 // 本机 Codex 不在 PATH 上，派活和查模型用同一个取路径的地方；XAGENTS_CODEX 可覆盖。
 export const codexPath = () => process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
-export async function command(job: Job, text: string, project: Isolated): Promise<Command> {
+// runtime：这一轮运行包的目录（run-package.ts）；srt 的设置文件和联网小程序都从包里取。
+export async function command(job: Job, text: string, project: Isolated, runtime?: string): Promise<Command> {
   const dir = jobDir(job.id), env: Record<string, string> = {}, tmp = jobTmpDir(job);
+  const network = job.network === true;
+  const unset = [...(vendorOf(job.who) === 'deepseek' ? KEY_VARS : []), ...(network ? ['NODE_USE_SYSTEM_CA'] : [])];
+  // 联网任务避免读取系统钥匙串，npm 缓存只写任务专用临时目录（负责人隔离实测）。
+  if (network) env.npm_config_cache = join(tmp, 'npm-cache');
   let file: string, args: string[];
   // 每件活一个专用临时目录，选手只能写它（见 sandbox.ts 的 jobTmpDir）。
   await mkdir(tmp, { recursive: true });
@@ -113,12 +119,12 @@ export async function command(job: Job, text: string, project: Isolated): Promis
     file = codexPath();
     const deepseek = vendorOf(job.who) === 'deepseek';
     const disable = ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories'];
-    args = ['exec', '--ignore-user-config', ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : []), '-c', codexEnvPolicy(deepseek ? KEY_VARS : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
+    args = ['exec', '--ignore-user-config', ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : []), '-c', codexEnvPolicy(deepseek ? KEY_VARS : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
   } else {
-    file = process.execPath;
+    file = nodeRunner().file;
     // 替身模式仍传入完整参数；无需安装或执行真正的 srt。
     const srt = process.env.XAGENTS_FAKE_WORKER ? resolve(process.env.XAGENTS_SRT || join(toolRoot, 'node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js')) : await srtPath();
-    args = [srt, '--settings', join(dir, 'sandbox.json')];
+    args = [...(network ? [join(runtime ?? join(dir, 'runtime'), 'src/core/srt-open.ts')] : []), srt, '--settings', join(runtime ?? dir, 'sandbox.json')];
     // srt 用 CLAUDE_CODE_TMPDIR 给选手设 TMPDIR；不设就是公用的 /tmp/claude（模板里已禁写）。
     env.CLAUDE_CODE_TMPDIR = tmp;
     if (isolationOf(job.who) === 'grok') {
@@ -138,10 +144,10 @@ export async function command(job: Job, text: string, project: Isolated): Promis
   }
   if (process.env.XAGENTS_FAKE_WORKER) {
     await access(resolve(process.env.XAGENTS_FAKE_WORKER));
-    file = process.execPath;
+    file = nodeRunner().file;
     args = [resolve(process.env.XAGENTS_FAKE_WORKER), ...args];
   }
-  return { file, args, env, ...(vendorOf(job.who) === 'deepseek' ? { unset: KEY_VARS } : {}), ...(isolationOf(job.who) === 'cursor' ? { login: 'cursor' as const } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
+  return { file, args, env, ...(unset.length ? { unset } : {}), ...(isolationOf(job.who) === 'cursor' ? { login: 'cursor' as const } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
 }
 // Grok 的登录每 6 小时换一次新令牌、旧令牌作废；写回 ~/.grok/auth.json 要在 ~/.grok 里新建临时文件，选手隔离里做不到。
 // 所以派 Grok 活前先在隔离外刷新：剩不到 5 小时就换新，选手干活期间用不着自己刷新（跑着的选手会直接用磁盘上的新令牌）。
@@ -165,4 +171,33 @@ export async function result(job: Job) {
   await new LogTail().read(join(jobDir(job.id), 'run.log'), parser);
   parser.finish();
   return parser.result(await readOptional(join(jobDir(job.id), 'final.md')));
+}
+// 续接（群与小队共用）：准备阶段先按当前平台生成完整运行包，并确认旧约束没有减少；
+// 这里仅在这一轮新生成的 command 上改续接参数，不负责生成隔离规则。
+// Codex：codex exec resume <其余参数> <会话号> -（exec resume 不认 -C，去掉它；看管进程本来就在副本目录里启动）。
+// Grok：在 --prompt-file 前加 --resume <会话号>，提示词换成这一轮的文件。Cursor 还没实测续接，不支持。
+export const SESSION_RE = /^[0-9a-f][0-9a-f-]{7,63}$/i;
+export const RESUME_PROMPT_RE = /^prompt-r([2-9]|[1-9][0-9])\.md$/;
+export function resumeCommand(job: Pick<Job, 'id' | 'who' | 'command' | 'session' | 'resume'>): Command {
+  const cmd = job.command;
+  if (!cmd) throw new Error('没有保存第 1 轮的选手命令，没法续接。');
+  if (!job.session || !SESSION_RE.test(job.session)) throw new Error('没有取到这位选手的会话号，没法续接。');
+  if (!job.resume || !RESUME_PROMPT_RE.test(job.resume.prompt)) throw new Error('续接的提示词文件名不对。');
+  const args = [...cmd.args], prompt = join(jobDir(job.id), job.resume.prompt);
+  const isolation = isolationOf(job.who);
+  if (isolation === 'codex') {
+    const exec = args.indexOf('exec');
+    if (exec < 0 || args.at(-1) !== '-' || args[exec + 1] === 'resume') throw new Error('第 1 轮的 Codex 命令不是预期的样子，没法续接。');
+    const opts = args.slice(exec + 1, -1), c = opts.indexOf('-C');
+    if (c >= 0) opts.splice(c, 2);
+    return { ...cmd, args: [...args.slice(0, exec), 'exec', 'resume', ...opts, job.session, '-'] };
+  }
+  if (isolation === 'grok') {
+    const p = args.indexOf('--prompt-file');
+    if (p < 0 || args.includes('--resume')) throw new Error('第 1 轮的 Grok 命令不是预期的样子，没法续接。');
+    args[p + 1] = prompt;
+    args.splice(p, 0, '--resume', job.session);
+    return { ...cmd, args };
+  }
+  throw new Error('Cursor 还没实测续接，暂时不能当搭档。');
 }

@@ -11,6 +11,7 @@ import { cursorStateDir, grokSessionDirs, jobTmpDir } from './sandbox.ts';
 import { isolationOf } from './roster.ts';
 import { moveToTrash } from './trash.ts';
 import { killGroup, reconcileSafely } from './runner.ts';
+import { guardTeamJob } from './team.ts';
 import { collectRealSteps } from './real.ts';
 
 export async function collect(id: string, report: (text: string) => void = () => {}) {
@@ -62,7 +63,11 @@ export async function stop(id: string) {
 export async function clean(id?: string, done = false, report: (text: string) => void = () => {}) {
   let jobs = await selectJobs(id);
   if (done) jobs = jobs.filter(j => !active(j) && !j.cleaned && j.decision?.kind !== 'adopt');
-  // 先检查整批，避免一半删掉后才发现另一半还在跑。
+  return cleanJobs(jobs, report);
+}
+// 清一组任务：先检查整批，避免一半删掉后才发现另一半还在跑。小队 running 时先拦下它的队员。
+export async function cleanJobs(jobs: Job[], report: (text: string) => void = () => {}) {
+  for (const j of jobs) await guardTeamJob(j);
   for (const j of jobs) checkClean(j);
   checkRated(jobs);
   for (const job of jobs) {
@@ -88,11 +93,13 @@ export async function clean(id?: string, done = false, report: (text: string) =>
             }
           }
           // 真实路径要在副本删除前解析；失败重试时沿用已保存的路径。
-          if (isolationOf(j.who) === 'grok' && !j.pendingGrokSessions) j.pendingGrokSessions = await grokSessionsOf(j.worktree);
-          await removeWorktree(j);
-          j.worktreeRemoved = new Date().toISOString();
+          if (!j.chat) {
+            if (isolationOf(j.who) === 'grok' && !j.pendingGrokSessions) j.pendingGrokSessions = await grokSessionsOf(j.worktree);
+            await removeWorktree(j);
+            j.worktreeRemoved = new Date().toISOString();
+          }
         }
-        const sessions = j.pendingGrokSessions ?? (isolationOf(j.who) === 'grok' ? await grokSessionsOf(j.worktree) : []);
+        const sessions = j.chat ? [] : j.pendingGrokSessions ?? (isolationOf(j.who) === 'grok' ? await grokSessionsOf(j.worktree) : []);
         const remaining = [];
         for (const path of sessions) if (await exists(path)) remaining.push(path);
         // 移不进废纸篓只提醒，不挡住清理，否则任务会一直清不掉。
@@ -109,7 +116,7 @@ export async function clean(id?: string, done = false, report: (text: string) =>
       }
     });
     if (failure) throw failure.error;
-    report(`已清理副本和分支，任务记录保留：${job.id}${note}`);
+    report(`${job.chat ? '已清理成员任务，群副本和分支保留' : '已清理副本和分支，任务记录保留'}：${job.id}${note}`);
   }
   await reconcileSafely();
 }

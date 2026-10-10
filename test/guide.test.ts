@@ -111,7 +111,8 @@ test('xagents guide：先是手册全文，再是“这台机器现在的情况�
   assert.match(appendix, /在跑或排队：1 件/);
   assert.match(appendix, /设置里同时最多 2 件/);
   assert.match(appendix, /做完了、还没验收：1 件/);
-  assert.match(appendix, /验收过、还没拍板：1 件/);
+  assert.match(appendix, /验收过（或不用验）、还没拍板：1 件/);
+  assert.doesNotMatch(appendix, /验收没过、还没处理/);
   assert.match(appendix, /等你照办或回复的事.*：3 条/);
   const inbox = await c.cli(['inbox']); assert.equal(inbox.code, 0, inbox.stderr);
   assert.equal(inbox.stdout.trim().split('\n').length - 1, 3, '和 xagents inbox 表里的行数一致');

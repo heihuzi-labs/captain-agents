@@ -1,3 +1,4 @@
+import { externalEnvironment } from './node-runtime.ts';
 import { spawn } from 'node:child_process';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm } from 'node:fs/promises';
@@ -58,7 +59,7 @@ export async function installIcons(dir = paths().icons, apps = process.env.XAGEN
       const tmp = join(dir, `.${name}.${randomUUID()}.png`);
       try {
         await new Promise<void>((resolve, reject) => {
-          const child = spawn(sips, ['-s', 'format', 'png', '-Z', '96', input, '--out', tmp], { stdio: 'ignore' });
+          const child = spawn(sips, ['-s', 'format', 'png', '-Z', '96', input, '--out', tmp], { stdio: 'ignore', env: externalEnvironment() });
           child.on('error', reject);
           child.on('close', code => code === 0 ? resolve() : reject(new Error(`sips 退出码 ${code}`)));
         });

@@ -102,7 +102,7 @@ test('没有文件变化也定期重读；失败后恢复，关闭时清理计�
       () => Object.assign(new EventEmitter(), { close: closed }) as unknown as FSWatcher);
     await vi.advanceTimersByTimeAsync(5000); expect(error).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(5000); expect(publish).toHaveBeenCalledOnce();
-    close(); expect(closed).toHaveBeenCalledTimes(3); expect(vi.getTimerCount()).toBe(0);
+    close(); expect(closed).toHaveBeenCalledTimes(5); expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(5000); expect(read).toHaveBeenCalledTimes(2);
   } finally {
     close?.(); if (previous === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = previous;
@@ -124,6 +124,25 @@ test('菜单栏待处理数量与共享判定一致，唯一运行任务变失�
     expect(notices(view)).toEqual([]);
   } finally { tray.destroy(); }
   expect(vi.getTimerCount()).toBe(0);
+});
+
+test('小队还在推进时，没有文件变化也定期重读', async () => {
+  const home = await directory(), previous = process.env.XAGENTS_HOME; process.env.XAGENTS_HOME = home;
+  vi.useFakeTimers();
+  const read = vi.fn(async () => {
+    const view = fixtureView();
+    view.teams = [{ id: 'pair', mode: 'pair', project: '测试', title: '题目', summary: '说明', kind: '实现', state: 'running', reason: null, note: null, round: 1, maxRounds: 3, phase: 'write', maxMinutes: 60, started: '', ended: null, writer: null, reviewer: null, writerWho: 'grok', reviewerWho: 'deepseek', items: [], lastLine: null, channel: [], pendingOwner: 0, tasks: [] }];
+    return view;
+  });
+  let close: (() => void) | undefined;
+  try {
+    close = await watchRegistry(() => true, vi.fn(), vi.fn(), read,
+      () => Object.assign(new EventEmitter(), { close: vi.fn() }) as unknown as FSWatcher);
+    await vi.advanceTimersByTimeAsync(5000); expect(read).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(5000); expect(read).toHaveBeenCalledTimes(2);
+  } finally {
+    close?.(); if (previous === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = previous;
+  }
 });
 
 test('没有活在跑或排队时，不定时重读', async () => {

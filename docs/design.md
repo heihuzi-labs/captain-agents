@@ -21,7 +21,7 @@
 
 - **不替负责人做判断。** 选派给谁、审改动、判真假、决定合并，仍然由负责人来做。工具只负责执行和记录。
 - **不自动合并、不自动提交。** 提交和合并只有负责人手动做，而且按各项目自己的规矩（例如有的项目要先在桌面窗口里验收，主人点头后才合并）。
-- **不在界面里派活、写题目、合并代码。** 桌面应用里主人只能看进度、记下决定（用这份、不要了、重做）、停下在跑的活、给负责人留言；派活、验收、合并、清理都走命令，由负责人来做。旧网页进度页和 `xagents board` 命令已下线。
+- **不在界面里写题目、合并代码；派活只有一处例外。** 2026-10-10 起主人可以在“协作”页的项目群里 @ 选手直接派活（[design-team.md](design-team.md) 第 16 节），底线照旧由平台强制执行；除此之外： 桌面应用里主人只能看进度、记下决定（用这份、不要了、重做）、停下在跑的活、给负责人留言；派活、验收、合并、清理都走命令，由负责人来做。旧网页进度页和 `xagents board` 命令已下线。
 
 ## 3. 放在哪
 
@@ -63,6 +63,7 @@ xagents connect                      看四家 AI 接入状态
 xagents connect <claude|codex|grok|cursor> [--undo]  写入常驻规矩；--undo 撤下，原文件备份到废纸篓
 xagents selfcheck                     隔离自检
 xagents verify <任务号>               在隔离外跑这个项目的全套验收，结果记进任务
+xagents verify <任务号> --skip "为什么不用验收"  不跑验收命令，只记下理由
 xagents real <任务号> --pass|--fail --note "一句说明" [--shot 截图路径]…  记录真实验收
 xagents real <任务号> --skip "为什么不需要"  写明不需要真实验收的理由
 xagents adopt|drop <任务号> [--note 给主人看的结论]    记下“采用”或“放弃”，不替你合并
@@ -80,6 +81,7 @@ xagents profiles [--json]             按“选手 × 普通/快速版 × 活的
 - 隔离自检没过不能派活；`run --force` 只对额度有效，不能跳过自检，也不能绕过主人在设置里对选手的限制。
 - 类型只有修复、实现、审查、调研、测量；默认“实现”，起点默认 `main`，`--summary` 必填（1–200 字）。
 - 验收一律用 `xagents verify`：结果记进任务记录，“各家表现”里的合格率只认这个记录。
+- **验收的采用把关**（2026-10-10 主人定，`verify.ts` 的 `verifyState`、`adoptBlockedByVerify`）：派活时能改文件的活（`mode` 为 `workspace-write`），负责人采用前必须有通过的验收记录，或用 `verify --skip "理由"`（1–200 字）写明为什么不验；验收没过、或没验过，`adopt` 一律拒绝，`--merged` 也一样。只读的活不受此把关；主人拍板只是记下，负责人照办时仍要过这道关。判断只看派活时的模式，不看“改了几个文件”（那个数在负责人提交后会归零）。副本清理后不能再跑验收，只能写理由。再跑一次验收，免验理由让位给真实结果；成员开始新一轮时，它和验收结果一起归档到上一轮。`xagents status` 的“验收”一栏和手册末尾的件数读同一个判断。
 - `--real` 标记真实验收；报告中的 `## 真实环境检查步骤` 会追加到记录。负责人采用前必须通过或写明跳过理由；主人拍板不受此把关。`real` 只用于已结束任务，说明 1–200 字且不能含控制字符；最多 10 张 PNG/JPEG/WebP 截图，每张最多 10 MB，重编号放到任务的 `shots/`，重做时旧截图移到 `shots-old/` 保留。
 - `rate` 只接受 done、failed、stopped、lost；分数为 1–5 整数，分数和非空外部原因至少填一个。评语和外部原因各最多 200 字；标签最多 8 个，每个 1–12 字，去重；文字不得含控制字符。每次提交替换整份评价，旧版按时间顺序保留最近 5 版。批量清理会先列出全部已拍板但未评价的任务并拒绝；没拍板的照旧可清，`clean --done` 仍保留已采用任务。
 - `profiles` 包含已清理任务的历史，只汇总已结束任务；带分数的计入 `rated`，带外部原因的不计入平均分。返工比例是带分数且有“需要返工”标签的件数 / `rated`；优点、毛病按当前评价里的标签计次，各取前 3，同次数按中文标签排序；其他标签不混入两类。最近评语按评价时间倒序取有 `good` 或 `improve` 的 5 件，不展开旧版。`rated < 3` 提示“样本少，仅供参考”。平均用时复用 `stats`（仅 done，扣休眠）。
@@ -162,6 +164,7 @@ cursor-state/   Cursor 搬过来的配置和数据（只有 Cursor 活才有）�
 | `usage` | 用了多少字：`read`（输入）、`cached`（缓存命中）、`out`（输出），Cursor 另有 `cacheWrite`，从各家输出里读 |
 | `quota_before`、`quota_after` | 派出前后的额度快照，`stats` 据此估算每类活的额度花费 |
 | `verify` | 验收结果：`ok`、`at`、`seconds`、每一步的命令 / 是否通过 / 摘要 |
+| `verifySkip` | 负责人写明不跑验收命令的理由：`reason`、`at`；不算进合格率 |
 | `decision` | 采用 / 放弃：`kind`（`adopt` / `drop`）、`note`（给主人看的结论，≤200 字）、`at`、`by`（`owner` 主人 / `lead` 负责人；旧记录缺这项按 `lead`）、`handled`（主人拍的板，负责人照办后记下时间） |
 | `rating` | 负责人评价：`score?`（1–5）、`good?`、`improve?`、`tags`、`external?`、`at`、`by: lead`；有外部原因不计平均分；`previous?` 保留最近 5 版完整旧评价，每版不嵌套历史 |
 | `realCheck` | 真实验收：`needed`、`steps`；`result` 含 `ok`、`note`、`shots`（任务目录 `shots/` 下文件名）、`at`、`by: lead`；或 `skipped` 含 `reason`、`at`。看板仅暴露截图张数，不暴露路径 |
@@ -236,6 +239,8 @@ realCheck: { needed: boolean; steps: string[]; result: { ok: boolean; note: stri
 
 以下全部来自这次实测，每条都有探针结果作依据。
 
+下表“能连网”一列是总开关关着时的行为（缺省关）。主人只能在桌面应用里打开总开关，所有项目随之允许联网，网络完全不限（含本机端口），文件和密钥规则不变，见 [design-network.md](design-network.md)。开着时 Codex 只加 network={enabled=true}，Grok / Cursor 经 srt 库接口省略网络设置；不做联网专项自检。
+
 | 选手 | 启动方式 | 隔离 | 能写 | 能连网 |
 |---|---|---|---|---|
 | Codex | `codex exec --ignore-user-config`，关掉插件、连接、操作屏幕、操作浏览器、钩子、记忆；`TMPDIR` 指向任务的 `tmp/` | 自带权限档 `xa`，继承 `:workspace`（`/tmp`、`$TMPDIR` 改只读）；只读题继承 `:read-only` | 副本、任务的 `tmp/` | 命令一律不能联网，本机端口也不行 |
@@ -243,13 +248,13 @@ realCheck: { needed: boolean; steps: string[]; result: { ok: boolean; note: stri
 | Cursor | `cursor-agent -p --force --trust`；只读题用 `--mode ask`；配置和数据目录搬到任务目录 | 外层 `srt`（它自带的实测无效） | 副本、任务的 `tmp/`、任务目录下的 `cursor-state/` | 只能连 Cursor 自家服务器 |
 
 所有选手都遵守：
-- **不开放本机端口。** 本机上常有浏览器调试口、代理软件、API 转发服务在监听。
+- **总开关关着时不开放本机端口。** 本机上常有浏览器调试口、代理软件、API 转发服务在监听。
 - 各家隔离都挡住读取：`~/.ssh`、`~/.npmrc`、包括自身在内的登录文件、DeepSeek 的登录文件夹（登记处下的 `deepseek/`）、设置里额外禁读的目录（`config.json` 的 `denyReadHome`）、项目的 `.data/`、`~/.claude`、`~/.aws`、`~/.config/gh`。（Grok、Cursor 整个跑在外层隔离里，自己的登录文件必须能读，否则启动不了；挡住的是别家的。）
 - **系统钥匙串一律读不到**：三种隔离都禁读 `~/Library/Keychains` 和 `/Library/Keychains`。srt 固定放行钥匙串服务、设置里收不回，读得到钥匙串文件就能用 `security` 不弹窗地读出主人存的密码；挡住文件就读不出、也列不出条目。Cursor 的登录令牌本来存在钥匙串里，所以由看管进程启动 Cursor 前在隔离外读出，只放进这次 Cursor 进程的环境（`CURSOR_AUTH_TOKEN`，不写进任务记录），并设 `AGENT_CLI_CREDENTIAL_STORE=memory` 让它不去写钥匙串；派 Cursor 活前先查一次，没登录或剩不到 2 小时就不派。依据是 [2026-10-02 钥匙串实测](research/keychain-2026-10-02.md)。
 - **各家的全局配置对选手一律只读**：`~/.cursor`、`~/.local/share/cursor-agent`、`~/.grok`、`~/.claude`、`~/.agents`、`~/.codex` 都写不进去。这些地方放着钩子、技能、规矩、外部连接、插件、管理员配置和程序本身，主人之后在隔离外打开 Cursor 或 Grok 就会被加载，钩子还会以主人的账号直接执行、没有确认弹窗；选手能写就等于能逃出隔离。所以选手能写的只有：副本、这件活自己的临时目录（见下一条），外加各家必需的一处：Cursor 用 `CURSOR_CONFIG_DIR`、`CURSOR_DATA_DIR` 把配置、聊天记录、项目状态和信任标记搬到任务目录（`xagents clean` 时删掉）；Grok 只放开本副本自己的会话文件夹（按副本路径转义算出，带通配符 `* ? [ ]` 的写法不放开，路径不规范就不派）。Grok 的登录刷新要写 `~/.grok`，所以派 Grok 活前由平台在隔离外先刷新（剩不到 5 小时就换新，刷新报错就不派），选手干活期间一般用不着刷新。依据是 [2026-09-30 实测](research/global-config-writes-2026-09-30.md)。
 - **公用临时目录也不许写，每件活一个专用的 `tmp/`**（任务目录下，`xagents clean` 时删掉）。`/private/tmp` 下有负责人（Claude Code）会话的草稿和后台任务输出（`/private/tmp/claude-<用户号>`），`/private/var/folders` 下有别的程序的临时文件和套接字，选手能写就能伪造负责人读到的输出、影响别的程序。做法：Grok、Cursor 的模板只放开 `__TMP__`（任务的 `tmp/`），并显式禁写 srt 自己默认放开的 `/private/tmp/claude` 和 `~/.npm/_logs`；启动 srt 时设 `CLAUDE_CODE_TMPDIR=<任务的 tmp>`，srt 据此给选手设 `TMPDIR`（不设就是公用的 `/tmp/claude`）。Codex 的权限表把 `:slash_tmp`、`:tmpdir` 都设为只读、任务的 `tmp/` 写明可写，启动时 `TMPDIR` 也指向它。硬链接也挡住了：选手不能在可写目录里给外面的文件建硬链接、借此改它。共同规则 `rules.md` 告诉选手临时文件写 `$TMPDIR`：Grok 的系统提示叫模型把草稿写到 `/tmp/`，“除非用户或项目规矩另指地方”；macOS 自带的 `mktemp` 不带 `-p` 时优先用系统给用户的临时目录、不看 `TMPDIR`。依据是 [2026-09-30 临时目录实测](research/tmp-writes-2026-09-30.md)。
 - **选手看不到主人的密钥变量，也读不到终端配置文件。** 名字带 `KEY`、`TOKEN`、`SECRET`、`PASS`、`CREDENTIAL`、`AUTH`、`COOKIE`、`PRIVATE`（不分大小写）的环境变量一律不交给选手：启动选手时先从继承的环境里去掉（三家都是，Codex 主进程和 srt 也拿不到）；Codex 再带 `shell_environment_policy.exclude` 同一组通配作双保险（它默认不过滤）。各家程序自己的登录都走登录文件，不靠这些变量，所以不留例外；平台给选手设的变量名都不带这些词。主人常把钥匙 `export` 在 `~/.bashrc` 这类文件里，Grok 跑命令用登录式 bash 会自动读它们，所以终端配置文件和命令历史（`~/.bashrc`、`~/.bash_profile`、`~/.profile`、`~/.zshrc`、`~/.zshenv`、`~/.zprofile`、`~/.zlogin`、各家历史、`~/.config/fish` 等）三种隔离一律禁读；bash 因此每条命令前多一行“Operation not permitted”，命令照常跑。规则在 `src/core/env.ts` 和 `sandbox.ts` 的 `SHELL_FILES`，依据是 [2026-10-02 实测](research/worker-env-2026-10-02.md)。
-- **常见的登录凭据文件也读不到。** `~/.netrc`、`~/.git-credentials`、`~/.config/git/credentials`、`~/.docker`、`~/.dockercfg`、`~/.kube`、`~/.config/gcloud`、`~/.azure`、`~/.gnupg`、`~/.config/op`、`~/.config/hub`、`~/.config/glab-cli`、`~/.ollama`、`~/.pypirc`、`~/.gem/credentials`、`~/.cargo/credentials(.toml)`、`~/.terraform.d/credentials.tfrc.json`、`~/.pgpass`、`~/.my.cnf`、`~/.vault-token`、Hugging Face 的 `token` 和 `stored_tokens`，三种隔离一律禁读。选手不联网，用不着这些；三家程序启动和 git 本地操作都不读它们。`.cargo`、`.gem`、`.terraform.d` 里还有程序和缓存，只禁读凭据那个文件。整个 `~/.docker` 禁读后 docker 的插件命令（`docker compose`、`docker buildx`）在隔离里跑不了，docker 的后台连接口也在里面，选手本来就不该指挥 docker。每次运行都要读的配置（`~/.terraformrc`、`~/.m2/settings.xml`、`~/.gradle/gradle.properties`、`~/.yarnrc.yml`、Poetry 的 `auth.toml`）不在默认名单上，禁读会让程序直接报错；里面放了钥匙的，在设置的“额外禁读的家目录位置”里加。规则在 `sandbox.ts` 的 `CREDENTIAL_FILES`（和 `SHELL_FILES` 合成一张家目录禁读名单，Codex 权限表和 srt 模板共用），依据是 [2026-10-02 实测](research/credential-files-2026-10-02.md)。
+- **常见的登录凭据文件也读不到。** `~/.netrc`、`~/.git-credentials`、`~/.config/git/credentials`、`~/.docker`、`~/.dockercfg`、`~/.kube`、`~/.config/gcloud`、`~/.azure`、`~/.gnupg`、`~/.config/op`、`~/.config/hub`、`~/.config/glab-cli`、`~/.ollama`、`~/.pypirc`、`~/.gem/credentials`、`~/.cargo/credentials(.toml)`、`~/.terraform.d/credentials.tfrc.json`、`~/.pgpass`、`~/.my.cnf`、`~/.vault-token`、Hugging Face 的 `token` 和 `stored_tokens`，三种隔离一律禁读，允许联网也不放开。选手用不着这些；三家程序启动和 git 本地操作都不读它们。`.cargo`、`.gem`、`.terraform.d` 里还有程序和缓存，只禁读凭据那个文件。整个 `~/.docker` 禁读后 docker 的插件命令（`docker compose`、`docker buildx`）在隔离里跑不了，docker 的后台连接口也在里面，选手本来就不该指挥 docker。每次运行都要读的配置（`~/.terraformrc`、`~/.m2/settings.xml`、`~/.gradle/gradle.properties`、`~/.yarnrc.yml`、Poetry 的 `auth.toml`）不在默认名单上，禁读会让程序直接报错；里面放了钥匙的，在设置的“额外禁读的家目录位置”里加。规则在 `sandbox.ts` 的 `CREDENTIAL_FILES`（和 `SHELL_FILES` 合成一张家目录禁读名单，Codex 权限表和 srt 模板共用），依据是 [2026-10-02 实测](research/credential-files-2026-10-02.md)。
 - **不准提交代码、不准用 `git stash`。** 副本的提交记录库在隔离外面，想提交也写不进去。
 - **Codex 禁读缺口已堵上：** 启动和自检共用 `permissions.xa` 权限表，禁读研究推荐路径与项目 `denyReadExtra`（仓库、副本各一份），仅将 `~/.codex/tmp` 重新开放为可读。依据是 [2026-09-29 权限研究](research/codex-permissions-2026-09-29.md)。禁止混用 `-s` 或 `sandbox_mode`，否则权限档会失效；真实 `codex exec` 仍须负责人验收。
 
@@ -262,7 +267,7 @@ realCheck: { needed: boolean; steps: string[]; result: { ok: boolean; note: stri
 - **DeepSeek**：暂不查。按用量扣钱，没有百分比可比，也不占 Codex 的周额度、不受 Codex 停派线影响；钱用完时 DeepSeek 自己报错。
 - **Cursor**：模拟终端打开交互界面，敲 `/usage`，分别读出“自家模型池”和“其他模型池”的用量。在隔离外跑，工作目录是 `~/.xagents/cache/cursor-usage-*` 临时目录，同派活一样用 `CURSOR_CONFIG_DIR`、`CURSOR_DATA_DIR` 把配置和项目状态（含信任标记）搬进这个临时目录，查完一起删，不在 `~/.cursor/projects` 留目录（2026-09-30 实测：换目录后仍是登录状态，`/usage` 照常读出）。
 
-规则：派出前先查。某家本期已用到设置里的 `limits.quotaStop` 就拒绝派给它（缺省 80%，可选 50%、60%、70%、80%），确实要派得加 `--force`。两条派活限制都在设置 → 选手与模型 → 派活限制调整，`workers` 和 `guide` 会显示当前设置值。前后两次快照都记进任务，`stats` 据此估算每类活大概花多少额度。实测参考：Codex 或 Grok 做一题约占每周额度的 0.3%，Cursor + Grok 约占当月自家模型池的 0.3%，Cursor + Opus 约占当月其他模型池的 3.7%。
+规则（2026-10-10 主人决定）：取消额度停派线“任何人都不能关”的底线，增加 90% 和“不设限”。派出前先查；`limits.quotaStop` 可选 50%、60%、70%、80%、90% 或不设限，缺省仍为 80%。存为 `50 | 60 | 70 | 80 | 90 | null`，`null` 明确表示不设限；旧设置照常读取，不迁移、不改写。设置百分比时，用到该线就拒绝；不设限时不按已用百分比拒绝，但厂家自己报告已触顶时仍拒绝。`--force` 的含义不变，只跳过这两项额度检查，不跳过其他限制。两条派活限制只由主人在桌面设置 → 选手与模型 → 派活限制调整，负责人和选手都不能修改，命令行不提供改设置的入口。`workers` 和 `guide` 会显示当前设置值。前后两次快照都记进任务，`stats` 据此估算每类活大概花多少额度。实测参考：Codex 或 Grok 做一题约占每周额度的 0.3%，Cursor + Grok 约占当月自家模型池的 0.3%，Cursor + Opus 约占当月其他模型池的 3.7%。
 
 ## 9. 项目设置
 

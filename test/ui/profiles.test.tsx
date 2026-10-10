@@ -16,7 +16,7 @@ const AT = new Date(2026, 8, 29, 14, 44).toISOString(), EARLIER = new Date(2026,
 async function show(v: View) {
   window.xa = fixtureBridge({ getView: vi.fn(async () => v) });
   render(<App />);
-  await screen.findByRole('tablist', { name: '页面' }); fireEvent.keyDown(document, { key: '3', metaKey: true });
+  await screen.findByRole('tablist', { name: '页面' }); fireEvent.keyDown(document, { key: '4', metaKey: true });
   await screen.findByRole('heading', { name: '表现', level: 1 });
 }
 // 第 row 位选手（按选手名单顺序、只算表格里出现的）在某一类活下的那一格。

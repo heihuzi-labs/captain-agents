@@ -182,4 +182,4 @@ DeepSeek 官方开源的 DeepSeek Harness（`dsh`，[deepseek-ai/deepseek-harnes
 1. 范围：先做规矩文件 + `xagents connect` + 界面；拦截（4.3）等第一步验收后再议。
 2. Cursor：等隔离漏洞修好再接入（2026-09-30 已修好并实测命令行，Cursor 改为可以接入）。
 3. 实测时负责人可以往真实配置里写（只动本设计列出的文件，写前备份到废纸篓，测完按验收结果保留或撤下）。
-4. 选手联网：先不做，选手继续断网。
+4. 选手联网：先不做，选手继续断网。（2026-10-09 主人改为按项目开关，三档：关、白名单、全开，见 [design-network.md](design-network.md)。）

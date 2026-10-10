@@ -68,7 +68,7 @@
 |---|---|---|---|
 | `effortCeiling` | `"xhigh"` | 允许的最高推理强度；不拉满。允许的最低强度是 `medium`（不开 `low`），所以只有 `medium`、`high`、`xhigh` 三档 | 写死在 `roster.ts` 的底线里，不读设置 |
 | `cursorModelFamilies` | `["claude", "gpt", "grok"]` | Cursor 里允许使用的模型家族 | 写死在 `roster.ts` 的底线里，不读设置 |
-| `quotaStopPercent` | `80` | 某家本期额度用到这个比例，就不再派给它 | 已读设置 `limits.quotaStop`（顶层 `limits`）；只许 50、60、70、80，`--force` 可跳过 |
+| `quotaStopPercent` | `80` | 某家本期额度用到这个比例，就不再派给它 | 已读设置 `limits.quotaStop`（顶层 `limits`）；主人可选 50、60、70、80、90 或不设限（`null`），缺省 80；不设限仍拦厂家触顶，`--force` 可跳过两项额度检查，负责人和选手不能改设置 |
 | `requireSummary` | `true` | 派活时必须写给主人看的“要做什么” | 写死为必填；不读设置 |
 | `requireRating` | `true` | 已经拍板的任务，在打分之前不能清理 | 未实现（还没有评分） |
 | `maxRunning` | `12` | 同时在跑加排队的活的上限 | 已读设置 `limits.maxRunning`（顶层 `limits`）；只许 1–12，环境变量 `XAGENTS_MAX_RUNNING` 只能收紧 |

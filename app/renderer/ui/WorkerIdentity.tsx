@@ -32,10 +32,11 @@ export const WorkerIcon = memo(function WorkerIcon({ name, badge, size = 'md', t
 
 // 文字身份只有一行：图标已经代表厂家，厂家名不写成文字；iconOnly 只画图标。
 export type Detail = 'model' | 'setting' | 'full';
-export function workerMeta(model: string, effort: string | undefined, seconds: number | null | undefined, detail: Detail, fast?: boolean) {
+export function workerMeta(model: string, effort: string | undefined, seconds: number | null | undefined, detail: Detail, fast?: boolean, network?: boolean) {
   const parts = [model];
   if (detail !== 'model' && effort) parts.push(effortText(effort));
   if (detail !== 'model' && fast) parts.push('快速');
+  if (detail !== 'model' && network) parts.push('联网');
   if (detail === 'full' && seconds != null) parts.push(fmtDur(seconds, true));
   return parts.join(' · ');
 }
@@ -45,7 +46,7 @@ type Props = { workers: Workers; size?: Size; detail?: Detail; iconOnly?: boolea
 export const WorkerIdentity = memo(function WorkerIdentity({ workers, job, who, size = 'md', detail = 'setting', iconOnly = false, elapsed, end }: Props & { end?: ReactNode }) {
   const key = job ? job.who : who, w = workers[key];
   const seconds = job && !isOpen(job) ? job.seconds : null;
-  const meta = workerMeta(w.model, job?.effort, seconds, detail, job?.fast);
+  const meta = workerMeta(w.model, job?.effort, seconds, detail, job?.fast, !!job?.network);
   const duration = elapsed ?? (detail === 'full' && seconds != null ? fmtDur(seconds, true) : null);
   const full = `${w.name} · ${iconOnly ? w.model : meta}`;
   return <span className={'ident ident-' + size + (iconOnly ? ' ident-icon-only' : '')} title={full}>
@@ -55,6 +56,7 @@ export const WorkerIdentity = memo(function WorkerIdentity({ workers, job, who, 
         <span className="ident-model" title={w.model}>{w.model}</span>
         {detail !== 'model' && job?.effort && <Chip>{effortText(job.effort)}</Chip>}
         {detail !== 'model' && job?.fast && <Chip>快速</Chip>}
+        {detail !== 'model' && job?.network && <Chip title="能联网">联网</Chip>}
         {duration != null && <span className="ident-elapsed num">{duration}</span>}
       </span>
       {end != null && end !== false && <span className="ident-end">{end}</span>}

@@ -1,11 +1,16 @@
 import { readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isWho } from '../../src/core/roster.ts';
 import type { View, ViewJob } from '../../src/core/view-types.ts';
 import type { Destination } from '../shared/ipc.ts';
 import { hasCode, writeJson } from '../../src/core/fsx.ts';
-import { entries } from '../shared/attention.ts';
+import { entries, reasonText } from '../shared/attention.ts';
 
-export type Notice = { key: string; body: string; target: Destination };
+// title 只有小队通知带：系统通知的标题用题目，其余仍用应用名。
+export type Notice = { key: string; title?: string; body: string; target: Destination };
+export function noticeTitle(notice: Notice) {
+  return notice.title || '派活工作台';
+}
 const CONCLUSION = 40;
 
 function clip(note: string | undefined) {
@@ -39,9 +44,24 @@ function replyNotices(view: View): Notice[] {
   }
   return items;
 }
-// 只报负责人新拍的板和回复主人的留言。做完、出错、失联、验收没过不发。
+function teamNotices(view: View): Notice[] {
+  return view.teams.filter(team => team.state === 'lead').map(team => ({
+    key: `team:${team.id}:lead:${team.round}:${team.reason ?? ''}`,
+    title: team.title,
+    body: reasonText(team.reason),
+    target: { kind: 'team' as const, id: team.id },
+  }));
+}
+function chatNotices(view: View): Notice[] {
+  return (view.chats ?? []).flatMap(chat => chat.messages
+    .filter(m => m.kind === 'report' && isWho(m.from) && m.mentions.includes('owner'))
+    .map(m => ({ key: `chat:${chat.id}:owner:${m.id}`, title: chat.title,
+      body: `${isWho(m.from) ? view.workers[m.from]?.name ?? m.from : m.from}：${clip(m.text)}`,
+      target: { kind: 'chat' as const, id: chat.id } })));
+}
+// 负责人新拍的板、回复主人的留言，以及小队进入“等负责人”。做完、出错、任务失联、验收没过不发。
 export function notices(view: View): Notice[] {
-  return [...view.jobs.filter(j => j.decision?.by === 'lead').map(j => decisionNotice(view, j)), ...replyNotices(view)];
+  return [...view.jobs.filter(j => j.decision?.by === 'lead').map(j => decisionNotice(view, j)), ...replyNotices(view), ...teamNotices(view), ...chatNotices(view)];
 }
 type BatchMeta = { id: string; title: string; order: Map<string, number> };
 function batchesOf(view: View) {

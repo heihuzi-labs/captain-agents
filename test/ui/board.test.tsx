@@ -4,6 +4,7 @@ import { App } from '../../app/renderer/App.tsx';
 import { batchColors, BATCH_HUES, derive, fmtDur, fmtNum, human, loadPosition, navigation, savePosition, shareView, typicalTimes } from '../../app/renderer/lib/board.ts';
 import type { View } from '../../src/core/view-types.ts';
 import { fixtureJob as job, fixtureView as view, fixtureBridge } from './fixtures.tsx';
+import { RENDER_BUDGET, renderCost } from './render-cost.tsx';
 // 已完成列的项目卡默认折起；这里的测试要看卡里的行，先把用到的项目都记成“已展开”（折叠本身在“项目卡默认折起”那项测试里单独测）。
 const EXPAND_ALL = () => localStorage.setItem('xa.done-expanded', JSON.stringify(['派活工作台', '画布', 'P', '空项目', '默认项目', '未归类', 'xa', '<b>画布</b>']));
 beforeEach(EXPAND_ALL);
@@ -155,7 +156,7 @@ test('快捷键、筛选和视图记忆；localStorage 不可用时容错', asyn
   render(<App />);
   await screen.findByText('现在没有在跑的活');
   fireEvent.keyDown(document, {
-    key: '2',
+    key: '3',
     metaKey: true
   });
   fireEvent.click(screen.getByRole('button', {
@@ -166,7 +167,7 @@ test('快捷键、筛选和视图记忆；localStorage 不可用时容错', asyn
     filter: '研究'
   });
   fireEvent.keyDown(document, {
-    key: '3',
+    key: '4',
     metaKey: true
   });
   expect(screen.getByRole('heading', {
@@ -226,7 +227,8 @@ test('推送保留未变卡片引用；每秒只修改计时 DOM，静止卡片�
   expect(mutations).toHaveLength(0);
   observer.disconnect();
 });
-test('1000 条任务初次看板渲染不超过 1 秒', async () => {
+// 两条性能测试都不看墙上时钟（机器一忙就误报），量法和预算见 render-cost.tsx。
+test('1000 条任务初次看板渲染不超过预算（约 1 秒）', async () => {
   const v = view();
   v.jobs = Array.from({
     length: 1000
@@ -238,16 +240,13 @@ test('1000 条任务初次看板渲染不超过 1 秒', async () => {
     seconds: i < 30 ? null : 60
   }));
   bridge(v);
-  const start = performance.now();
-  render(<App />);
-  await waitFor(() => expect(screen.getByTestId('done').textContent).toBe('970'));
-  const elapsed = performance.now() - start;
-  console.info(`1000 条任务渲染：${Math.round(elapsed)} ms`);
-  expect(elapsed).toBeLessThan(1000);
+  const { ratio, note } = await renderCost(() => <App />, () => expect(screen.getByTestId('done').textContent).toBe('970'));
+  console.info(`1000 条任务渲染：${note}`);
+  expect(ratio, note).toBeLessThan(RENDER_BUDGET);
   // 已完成列一个项目一张卡、最多 5 行，列头的数字仍是 970。
   expect(document.querySelectorAll('.card:not(.card-batch)')).toHaveLength(30); expect(document.querySelectorAll('.done-row')).toHaveLength(5);
-});
-test('1000 条任务全部在跑时也在 1 秒内渲染', async () => {
+}, 60_000);
+test('1000 条任务全部在跑时渲染也不超过预算（约 1 秒）', async () => {
   const v = view();
   v.jobs = Array.from({
     length: 1000
@@ -256,13 +255,13 @@ test('1000 条任务全部在跑时也在 1 秒内渲染', async () => {
     seconds: null
   }));
   bridge(v);
-  const start = performance.now();
-  render(<App />);
-  await waitFor(() => expect(screen.getByTestId('running').textContent).toBe('1000'));
-  const elapsed = performance.now() - start;
-  console.info(`1000 条运行卡片渲染：${Math.round(elapsed)} ms`);
-  expect(elapsed).toBeLessThan(1000);
-});
+  const { ratio, note } = await renderCost(() => <App />, () => {
+    expect(screen.getByTestId('running').textContent).toBe('1000');
+    expect(document.querySelectorAll('.card:not(.card-batch)')).toHaveLength(1000);
+  });
+  console.info(`1000 条运行卡片渲染：${note}`);
+  expect(ratio, note).toBeLessThan(RENDER_BUDGET);
+}, 60_000);
 test('空额度池可显示；80% 黄、95% 红；图标失败退回字母', async () => {
   const v = view();
   v.jobs = [job('a', {
@@ -402,8 +401,8 @@ test('全应用不再出现已经不存在的功能的字样：看板、历史�
     fireEvent.keyDown(document, { key: 'Escape' });
   }
   act(() => opened?.({ kind: 'batch', id: 'b' })); expect(screen.getByRole('dialog').textContent).toContain('说明'); check('一批的弹窗'); fireEvent.keyDown(document, { key: 'Escape' });
-  fireEvent.keyDown(document, { key: '2', metaKey: true }); check('历史');
-  fireEvent.keyDown(document, { key: '3', metaKey: true }); check('各家表现');
+  fireEvent.keyDown(document, { key: '3', metaKey: true }); check('历史');
+  fireEvent.keyDown(document, { key: '4', metaKey: true }); check('各家表现');
   fireEvent.keyDown(document, { key: ',', metaKey: true }); await screen.findByLabelText('系统通知'); check('设置');
 });
 test('有未回复留言的卡片带小圆点；负责人回复或标记处理后消失，不写字', async () => {

@@ -79,7 +79,7 @@ const profile = (extra: Partial<Profile> = {}): Profile => ({ who: 'codex', fast
 async function showStats(v: View) {
   window.xa = fixtureBridge({ getView: vi.fn(async () => v) });
   render(<App />);
-  await screen.findByRole('tablist'); fireEvent.keyDown(document, { key: '3', metaKey: true });
+  await screen.findByRole('tablist'); fireEvent.keyDown(document, { key: '4', metaKey: true });
   await screen.findByRole('heading', { name: '表现', level: 1 });
 }
 const cells = () => [...document.querySelectorAll('.pcell')] as HTMLElement[];

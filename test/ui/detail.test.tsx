@@ -104,6 +104,8 @@ test('批次的选择与都不要，只处理已结束且未决定的成员', as
   fireEvent.click(screen.getAllByRole('button', { name: '用这份' })[0]);
   await waitFor(() => expect(window.xa.decide).toHaveBeenCalledWith('a', 'adopt'));
   expect(open).not.toHaveBeenCalled();
+  // 上一件活还没提交完的时候，按钮是禁用的，点它不会有任何反应；等按钮能点了再点。
+  await waitFor(() => expect(screen.getByRole('button', { name: '都不要' }).hasAttribute('disabled')).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: '都不要' }));
   expect(screen.getByRole('alertdialog').textContent).toContain('还在跑的活会继续');
   fireEvent.click(screen.getByRole('button', { name: '确认不要' }));
@@ -186,7 +188,10 @@ test('留言：往来列出且负责人写“负责人：”，发送清空输�
   fireEvent.change(input, { target: { value: '第二句\n换行' } }); fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
   await waitFor(() => expect(window.xa.comment).toHaveBeenCalledWith('one', '第二句\n换行'));
   window.xa.comment = vi.fn(async () => { throw new Error("Error invoking remote method 'xa:comment': Error: 任务已经变化"); });
-  fireEvent.change(input, { target: { value: '发不出去' } }); fireEvent.click(screen.getByRole('button', { name: '发送' }));
+  fireEvent.change(input, { target: { value: '发不出去' } });
+  // 上一条留言还在发的时候，发送按钮是禁用的，点它不会有任何反应；等按钮能点了再点。
+  await waitFor(() => expect(screen.getByRole('button', { name: '发送' }).hasAttribute('disabled')).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: '发送' }));
   expect((await screen.findByRole('alert')).textContent).toBe('没能发出：任务已经变化'); expect(input.value).toBe('发不出去');
   fireEvent.change(input, { target: { value: '文'.repeat(501) } });
   expect(screen.getByText('超出 1 字')).toBeTruthy(); expect(screen.getByRole('button', { name: '发送' }).hasAttribute('disabled')).toBe(true);

@@ -1,3 +1,4 @@
+import { nodeCommand, nodeInvocation, externalEnvironment } from './node-runtime.ts';
 import { mkdtemp, mkdir, rm, rmdir, writeFile, realpath, lstat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +15,8 @@ import { execute } from './verify.ts';
 import type { Executor } from './verify.ts';
 import type { Job } from './job.ts';
 import type { Project } from './project.ts';
+
+// 联网专项与原有的关档/文件自检分别缓存、分别判定；原有探针和版本不变。
 
 export type { Isolation };
 export type Probe = { name: string; outcome: 'allowed' | 'denied' | 'unknown'; reason: string; created?: { path: string; dir: boolean; ino: number | null }[] };
@@ -363,8 +366,8 @@ export async function codexProbe(job: Pick<Job, 'mode' | 'repo' | 'worktree'>, p
   const home = await mkdtemp(join(tmpdir(), 'xagents-codex-home-'));
   try {
     const file = process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
-    const env = exactEnv({ ...workerEnv(inherited, { CODEX_HOME: home, TMPDIR: tmp }), ...inner }, { ...process.env, ...inherited });
-    return await run(file, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '-c', codexEnvPolicy(), '--', process.execPath, script], job.worktree, 20000, undefined, env);
+    const env = exactEnv(externalEnvironment({ ...workerEnv(inherited, { CODEX_HOME: home, TMPDIR: tmp }), ...inner }), { ...process.env, ...inherited });
+    return await run(file, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '-c', codexEnvPolicy(), '--', ...nodeInvocation([script])], job.worktree, 20000, undefined, env);
   } finally { await rm(home, { recursive: true, force: true }); }
 }
 // 测试条目都用这个固定账号名，清理时按它找。
@@ -434,7 +437,8 @@ export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
               const settings = join(temp, `${isolation}.json`);
               await writeJson(settings, await sandbox(job, project, join(temp, `${isolation}-state`), tmp));
               // 和派活时一样：srt 拿到的环境先按 env.ts 去掉带密钥字样的变量。
-              r = await run(process.execPath, [await srtPath(), '--settings', settings, process.execPath, script], worktree, 20000, undefined, exactEnv(workerEnv(inherited, { CLAUDE_CODE_TMPDIR: tmp }), inherited));
+              const node = nodeCommand([await srtPath(), '--settings', settings, ...nodeInvocation([script])], workerEnv(inherited, { CLAUDE_CODE_TMPDIR: tmp }));
+              r = await run(node.file, node.args, worktree, 20000, undefined, exactEnv(node.env, inherited));
             }
             const lines = r.output.split('\n').filter(line => line.startsWith(marker));
             if (r.exit !== 0 || r.timedOut || r.signal || r.error || lines.length !== 1) throw new Error(r.error || (r.timedOut ? '探针超时' : `探针没有完整结果（退出码 ${r.exit}）`));

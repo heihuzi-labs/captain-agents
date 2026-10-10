@@ -1,4 +1,5 @@
 import type { Job } from '../core/job.ts';
+import { checkFor, verifyState } from '../core/verify.ts';
 import { awakeSeconds, sleptSeconds, describeTiming, timeSplit } from '../core/duration.ts';
 export function duration(seconds: number) {
   const n = Math.max(0, Math.round(seconds));
@@ -26,11 +27,18 @@ function elapsed(j: Job) {
   const start = Date.parse(j.started || j.created), now = Date.now();
   return awakeSeconds(j) ?? Math.max(0, (now - start) / 1000 - sleptSeconds(j.sleeps, start, now));
 }
+// 验收一栏：有记录写结果；写了免验理由的写“免验”；做完了、该验还没验的写“没验”（放弃的不算）；其余留空。
+function verifyCell(j: Job) {
+  const state = verifyState(j);
+  if (state === 'passed' || state === 'failed') return checkFor(j.verify)?.label ?? '—';
+  if (state === 'skipped') return '免验';
+  return state === 'missing' && j.state === 'done' && j.decision?.kind !== 'drop' ? '没验' : '—';
+}
 export function statusTable(jobs: Job[]) {
   const states = { queued: '等', running: '跑', done: '完', failed: '错', lost: '失', stopped: '停' };
   if (!jobs.length) return '没有符合条件的任务。';
   const rows = tableRows(['状态', '任务号', '选手', '模型·强度', '类型', '已用时', '验收', '最近动作', '说明'], jobs.map(j => [states[j.state], j.id, j.who, `${j.model}·${j.effort}${j.fast ? '·快速版' : ''}`, j.kind,
-    duration(elapsed(j)), '—', j.activity?.at(-1)?.text || '—', j.error || (j.cleaned ? '已清理' : '')]));
+    duration(elapsed(j)), verifyCell(j), j.activity?.at(-1)?.text || '—', j.error || (j.cleaned ? '已清理' : '')]));
   return rows.map((row, i) => {
     const timing = i ? describeTiming(timeSplit(jobs[i - 1])) : null;
     return timing ? `${row}\n  ${timing}` : row;

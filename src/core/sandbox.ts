@@ -33,7 +33,7 @@ export const keychainDirs = () => [join(homedir(), 'Library/Keychains'), '/Libra
 // 禁读后 bash 每条命令前多一行“Operation not permitted”的提示，命令照常跑；PATH 由派活进程传下去，不靠这些文件。
 export const SHELL_FILES = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_history',
   '.zshrc', '.zshenv', '.zprofile', '.zlogin', '.zsh_history', '.zsh_sessions', '.config/fish'];
-// 家目录下常见的登录和凭据文件：里面是主人在别家服务的密码、令牌、私钥。选手不联网，用不着它们；
+// 家目录下常见的登录和凭据文件：里面是主人在别家服务的密码、令牌、私钥。允许联网也不放开这些；
 // 三家程序启动、git 本地操作都不读（2026-10-02 实测，docs/research/credential-files-2026-10-02.md）。
 // 整个目录只放纯凭据目录；.cargo、.gem、.terraform.d、Hugging Face 缓存里还有程序和缓存，只禁读凭据那个文件。
 // 每次运行都要读的配置（~/.terraformrc、~/.m2/settings.xml、~/.gradle/gradle.properties、~/.yarnrc.yml、Poetry 的 auth.toml）不放：读不到程序直接报错。
@@ -51,7 +51,8 @@ const HOME_DENY = [...SHELL_FILES, ...CREDENTIAL_FILES];
 export type Isolated = Pick<Project, 'denyReadExtra'> & { denyReadHome?: string[] };
 // :workspace 自带 /tmp 和 $TMPDIR 可写：两者都改成只读，只有任务的 tmp 写明可写（启动方另把 TMPDIR 指向它）。
 // 实测不设 TMPDIR 时 :tmpdir 就是系统给本用户的临时目录，所以不能只靠环境变量把它指走。
-export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job)) {
+// 2026-10-09 主人决定网络完全不限：只加 enabled，不启用 network_proxy（实测报告 3.1）。
+export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job), network = false) {
   tomlString(job.repo); tomlString(job.worktree); tomlString(tmp); checkRoot(tmp, '临时目录');
   const rules = new Map<string, 'read' | 'write' | 'deny'>();
   for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...HOME_DENY, ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); rules.set(join(homedir(), path), 'deny'); }
@@ -68,7 +69,7 @@ export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | '
     rules.set(resolve(job.worktree, extra), 'deny');
   }
   const filesystem = [...rules].map(([path, permission]) => `${tomlString(path)}="${permission}"`).join(',');
-  return `permissions.xa={extends="${job.mode === 'read-only' ? ':read-only' : ':workspace'}",filesystem={${filesystem}}}`;
+  return `permissions.xa={extends="${job.mode === 'read-only' ? ':read-only' : ':workspace'}",filesystem={${filesystem}}${network === true ? ",network={enabled=true}" : ""}}`;
 }
 
 // 各家的全局配置目录对选手只读（依据 docs/research/global-config-writes-2026-09-30.md）：
@@ -109,8 +110,11 @@ function checkRoot(path: string, what: string) {
   }
 }
 
-export async function sandbox(job: Job, project: Isolated, state = cursorStateDir(job), tmp = jobTmpDir(job)) {
+export async function sandbox(job: Job, project: Isolated, state = cursorStateDir(job), tmp = jobTmpDir(job), network = false) {
   const template = await readJson<{ filesystem: { allowWrite: string[]; denyRead: string[] }; [key: string]: unknown }>(join(toolRoot, 'sandbox', `${isolationOf(job.who) === 'grok' ? 'grok' : 'cursor'}.json`));
+  assertNoLocalEscape(template);
+  // 只有库接口省略 allowedDomains 才是不限制网络，开着时改走 srt-open.ts。
+  if (network === true) delete template.network;
   const sessions = template.filesystem.allowWrite.includes('__GROK_SESSION__') ? await grokSessionDirs(job.worktree) : [];
   template.filesystem.allowWrite = template.filesystem.allowWrite.flatMap((p: string) =>
     p === '__WT__' ? (job.mode === 'read-only' ? [] : [job.worktree])
@@ -125,5 +129,15 @@ export async function sandbox(job: Job, project: Isolated, state = cursorStateDi
     relativePath(extra);
     template.filesystem.denyRead.push(resolve(job.repo, extra), resolve(job.worktree, extra));
   }
+  assertNoLocalEscape(template);
   return template;
+}
+
+// 不论层级和值，这些键都不能出现，连 false 也不接受。
+export function assertNoLocalEscape(settings: unknown): void {
+  if (!settings || typeof settings !== 'object') return;
+  for (const [key, value] of Object.entries(settings)) {
+    if (['allowLocalBinding', 'allowUnixSockets', 'allowAllUnixSockets'].includes(key)) throw new Error(`隔离设置不允许 ${key}，本机端口和套接字必须保持关闭。`);
+    assertNoLocalEscape(value);
+  }
 }

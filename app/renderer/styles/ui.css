@@ -212,6 +212,11 @@ fieldset.settings { border: 0; margin: 0; padding: 0; min-width: 0; }
 .sidenav-tab:hover { background: var(--line); }
 .sidenav-tab[aria-selected="true"], .sidenav-tab[aria-current="true"] { background: var(--accent-soft); font-weight: 600; }
 /* 历史页左栏最下面的“已归档”：有空位时贴底，项目多了就跟着页签一起滚。 */
+/* 行上的“…”菜单（会话列表）：平时不显，移到这一行、键盘聚焦或菜单开着时显在右上角，让右上角的小字让位 */
+.sidenav-item { position: relative; min-width: 0; }
+.sidenav-more { position: absolute; top: var(--sp-1); right: var(--sp-1); opacity: 0; }
+.sidenav-item:hover .sidenav-more, .sidenav-more:focus-within, .sidenav-more:has([aria-expanded="true"]) { opacity: 1; }
+.sidenav-item:hover .sidenav-badge, .sidenav-item:focus-within .sidenav-badge, .sidenav-item:has([aria-expanded="true"]) .sidenav-badge { visibility: hidden; }
 .sidenav-archived { margin-top: auto; display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; padding-top: var(--sp-2); border-top: var(--hairline) solid var(--line); }
 /* 分区小标题：没有底色，淡色小字；箭头在前，件数靠右，和上面的项目行对齐。 */
 .sidenav-fold { display: flex; align-items: center; gap: var(--sp-1); width: 100%; padding: var(--sp-1) var(--sp-3) var(--sp-1) var(--sp-2); border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; text-align: left; white-space: nowrap; cursor: pointer; }
@@ -319,3 +324,28 @@ fieldset.settings { border: 0; margin: 0; padding: 0; min-width: 0; }
 .intro-lead code { font-family: var(--font-mono); font-size: var(--fs-xs); padding: 0 var(--sp-1); border-radius: var(--r-sm); background: var(--sunk); color: var(--text); }
 .intro-actions { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: var(--sp-1); font-size: var(--fs-xs); min-width: 120px; }
 .intro-text { margin: 0 var(--sp-4) var(--sp-4); padding: var(--sp-3) var(--sp-4); max-height: 360px; overflow: auto; white-space: pre-wrap; font-family: inherit; font-size: var(--fs-sm); line-height: 1.6; color: var(--text); background: var(--sunk); border: 1px solid var(--line); border-radius: var(--r-md); user-select: text; }
+/* ---------- “N 条新消息 ↓”（协作页的聊天记录，docs/ui-spec.md 第 17 节） ---------- */
+.dot-decide { background: var(--state-decide); }
+.channel-fresh { position: absolute; left: 50%; bottom: var(--sp-3); transform: translateX(-50%); padding: var(--sp-1) var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--panel); color: var(--text); font-size: var(--fs-sm); box-shadow: var(--shadow-menu); }
+.seg-tab { position: relative; }
+.seg-dot { position: absolute; top: var(--sp-1); right: var(--sp-1); width: calc(var(--sp-1) + var(--hairline)); height: calc(var(--sp-1) + var(--hairline)); border-radius: 50%; background: var(--state-decide); }
+/* ---------- 简化的 Markdown 排版 RichText（docs/ui-spec.md 第 3 节） ---------- */
+.rich { min-width: 0; color: var(--text); line-height: 1.6; overflow-wrap: anywhere; }
+.rich > * { margin: 0; }
+.rich > * + * { margin-top: var(--sp-2); }
+.rich p { white-space: pre-wrap; }
+.rich-h { font-size: var(--fs-sm); font-weight: 600; color: var(--muted); }
+.rich > * + .rich-h { margin-top: var(--sp-3); }
+.rich-h + * { margin-top: var(--sp-1); }
+.rich ul, .rich ol { padding-left: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-1); }
+.rich ul { list-style: disc; }
+.rich ol { list-style: decimal; }
+.rich li { white-space: pre-wrap; }
+.rich li::marker { color: var(--muted); }
+.rich li[data-depth="1"] { margin-left: var(--sp-4); }
+.rich li[data-depth="2"] { margin-left: var(--sp-7); }
+.rich strong { font-weight: 600; }
+.rich code { font-family: var(--font-mono); font-size: var(--fs-sm); padding: 0 var(--sp-1); border-radius: var(--r-sm); background: var(--sunk); color: var(--text); }
+.rich pre { padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--sunk); overflow-x: auto; }
+.rich pre code { padding: 0; background: transparent; white-space: pre; }
+.notice-warn { background: var(--warn-soft); }

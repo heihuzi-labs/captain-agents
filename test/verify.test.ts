@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { desktopView, context, root } from './helpers.ts';
-import { testCounts, checkFor, execute } from '../src/core/verify.ts';
+import { testCounts, checkFor, execute, verifyState } from '../src/core/verify.ts';
 import { quote } from '../src/core/decide.ts';
 
 const cmd = (source: string) => `${quote(process.execPath)} -e ${quote(source)}`;
@@ -74,4 +74,27 @@ test('执行器程序缺失也会结束并释放计时器', async t => {
   const c = await context(t, false);
   const r = await execute(join(c.temp, 'not-installed'), [], c.temp, 1000);
   assert.match(r.error!, /ENOENT/); assert.equal(r.timedOut, false);
+});
+
+test('验收现状：通过、没过、免验、没验、不用验；再跑一次验收，免验理由让位给真实结果', async t => {
+  const skip = { reason: '只改了文档', at: new Date().toISOString() }, pass = { ok: true, steps: [] }, fail = { ok: false, steps: [] };
+  assert.equal(verifyState({ mode: 'workspace-write', verify: pass }), 'passed');
+  assert.equal(verifyState({ mode: 'workspace-write', verify: pass, verifySkip: skip }), 'passed');
+  assert.equal(verifyState({ mode: 'workspace-write', verify: fail }), 'failed');
+  assert.equal(verifyState({ mode: 'workspace-write', verify: fail, verifySkip: skip }), 'skipped');
+  assert.equal(verifyState({ mode: 'workspace-write', verifySkip: skip }), 'skipped');
+  assert.equal(verifyState({ mode: 'workspace-write' }), 'missing');
+  assert.equal(verifyState({ mode: 'read-only' }), 'exempt');
+  assert.equal(verifyState({ mode: 'read-only', verify: fail }), 'failed');
+  const c = await context(t); await c.add(); const dir = await seed(c); await config(c, [cmd('process.exit(0)')]);
+  const read = async () => JSON.parse(await readFile(join(dir, 'job.json'), 'utf8'));
+  assert.equal((await c.cli(['verify', 'verify-test', '--skip', '先记一笔'])).code, 0); assert.equal((await read()).verifySkip.reason, '先记一笔');
+  // 应用里照实显示“免验”和理由；之前有一次没过的记录也不再当“验收没过”，合格率不认它。
+  let shown = (await desktopView(c.home)).jobs[0]; assert.equal(shown.check, null); assert.equal(shown.checkSkipped?.reason, '先记一笔');
+  const record = await read(); await writeFile(join(dir, 'job.json'), JSON.stringify({ ...record, verify: { ok: false, at: record.verifySkip.at, seconds: 1, steps: [] } }));
+  shown = (await desktopView(c.home)).jobs[0]; assert.equal(shown.check, null); assert.equal(shown.checkSkipped?.reason, '先记一笔');
+  assert.equal((await c.cli(['verify', 'verify-test'])).code, 0);
+  const after = await read(); assert.equal(after.verify.ok, true); assert.equal(after.verifySkip, undefined);
+  shown = (await desktopView(c.home)).jobs[0]; assert.equal(shown.check?.ok, true); assert.equal(shown.checkSkipped, null);
+  assert.equal((await c.cli(['verify', 'no-such-job', '--skip', '理由'])).code, 1);
 });

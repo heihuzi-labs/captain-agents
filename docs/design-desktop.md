@@ -124,12 +124,15 @@ test/            各层的测试；test/ui/ 放界面测试，test/e2e/ 放整�
   - 刷新额度由主进程调用核心现有的额度查询（和 `xagents quota` 是同一个函数，不另写一份）。它会启动各家命令行去查，联网的是那些命令行自己，**应用本身仍然不开端口、不直接联网**；
   - 应用开着时每 15 分钟自动刷新一次（启动时数据已超过 15 分钟也刷一次），“各家表现”页也有手动“刷新”按钮，走上面的同一条通道；
   - 某一家这次查不到时，保留那一家上一次的数据和时间，并写“这次没查到”，不清空。
-- **打包与安装**（2026-09-30，脚本已实现，待真实环境验收）：
+- **打包与安装**（2026-10-10，平台随应用打包；真实环境验收待负责人完成）：
   - 依赖用 `pnpm install --offline --frozen-lockfile` 安装。`package.json` 是唯一打包配置：`appId` 为 `app.xagents.desk`，`productName` 为“派活工作台”，图标为 `build/icon.icns`，只出 macOS arm64 的目录，不出安装镜像。
-  - `npm run pack` 先构建，再检查主进程、预加载的外部依赖，最后生成 `dist/mac-arm64/派活工作台.app`。应用只带 `out/**`、`package.json` 和 `src/core/pty-bridge.py`；明确排除 `node_modules`，包含 pnpm 软链接背后的依赖，不带界面已打包的 React 和桌面不使用的 sandbox-runtime。
-  - `pty-bridge.py` 用 `asarUnpack` 放在 `app.asar.unpacked`；`toolRoot` 仍指向 `app.asar` 内部，额度查询通过核心 `unpackedPath()` 得到 Python 能直接读取的真实文件路径。
+  - `npm run pack` 先构建，再用 `scripts/prepare-platform.mjs` 准备 `out/platform`，检查主进程、预加载的外部依赖及平台文件，最后生成 `dist/mac-arm64/派活工作台.app`。asar 只带 `out/main`、`out/preload`、`out/renderer` 和 `package.json`，继续排除 `node_modules`。
+  - 完整平台通过 `extraResources` 放在 `Contents/Resources/platform/`：`bin/`、`src/`、`sandbox/`、`rules.md`、`guide/`、`package.json` 与 srt 的生产依赖链。准备脚本递归解析已安装的依赖，展开 pnpm 链接，按包嵌套保存以兼容不同版本，不复制开发依赖和 React。当前为 srt 0.0.77、socks5-server、commander、node-forge、zod 共 5 包；平台约 14.1 MiB（未压缩，最终应用体积待实际打包记录）。检查器拒绝缺文件、缺依赖及任何符号链接，原有外部依赖检查不放宽。
+  - 平台根目录统一由 `src/core/paths.ts` 的 `resolveToolRoot()` / `toolRoot` 决定：asar 中的后台取 Electron 资源目录下的 `platform`；源码命令行、开发构建和运行快照取各自的根目录。不靠环境变量指定根目录。Python 桥直接取 `platform/src/core/pty-bridge.py`，不再需要 `asarUnpack`。
+  - 起平台进程统一用 `src/core/node-runtime.ts` 的 `nodeRunner()` / `nodeCommand()`：普通命令行使用当前 Node；Electron 使用自己的程序并带 `ELECTRON_RUN_AS_NODE=1`。`node-entry.ts` 在执行目标脚本前清掉这个开关，推进、看管进程再次启动 Node 时重新设置，srt 及外部选手不继承该开关。选手的密钥过滤、隔离模板和自检探针内容不变。
+  - 命令行安装后台在 `app/main/cli-launcher.ts`：`cliLauncherStatus()` 返回 `installed`、`missing`、`other`；`installCliLauncher({ replace?: boolean })` 在锁内先写临时可执行脚本，再改名到 `~/.local/bin/xagents`，用应用运行时执行平台 `bin/xagents`，完整保留参数。已有其他文件或链接必须显式 `replace: true`；开发版拒绝安装。桥与界面由后续对接，本步不增加通道。
   - 访达打开时，桌面入口把存在的 `~/.local/bin`、`~/.grok/bin`、`/opt/homebrew/bin`、`/usr/local/bin` 补到 PATH 末尾，保留原优先级且不重复。不会执行登录 shell，命令行版不调用这个补全。
-  - `npm run install-app` 依次打包、本地签名、严格验签、退出开发版和已装版、把旧 `/Applications/派活工作台.app` 移到废纸篓的唯一目录、用 `ditto` 安装、再次验签、打开应用。任何一步失败立即停并用中文说明；旧进程 10 秒内不退出也停止，不强杀、不删除旧应用。
+  - `npm run install-app` 依次打包、本地签名、严格验签、退出开发版和已装版的窗口主进程（不匹配带平台脚本参数的后台进程）、把旧 `/Applications/派活工作台.app` 移到废纸篓的唯一目录、用 `ditto` 安装、再次验签、打开应用。任何一步失败立即停并用中文说明；旧进程 10 秒内不退出也停止，不强杀、不删除旧应用。
   - builder 配置 `identity: null`，由安装脚本运行 `codesign --force --deep --sign -` 做本地签名，再用 `codesign --verify --deep --strict` 验证。
   - 应用继续使用 `~/Library/Application Support/派活工作台`，保留设置和窗口位置；收到安装脚本的退出信号也会保存窗口。登记处沿用 `~/.xagents`，定时清理仍走原来的核心逻辑，将旧日志移到系统废纸篓。
   - 隔离内不运行构建、打包、安装和窗口冒烟；负责人需记录包大小、核对依赖检查和签名结果，并从访达双击检查中文菜单名、额度刷新、设置与窗口位置、开发版和已装版不会同时运行。
@@ -146,8 +149,8 @@ test/            各层的测试；test/ui/ 放界面测试，test/e2e/ 放整�
   - 点“用这份”和发留言，确认任务记录里真的写上了决定和留言；
   - 检查菜单栏图标、系统通知、安全设置、设置窗口；
   - 分别截浅色、深色和窄窗口的图，存进已忽略的 `test/e2e/artifacts/`，由负责人目视检查。
-- **性能目标**（目前没有自动测试）：
-  - 登记处里有 1000 条任务时，窗口打开不超过 1 秒；
+- **性能目标**：
+  - 登记处里有 1000 条任务时，窗口打开不超过 1 秒。界面测试里有两条守着它（1000 条里 30 条在跑、1000 条全在跑）。它们不看墙上时钟（机器一忙就误报），只算测试线程真正用掉的处理器时间，再和同一轮里画 1000 张最朴素卡片的基准比倍数，不超过 10 倍算过，量法在 `test/ui/render-cost.tsx`；
   - 一次变化推到窗口不超过 0.5 秒；
   - 在跑的活每秒更新计时，不能让整个窗口重画。
 

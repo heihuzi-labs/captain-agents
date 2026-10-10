@@ -19,13 +19,14 @@ codesign --force --deep --sign - "$app"
 step='验证新应用签名'
 codesign --verify --deep --strict "$app"
 
-# 只选派活工作台主进程：不要误伤其他 Electron 应用或当前安装脚本。
+# 只选派活工作台窗口主进程；带脚本参数的是平台 Node 进程，不能停掉正在跑的活。
+# 不要误伤其他 Electron 应用或当前安装脚本。
 # ps 在没有设语言环境时会把中文路径转义成 M-f… 这样的字，匹配不上“派活工作台”，旧进程就关不掉，所以固定用 UTF-8。
 running_pids() {
   LC_ALL=en_US.UTF-8 ps -axo pid=,command= | LC_ALL=en_US.UTF-8 awk '
     { pid=$1; sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "") }
-    /^\/Applications\/派活工作台\.app\/Contents\/MacOS\/派活工作台([[:space:]]|$)/ ||
-    /^\/Applications\/派活台\.app\/Contents\/MacOS\/派活台([[:space:]]|$)/ ||
+    /^\/Applications\/派活工作台\.app\/Contents\/MacOS\/派活工作台$/ ||
+    /^\/Applications\/派活台\.app\/Contents\/MacOS\/派活台$/ ||
     /^([^[:space:]]*\/)?Electron[[:space:]]+([^[:space:]]*\/)?out\/main\/index\.js([[:space:]]|$)/ { print pid }
   '
 }

@@ -5,16 +5,17 @@ import { toolRoot } from './paths.ts';
 import { hasCode } from './fsx.ts';
 import { active, listJobs } from './job.ts';
 import type { Job } from './job.ts';
-import { whos, spec } from './roster.ts';
+import { whos, spec, keptWhos } from './roster.ts';
 import type { Who } from './roster.ts';
 import { effortNames } from './policy.ts';
 import { readSettings } from './settings.ts';
-import type { Settings } from './settings.ts';
+import type { QuotaStop, Settings } from './settings.ts';
 import { readQuotaCache } from './quota.ts';
 import type { QuotaSnapshot } from './quota.ts';
 import { ownerActions } from './wait.ts';
 import { profiles } from './profiles.ts';
 import type { Profile } from './profiles.ts';
+import { verifyState } from './verify.ts';
 
 // 手册随仓库放在 guide/commander.md；找不到时用人话说清楚放哪、怎么办。
 export async function readGuide(root = toolRoot): Promise<string> {
@@ -38,7 +39,7 @@ function localTime(value: string | null | undefined) {
 }
 
 function workersSection(workers: Settings['workers']) {
-  const lines = whos.map(who => {
+  const lines = keptWhos.map(who => {
     const w = workers[who], s = spec(who);
     return `- ${s.name}（${who}）· ${s.shown}：${w.enabled ? '开启' : '已关闭，不能派'}；强度 ${w.efforts.map(e => effortNames[e]).join('、')}；快速版 ${w.fast ? '允许' : '未开放'}`;
   });
@@ -51,7 +52,7 @@ function quotaLine(entry: QuotaSnapshot['providers'][number]) {
   const bars = entry.bars.map(b => `${b.label} ${b.used === null ? '查不到' : `${b.approx ? '不到 ' : ''}${b.used}%`}，${localTime(b.reset)} 重置`).join('；');
   return `套餐 ${entry.plan ?? '未知'}；${bars}${entry.reached ? `；已触顶：${entry.reached}` : ''}${entry.onDemand ? `；按量付费 ${entry.onDemand}` : ''}（数据时间 ${localTime(entry.at)}）`;
 }
-async function quotaSection(quotaStop: number) {
+async function quotaSection(quotaStop: QuotaStop) {
   const snapshot = await readQuotaCache();
   const head = ['### 各家额度（读的是缓存，不联网）', ''];
   if (!snapshot) return [...head, '还没有额度数据，先运行 `xagents quota`。'].join('\n');
@@ -59,7 +60,7 @@ async function quotaSection(quotaStop: number) {
     : entry.bars.some(b => b.used !== null) ? `- ${entry.name}：这次没查到（${entry.error}）；上一次的数据：${quotaLine(entry)}`
     : `- ${entry.name}：查不到（${entry.error}）`);
   return [...head, `查询时间 ${localTime(snapshot.queriedAt)}。`, ...lines, '',
-    `某家本期额度用到 ${quotaStop}%，\`xagents run\` 会拒绝派给它；缓存超过 10 分钟，\`run\` 会先重新查。要最新数字，运行 \`xagents quota\`。`].join('\n');
+    `${quotaStop === null ? '主人没有设停派线：`xagents run` 不按用量拒绝；某家额度触顶时仍会拒绝' : `某家本期额度用到 ${quotaStop}%，\`xagents run\` 会拒绝派给它`}；缓存超过 10 分钟，\`run\` 会先重新查。要最新数字，运行 \`xagents quota\`。`].join('\n');
 }
 
 const top = (tags: Map<string, number>) => [...tags].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN')).slice(0, 3).map(([tag, n]) => `${tag} ×${n}`);
@@ -91,12 +92,14 @@ function inboxCount(jobs: Job[]) {
 function jobsSection(jobs: Job[], maxRunning: number) {
   const live = jobs.filter(j => !j.cleaned);
   const running = jobs.filter(active).length;
-  const unverified = live.filter(j => j.state === 'done' && !j.decision && !j.verify).length;
-  const undecided = live.filter(j => j.state === 'done' && !j.decision && j.verify).length;
+  const open = live.filter(j => j.state === 'done' && !j.decision);
+  const unverified = open.filter(j => verifyState(j) === 'missing').length, failed = open.filter(j => verifyState(j) === 'failed').length;
+  const undecided = open.length - unverified - failed;
   return ['### 手头的活', '',
     `- 在跑或排队：${running} 件（设置里同时最多 ${maxRunning} 件，\`XAGENTS_MAX_RUNNING\` 只能临时收紧）`,
     `- 做完了、还没验收：${unverified} 件（用 \`xagents verify\`）`,
-    `- 验收过、还没拍板：${undecided} 件（用 \`xagents adopt\` 或 \`drop\`）`,
+    ...(failed ? [`- 验收没过、还没处理：${failed} 件（修好重验，或 \`drop\`）`] : []),
+    `- 验收过（或不用验）、还没拍板：${undecided} 件（用 \`xagents adopt\` 或 \`drop\`）`,
     `- 主人在应用里留下的、等你照办或回复的事（\`xagents inbox\`）：${inboxCount(jobs)} 条`,
     ...forgotten(live)].join('\n');
 }
@@ -123,7 +126,7 @@ export async function guideAppendix(): Promise<string> {
   const jobs = await listJobs().catch(e => { if (hasCode(e, 'ENOENT')) return []; throw e; });
   const { archivedProjects, workers, limits } = await readSettings();
   return ['## 这台机器现在的情况', '', await connectionLine(), '',
-    `派活限制：同时最多 ${limits.maxRunning} 件；额度用到 ${limits.quotaStop}% 停派（设置 → 选手与模型）`, '',
+    `派活限制：同时最多 ${limits.maxRunning} 件；${limits.quotaStop === null ? '额度不设停派线（主人在设置里关掉了）' : `额度用到 ${limits.quotaStop}% 停派`}（设置 → 选手与模型）`, '',
     ...(archivedProjects.length ? [`已归档项目：${archivedProjects.join('、')}。`, ''] : []),
     workersSection(workers), '', await quotaSection(limits.quotaStop), '', profilesSection(jobs), '', jobsSection(jobs, limits.maxRunning)].join('\n') + '\n';
 }

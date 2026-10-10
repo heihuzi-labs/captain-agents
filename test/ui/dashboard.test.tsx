@@ -30,7 +30,7 @@ function dashView(): View {
 async function toStats(v: View) {
   window.xa = fixtureBridge({ getView: vi.fn(async () => v) });
   render(<App />); await screen.findByRole('tablist');
-  fireEvent.keyDown(document, { key: '3', metaKey: true });
+  fireEvent.keyDown(document, { key: '4', metaKey: true });
   await screen.findByRole('heading', { name: '表现', level: 1 });
 }
 

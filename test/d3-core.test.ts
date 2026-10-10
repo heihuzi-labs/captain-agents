@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { watch } from 'node:fs';
-import { readFile, writeFile, readdir } from 'node:fs/promises';
+import { readFile, writeFile, readdir, mkdir, rm, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { TestContext } from 'node:test';
@@ -176,48 +175,65 @@ test('主人不能盖掉已有结论；重做在负责人已有结论或未照�
   assert.equal(await readFile(file, 'utf8'), legacy);
 });
 
-test('读一次设置不建锁，监视目录 300 毫秒内没有事件', async t => {
+test('读一次设置不建锁，也不动登记处目录里的任何文件', async t => {
   const c = await registry(t);
-  const events: string[] = [];
-  const watchErrors: NodeJS.ErrnoException[] = [];
-  const watcher = watch(c.home, (event, name) => { events.push(`${event}:${String(name ?? '')}`); });
-  watcher.on('error', error => { watchErrors.push(error as NodeJS.ErrnoException); });
-  t.after(() => watcher.close());
-  const quiet = async () => {
-    let last = -1;
-    for (let i = 0; i < 10 && events.length !== last; i++) { last = events.length; await delay(50); }
-    events.length = 0;
+  // 读设置不许建锁、不许写文件。锁目录建了就删，读完之后再看列表看不出来；所以三件事一起看：
+  // 读之前读之后各拍一次登记处的目录树（名字、修改时间、大小），读的当中连续列目录，抓那些冒出来又消失的名字。
+  // 不用 fs.watch 那套“等一段时间看有没有事件”：事件晚到会被算成读设置干的（2026-10-10 偶发失败过一次），
+  // 而且沙箱里 macOS 的 FSEvents 会报 EMFILE（desktop.test.ts 里也是因此换成事件替身），断言会变成白过。
+  const tree = async (dir: string, at = ''): Promise<string[]> => {
+    const rows: string[] = [];
+    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+      const info = await lstat(join(dir, entry.name));
+      rows.push(`${at}${entry.name} ${info.mtimeMs} ${info.size}${info.isDirectory() ? ' 目录' : ''}`);
+      if (info.isDirectory()) rows.push(...await tree(join(dir, entry.name), `${at}${entry.name}/`));
+    }
+    return rows;
   };
-  // 锁目录建了就删，目录列表在事后看不出来；读的同时连续列目录，才能抓住它。
+  const look = async () => ({ dir: (await lstat(c.home)).mtimeMs, top: (await readdir(c.home)).sort(), rows: await tree(c.home) });
+  const measure = async <T>(work: () => Promise<T>) => {
+    const before = await look(), seen = new Set<string>();
+    let polls = 0, stop = false;
+    const polling = (async () => { while (!stop) { polls++; for (const name of await readdir(c.home)) seen.add(name); } })();
+    let result: T | undefined, failure: unknown;
+    try { result = await work(); } catch (error) { failure = error; }
+    finally { await delay(30); stop = true; await polling; }
+    const after = await look();
+    if (failure !== undefined) throw failure;
+    return { result: result as T, polls, extra: [...seen].filter(name => !before.top.includes(name)), before, after };
+  };
   const readOnce = async () => {
-    let seen = false, stop = false;
-    const polling = (async () => { while (!stop) if ((await readdir(c.home)).includes('.lock')) seen = true; })();
-    try { return await readSettings(); }
-    finally { await delay(30); stop = true; await polling; assert.equal(seen, false); }
+    const run = await measure(readSettings);
+    assert.ok(run.polls > 0, '读设置的时候没轮到列目录，建了又删的锁目录就抓不住了');
+    assert.deepEqual(run.extra, [], '读设置的时候登记处目录里冒出来过东西');
+    assert.deepEqual(run.after, run.before, '读设置改动了登记处目录里的文件');
+    return run.result;
   };
-  await quiet();
-  assert.deepEqual(await readOnce(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
-  await delay(300);
-  assert.deepEqual(events, []);
+  assert.deepEqual(await readOnce(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined), models: { extra: {}, dropped: [], seen: {} }, networkAllowed: false });
   await writeFile(join(c.home, 'config.json'), JSON.stringify({ keepAwake: false, notifications: true }));
-  await quiet();
   assert.equal((await readOnce()).keepAwake, false);
-  await delay(300);
-  assert.deepEqual(events, []);
-  await writeFile(join(c.home, 'watch-probe'), 'x');
-  let alive = false;
-  for (let i = 0; i < 10 && !alive; i++) { await delay(50); alive = events.some(item => item.includes('watch-probe')); }
-  if (!alive) assert.ok(watchErrors.some(error => error.code === 'EMFILE'), '目录监视没有报事件，也没有说明监视不可用');
+  // 反向对照：写一个文件、再建一个马上删掉的锁目录，上面这套必须看得见，不然前面的断言只是白过。
+  const written = await measure(async () => { await writeFile(join(c.home, 'watch-probe'), 'x'); return null; });
+  assert.deepEqual(written.extra, ['watch-probe'], '写了文件却没发现');
+  assert.notDeepEqual(written.after, written.before, '目录变了却没发现');
+  const locked = await measure(async () => {
+    await mkdir(join(c.home, '.lock'));
+    await delay(20);
+    await rm(join(c.home, '.lock'), { recursive: true });
+    return null;
+  });
+  assert.deepEqual(locked.extra, ['.lock'], '建了又删的锁目录却没发现');
+  assert.notDeepEqual(locked.after, locked.before, '目录变了却没发现');
 });
 
 test('设置默认开启；部分写入、并发修改和旧颜色兼容，保留未知配置；损坏可恢复', async t => {
   const c = await registry(t), file = join(c.home, 'config.json');
-  assert.deepEqual(await readSettings(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
+  assert.deepEqual(await readSettings(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined), models: { extra: {}, dropped: [], seen: {} }, networkAllowed: false });
   await assert.rejects(readFile(file), { code: 'ENOENT' });
   await writeFile(file, JSON.stringify({ board: { columns: { running: '#123456' } }, custom: 42 }));
   assert.equal((await readSettings()).columns?.running, '#123456');
   await Promise.all([writeSettings({ keepAwake: false }), writeSettings({ notifications: false }), writeSettings({ columns: { running: '#abcdef' } })]);
-  assert.deepEqual(await readSettings(), { keepAwake: false, notifications: false, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], columns: { running: '#abcdef' }, workers: effectiveWorkers(undefined) });
+  assert.deepEqual(await readSettings(), { keepAwake: false, notifications: false, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], columns: { running: '#abcdef' }, workers: effectiveWorkers(undefined), models: { extra: {}, dropped: [], seen: {} }, networkAllowed: false });
   assert.equal(JSON.parse(await readFile(file, 'utf8')).custom, 42);
   await writeSettings({ keepAwake: true }); assert.equal((await readSettings()).notifications, false);
   for (const invalid of [{ keepAwake: 'no' }, { notifications: 0 }, { columns: { x: 5 } }, { other: true }, null, []]) {
@@ -225,10 +241,10 @@ test('设置默认开启；部分写入、并发修改和旧颜色兼容，保�
   }
   for (const raw of ['{', 'null', '[]', '42', '{"keepAwake":"false","notifications":null,"columns":[]}']) {
     await writeFile(file, raw);
-    assert.deepEqual(await readSettings(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
+    assert.deepEqual(await readSettings(), { keepAwake: true, notifications: true, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined), models: { extra: {}, dropped: [], seen: {} }, networkAllowed: false });
     assert.equal(await readFile(file, 'utf8'), raw);
     await writeSettings({ notifications: false });
-    assert.deepEqual(await readSettings(), { keepAwake: true, notifications: false, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined) });
+    assert.deepEqual(await readSettings(), { keepAwake: true, notifications: false, appearance: 'system', storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, archivedProjects: [], workers: effectiveWorkers(undefined), models: { extra: {}, dropped: [], seen: {} }, networkAllowed: false });
   }
   assert.ok(!(await readdir(c.home)).some(name => name.endsWith('.tmp') || name === '.lock'));
 });

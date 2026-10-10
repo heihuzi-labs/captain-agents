@@ -1,4 +1,4 @@
-import { allowedEfforts, isWho, spec, supportsFast, whos } from './roster.ts';
+import { allowedEfforts, isWho, spec, supportsFast, whos, isKept, modelGone, vendorOf, channelNames } from './roster.ts';
 import type { Effort, Who } from './roster.ts';
 
 export type WorkerPolicy = { enabled: boolean; efforts: Effort[]; fast: boolean };
@@ -34,9 +34,9 @@ export function effectiveWorkers(stored: unknown): WorkersPolicy {
   return whos.some(who => workers[who].enabled) ? workers : Object.fromEntries(whos.map(who => [who, defaults(who)])) as WorkersPolicy;
 }
 
-export function validateWorkersPatch(patch: unknown): Partial<WorkersPolicy> {
+export function validateWorkersPatch(patch: unknown): WorkersPolicy {
   if (!object(patch)) throw new Error('选手设置格式不对，请按选手提交设置。');
-  const workers: Partial<WorkersPolicy> = {};
+  const workers: WorkersPolicy = {};
   for (const [who, value] of Object.entries(patch)) {
     if (!isWho(who)) throw new Error(`不认识选手 ${who}，请从选手清单中选择。`);
     workers[who] = workerPolicy(who, value);
@@ -45,8 +45,12 @@ export function validateWorkersPatch(patch: unknown): Partial<WorkersPolicy> {
 }
 
 export function checkChoice(policy: WorkersPolicy, choice: { who: Who; effort: Effort; fast?: boolean }): void {
-  const { who, effort, fast } = choice, worker = policy[who], name = spec(who).name;
-  if (!worker.enabled) throw new Error(`主人在设置里关掉了 ${name}，请换一位选手。`);
+  const { who, effort, fast } = choice;
+  if (!isWho(who)) throw new Error(`不认识选手 ${who}，请换一位。`);
+  const worker = policy[who], name = spec(who).name;
+  if (!isKept(who)) throw new Error(`主人没有保留 ${name}，请换一位。`);
+  if (modelGone(who)) throw new Error(`${name} 的模型 ${spec(who).model} 已经不在 ${channelNames[vendorOf(who)]} 的名单里，请主人在设置里换一个。`);
+  if (!worker?.enabled) throw new Error(`主人在设置里关掉了 ${name}，请换一位选手。`);
   if (!allowedEfforts(who).includes(effort) || !worker.efforts.includes(effort)) {
     throw new Error(`主人只允许 ${name} 用${worker.efforts.map(e => effortNames[e]).join('、')}，请把强度改成其中之一。`);
   }
