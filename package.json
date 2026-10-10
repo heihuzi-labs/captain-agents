@@ -1,6 +1,6 @@
 {
   "name": "xagents",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "派活工作台：把活派给本机的 Codex、Grok、Cursor 命令行，登记、隔离、验收、看板",
   "license": "MIT",

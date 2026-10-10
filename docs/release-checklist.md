@@ -15,6 +15,8 @@
 
 ## 首次生成和保管密钥（主人）
 
+上表是缺省的分工。主人也可以把生成密钥和签清单交给负责人——本项目 2026-10-11 就是主人让负责人生成的。这样做时：私钥放在仓库之外、所有选手的隔离都禁读的目录里（放好后派一件只读探针活核对过：读文件、列目录都被挡），文件权限 0600；私钥内容不显示、不进聊天和日志；用正式私钥签清单仍然只在主人点头发版时做。测试一律另生成测试密钥，不碰正式密钥。主人最好自己再留一份离线备份。
+
 - 在仓库外、只有自己能读的目录保存密钥，先准备这个目录；不要把私钥放进项目、聊天、日志或安装包。
 - 用 Node 24 执行：
 
@@ -35,7 +37,7 @@ npm run update:key -- /自己的离线密钥目录/update-private.pem /自己的
 |---|---|
 | `XA_UPDATE_FEED` | `https://github.com/heihuzi-labs/captain-agents/releases/latest/download/latest.json` |
 | `XA_UPDATE_HOSTS` | `release-assets.githubusercontent.com,objects.githubusercontent.com` |
-| `XA_UPDATE_PUBLIC_KEY` | 主人的正式公钥文件内容（去掉换行） |
+| `XA_UPDATE_PUBLIC_KEY` | `sJBh/Cd2G8sUFBOKF99n+LLJHfpzImZsXsrepIPK6XQ=`（正式公钥，2026-10-11 生成；公钥可以公开） |
 
 - 生成清单时 `--base-url` 填带版本标签的地址：`https://github.com/heihuzi-labs/captain-agents/releases/download/v<版本号>/`，标签一律 `v` 加版本号。
 - 跳转主机是实测的（2026-10-11，拿本组织另一个公开仓库的发布文件探的）：`…/releases/latest/download/<文件>` 先跳到 `…/releases/download/<标签>/<文件>`（还在 `github.com`），再跳到 `release-assets.githubusercontent.com`；清单两次跳转、安装包一次，都在应用允许的 5 次以内。`objects.githubusercontent.com` 是 GitHub 以前用的文件主机，这次没探到，写进名单是留个余地：名单编进了发出去的应用，GitHub 哪天换回去，名单里没有它，老用户就再也收不到更新。两个主机都是 GitHub 自己的；装什么不靠主机把关，靠清单签名和安装包的大小、哈希、应用签名。每次发版后按第 11 步再实测一次。
@@ -95,7 +97,7 @@ npm run update:manifest -- \
 
 ## 真实环境检查步骤
 
-2026-10-10 负责人真实跑过第 2、3、5（不含“活继续运行”，那一条另用探针群验过）和第 7 条里“包内容改单字节”，结果记在[设计文档](design-update.md) 第 7.1 节；其余各条还只有替身测试，正式发第一个版本前在测试账户里逐条补上。
+负责人真实跑过的（2026-10-10、10-11，`test/e2e/update-real.ts` 一次跑完）：第 2、3、5 条（不含“活继续运行”，那一条另用探针群验过），第 6 条里的“正文被改、签名对不上”和“版本不比现在新”，第 7 条里的“包内容改单字节”和“下载一半断开”。结果记在[设计文档](design-update.md) 第 7.1 节。其余各条（错误公钥、声明大小偏小、跳到名单外、装到一半失败等）还只有核心测试。
 
 1. 不设置地址或公钥构建，打开设置 → 通用 → 更新，应显示“这个版本不带在线更新”；开发模式也应相同，服务器无请求。
 2. 在测试账户启动旧版，关闭自动检查并等一分钟，服务器应无请求；点“检查更新”后应显示 0.3.0 和纯文字说明。

@@ -72,6 +72,8 @@ npm run install-app      # package it and put it in /Applications
 
 During development you can also run it with `npm run build && npx electron .`.
 
+If you'd rather not build from source, download the packaged app (Apple silicon Macs) from the [releases page](https://github.com/heihuzi-labs/captain-agents/releases/latest): get `xagents-<version>-darwin-arm64.zip`, unzip it, drag the app into Applications and open it. The app is not notarized yet, so macOS blocks the first launch once — allow it under System Settings → Privacy & Security → Open Anyway. An app installed this way carries the whole platform and needs no source checkout: install the `xagents` command from Settings → 通用 → 命令行, and when a new version is out the app tells you; download it and restart. It only contacts the releases page, sends nothing about your machine, and the automatic check can be turned off in Settings. Apps built from source with `npm run install-app` ship with updates off.
+
 ## Settings
 
 Most settings live in the app: which workers and reasoning efforts are allowed, whether fast mode is on, how many jobs may run at once, and at what quota level to stop dispatching. They can only be stricter than the defaults, never looser.
