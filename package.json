@@ -14,7 +14,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "pack": "electron-vite build && node scripts/prepare-platform.mjs && node scripts/check-desktop-bundle.mjs && electron-builder --mac dir --arm64",
+    "pack": "node scripts/pack.mjs",
     "install-app": "bash scripts/install-app.sh",
     "typecheck": "tsc -p tsconfig.json && tsc -p app/main/tsconfig.json && tsc -p app/preload/tsconfig.json && tsc -p app/renderer/tsconfig.json",
     "test": "node --test \"test/*.test.ts\"",
@@ -75,12 +75,27 @@
         {
           "target": "dir",
           "arch": [
-            "arm64"
+            "arm64",
+            "x64"
           ]
         }
       ],
       "icon": "build/icon.icns",
       "identity": null
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "artifactName": "captain-agents_${version}_windows-x64.${ext}"
     }
   }
 }

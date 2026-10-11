@@ -1,0 +1,146 @@
+name: Build desktop
+
+# Builds the three packages on native runners: Apple silicon Mac, Intel Mac and Windows x64.
+# Started by hand it only produces workflow artifacts and publishes nothing.
+# The release workflow calls it and attaches the same files to a draft release.
+#
+# The three XA_UPDATE_* values below are public (feed addresses, download hosts and the public key);
+# they are compiled into the app. The private key is never needed for a build.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  XA_UPDATE_FEED: https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/latest-v2.json,https://github.com/heihuzi-labs/captain-agents/releases/latest/download/latest-v2.json
+  XA_UPDATE_HOSTS: release-assets.githubusercontent.com,objects.githubusercontent.com
+  XA_UPDATE_PUBLIC_KEY: sJBh/Cd2G8sUFBOKF99n+LLJHfpzImZsXsrepIPK6XQ=
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            runner: macos-15
+            target: mac-arm64
+            expected: darwin-arm64
+            package: macos-arm64.zip
+          - name: macOS x64
+            runner: macos-15-intel
+            target: mac-x64
+            expected: darwin-x64
+            package: macos-x64.zip
+          - name: Windows x64
+            runner: windows-2022
+            target: win-x64
+            expected: win32-x64
+            package: windows-x64.exe
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.33.2
+          pnpm install --frozen-lockfile
+
+      - name: Read the version and name the package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          echo "PACKAGE_NAME=captain-agents_${version}_${{ matrix.package }}" >> "$GITHUB_ENV"
+
+      - name: Type check
+        shell: bash
+        run: npm run typecheck
+
+      # The core and its isolation have only been measured on macOS so far. On Windows the tests run
+      # to show where things stand; their result does not decide whether a package is produced.
+      - name: Core tests
+        shell: bash
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        run: npm test
+
+      - name: UI tests
+        shell: bash
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        run: npm run test:ui
+
+      - name: Pack
+        shell: bash
+        run: node scripts/pack.mjs "${{ matrix.target }}"
+
+      - name: Sign locally and zip (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$(ls -d dist/mac*/*.app)"
+          test "$(printf '%s\n' "$app" | wc -l)" -eq 1
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict "$app"
+          echo "APP_EXECUTABLE=$app/Contents/MacOS/$(basename "$app" .app)" >> "$GITHUB_ENV"
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$app" "artifacts/$PACKAGE_NAME"
+
+      - name: Collect the installer (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "dist/$PACKAGE_NAME"
+          mkdir -p artifacts
+          cp "dist/$PACKAGE_NAME" "artifacts/$PACKAGE_NAME"
+          exe="$(ls dist/win-unpacked/*.exe | head -n 1)"
+          echo "APP_EXECUTABLE=$exe" >> "$GITHUB_ENV"
+
+      - name: Start the packaged app
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p shots
+          node test/e2e/packaged.ts "$APP_EXECUTABLE" "${{ matrix.expected }}" "shots/${{ matrix.target }}.png"
+
+      - name: Print size and SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l artifacts
+          if command -v shasum >/dev/null 2>&1; then shasum -a 256 artifacts/*; else sha256sum artifacts/*; fi
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.target }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload the screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shot-${{ matrix.target }}
+          path: shots/*
+          if-no-files-found: ignore
+          retention-days: 14

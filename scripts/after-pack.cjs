@@ -15,7 +15,9 @@ async function files(root, base = '') {
 }
 exports.default = async function afterPack(context) {
   const from = join(context.packager.projectDir, 'out/platform');
-  const to = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents/Resources/platform');
+  // macOS 的资源目录在 .app 里面，Windows 的就在安装目录的 resources 下。
+  const resources = context.electronPlatformName === 'darwin' ? join(`${context.packager.appInfo.productFilename}.app`, 'Contents/Resources') : 'resources';
+  const to = join(context.appOutDir, resources, 'platform');
   await rm(to, { recursive: true, force: true });
   await cp(from, to, { recursive: true, verbatimSymlinks: true });
   const [wanted, got] = [await files(from), await files(to)];

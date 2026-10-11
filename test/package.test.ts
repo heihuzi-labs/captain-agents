@@ -54,11 +54,14 @@ test('平台根目录：源码、开发构建、打包后台及运行快照各�
   assert.equal(resolveToolRoot(url(join(root, 'src/core/paths.ts')), runtime), root);
 });
 
-test('打包配置：中文名、固定应用标识、图标、独立平台资源、只出 arm64 目录', () => {
+test('打包配置：中文名、固定应用标识、图标、独立平台资源、三种打包目标', () => {
   const config = pkg.build;
   assert.equal(config.productName, '派活工作台'); assert.equal(config.appId, 'app.xagents.desk');
   assert.equal(config.mac.icon, 'build/icon.icns'); assert.equal(config.mac.identity, null);
-  assert.deepEqual(config.mac.target, [{ target: 'dir', arch: ['arm64'] }]);
+  assert.deepEqual(config.mac.target, [{ target: 'dir', arch: ['arm64', 'x64'] }]);
+  assert.deepEqual(config.win.target, [{ target: 'nsis', arch: ['x64'] }]);
+  // 安装包文件名按共用下载桶的约定起，流水线和发版脚本都认这个名字。
+  assert.equal(config.nsis.artifactName, 'captain-agents_${version}_windows-x64.${ext}');
   assert.deepEqual(config.files.filter((p: string) => !p.startsWith('!')), ['out/main/**', 'out/preload/**', 'out/renderer/**', 'package.json']);
   assert.ok(config.files.includes('!node_modules{,/**/*}'));
   assert.equal(config.asarUnpack, undefined);
@@ -66,9 +69,12 @@ test('打包配置：中文名、固定应用标识、图标、独立平台资�
   assert.equal(config.extraResources, undefined);
   assert.equal(config.afterPack, 'scripts/after-pack.cjs');
   const hook = readFileSync(new URL('../scripts/after-pack.cjs', import.meta.url), 'utf8');
-  assert.match(hook, /Contents\/Resources\/platform/); assert.match(hook, /应用里的平台和准备好的不一致/); assert.match(hook, /缺少 srt/);
+  assert.match(hook, /Contents\/Resources/); assert.match(hook, /'platform'/); assert.match(hook, /应用里的平台和准备好的不一致/); assert.match(hook, /缺少 srt/);
   assert.equal(config.asar, true); assert.equal(config.npmRebuild, false);
-  assert.match(pkg.scripts.pack, /^electron-vite build && node scripts\/prepare-platform.mjs && node scripts\/check-desktop-bundle.mjs && electron-builder --mac dir --arm64$/);
+  assert.equal(pkg.scripts.pack, 'node scripts/pack.mjs');
+  const pack = readFileSync(new URL('../scripts/pack.mjs', import.meta.url), 'utf8');
+  for (const step of ['electron-vite.js', 'prepare-platform.mjs', 'check-desktop-bundle.mjs', 'electron-builder/cli.js']) assert.ok(pack.includes(step), `打包步骤里有 ${step}`);
+  assert.ok(pack.indexOf('prepare-platform.mjs') < pack.indexOf('check-desktop-bundle.mjs') && pack.indexOf('check-desktop-bundle.mjs') < pack.indexOf('electron-builder/cli.js'));
 });
 
 test('electron-builder 实际文件过滤器排除 pnpm 软链接背后的依赖文件', async t => {
