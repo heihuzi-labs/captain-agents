@@ -33,6 +33,7 @@ jobs:
             target: mac-arm64
             expected: darwin-arm64
             package: macos-arm64.zip
+            tests: true
           - name: macOS x64
             runner: macos-15-intel
             target: mac-x64
@@ -73,16 +74,18 @@ jobs:
         shell: bash
         run: npm run typecheck
 
-      # The core and its isolation have only been measured on macOS so far. On Windows the tests run
-      # to show where things stand; their result does not decide whether a package is produced.
+      # The test suites run once, on the Apple silicon runner. macOS minutes are the expensive ones and
+      # the Intel job would only repeat the same result (2026-10-12: 625 core tests passed on both).
+      # On Windows the core suite does not finish yet (3 of the first 15 tests failed, then it hung
+      # for 20 minutes): the core and its isolation have only been measured on macOS so far.
       - name: Core tests
+        if: matrix.tests
         shell: bash
-        continue-on-error: ${{ runner.os == 'Windows' }}
         run: npm test
 
       - name: UI tests
+        if: matrix.tests
         shell: bash
-        continue-on-error: ${{ runner.os == 'Windows' }}
         run: npm run test:ui
 
       - name: Pack
