@@ -72,7 +72,7 @@ npm run install-app      # 打包并装进“应用程序”
 
 开发时也可以 `npm run build && npx electron .` 直接跑。
 
-不想从源码装，也可以直接下载打包好的应用（苹果芯片的 Mac）：到[发布页](https://github.com/heihuzi-labs/captain-agents/releases/latest)下载 `captain-agents_<版本>_macos-arm64.zip`，解压后把“派活工作台”拖进“应用程序”再打开。应用还没有做苹果公证，第一次打开会被系统拦一次，到“系统设置 → 隐私与安全性”里点“仍要打开”。这样装的应用自带整套平台，不需要源码：`xagents` 命令在“设置 → 通用 → 命令行”里装；以后有新版本应用会提示，下载后重启就换好了（只连发布页，不带任何本机信息，可以在设置里关掉自动检查）。从源码用 `npm run install-app` 装的不带在线更新。
+不想从源码装，也可以直接下载打包好的应用（苹果芯片的 Mac）：到[发布页](https://github.com/heihuzi-labs/captain-agents/releases/latest)下载 `captain-agents_<版本>_macos-arm64.zip`，解压后把“派活工作台”拖进“应用程序”再打开。应用还没有做苹果公证，第一次打开会被系统拦一次，到“系统设置 → 隐私与安全性”里点“仍要打开”。这样装的应用自带整套平台，不需要源码：`xagents` 命令在“设置 → 通用 → 命令行”里装；以后有新版本应用会提示，下载后重启就换好了（只连我们的下载桶和发布页，不带任何本机信息，可以在设置里关掉自动检查）。从源码用 `npm run install-app` 装的不带在线更新。
 
 ## 设置
 
