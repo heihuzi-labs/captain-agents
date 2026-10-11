@@ -1,0 +1,21 @@
+{
+  "feeds": [
+    "https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/latest-v2.json",
+    "https://github.com/heihuzi-labs/captain-agents/releases/latest/download/latest-v2.json"
+  ],
+  "hosts": [
+    "release-assets.githubusercontent.com",
+    "objects.githubusercontent.com"
+  ],
+  "publicKey": "sJBh/Cd2G8sUFBOKF99n+LLJHfpzImZsXsrepIPK6XQ=",
+  "minimumVersion": "0.1.0",
+  "targets": [
+    "mac-arm64",
+    "mac-x64"
+  ],
+  "downloadBases": [
+    "https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/{version}/",
+    "https://github.com/heihuzi-labs/captain-agents/releases/download/v{version}/"
+  ],
+  "legacyBase": "https://github.com/heihuzi-labs/captain-agents/releases/download/v{version}/"
+}

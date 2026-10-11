@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'node:crypto';
 import { verifyFeed, verifyLegacyFeed } from '../app/main/update-feed.ts';
@@ -175,4 +175,47 @@ test('发布清单必须等全部安装包公网核对通过；读回清单不�
     if (scenario === '安装包失败' || scenario === '不开开关') assert.equal(events.some(e => e.includes('清单')), false);
     else assert.deepEqual(events.slice(-3), ['读取清单', '上传清单', '读取清单']);
   }
+});
+test('发版流水线的输入：配置只读一处，门槛拦住错标签、缺说明和不成对的钥匙，签出的两份清单和包对得上', async t => {
+  const { generateUpdateKey } = await import('../scripts/release/generate-update-key.mjs');
+  const { readInputs, buildEnvironment, describeTarget, checkRelease, buildFeed, packageName } = await import('../scripts/release/release-inputs.mjs');
+  const { verifyLegacyFeed } = await import('../app/main/update-feed.ts');
+  // 仓库里真的那份配置读得出来，流水线和应用用的是同一套检查。
+  const real = await readInputs();
+  assert.deepEqual(Object.keys(buildEnvironment(real)), ['XA_UPDATE_FEED', 'XA_UPDATE_HOSTS', 'XA_UPDATE_PUBLIC_KEY']);
+  assert.equal(buildEnvironment(real).XA_UPDATE_FEED.split(',').length, real.config.feeds.length);
+  assert.deepEqual(describeTarget(real, 'mac-x64'), { APP_VERSION: real.version, PACKAGE_NAME: `captain-agents_${real.version}_macos-x64.zip`, EXPECTED_TARGET: 'darwin-x64' });
+  assert.throws(() => describeTarget(real, 'solaris-x64'), /打包目标/);
+
+  const c = await context(t, false), priv = join(c.temp, 'priv.pem'), pub = join(c.temp, 'pub.txt'), other = join(c.temp, 'other.pem');
+  await generateUpdateKey(priv, pub); await generateUpdateKey(other, join(c.temp, 'other.txt'));
+  const publicKey = (await readFile(pub, 'utf8')).trim(), env = { XA_UPDATE_PRIVATE_KEY: await readFile(priv, 'utf8') };
+  const root = join(c.temp, 'repo'), packages = join(c.temp, 'packages'), out = join(c.temp, 'feeds');
+  for (const dir of [join(root, 'release/notes'), packages, out]) await mkdir(dir, { recursive: true });
+  const config = { feeds: ['https://store.example.invalid/latest-v2.json', 'https://pages.example.invalid/latest-v2.json'], hosts: ['files.example.invalid'], publicKey,
+    minimumVersion: '0.2.0', targets: ['mac-arm64', 'mac-x64'], downloadBases: ['https://store.example.invalid/{version}/', 'https://pages.example.invalid/v{version}/'], legacyBase: 'https://pages.example.invalid/v{version}/' };
+  await writeFile(join(root, 'release/config.json'), JSON.stringify(config)); await writeFile(join(root, 'package.json'), JSON.stringify({ version: '0.3.0' }));
+  const inputs = await readInputs(root);
+  await assert.rejects(checkRelease(inputs, 'v0.3.1', env), /对不上/);
+  await assert.rejects(checkRelease(inputs, 'v0.3.0', env), /缺少更新说明/);
+  await writeFile(join(root, 'release/notes/0.3.0.txt'), '这一版的说明\n');
+  await assert.rejects(checkRelease(inputs, 'v0.3.0', {}), /没有拿到更新私钥/);
+  await assert.rejects(checkRelease(inputs, 'v0.3.0', { XA_UPDATE_PRIVATE_KEY: await readFile(other, 'utf8') }), /不是一对/);
+  assert.equal(await checkRelease(inputs, 'v0.3.0', env), '0.3.0');
+
+  await writeFile(join(packages, packageName('0.3.0', 'mac-arm64')), 'arm package');
+  await assert.rejects(buildFeed(inputs, packages, out, env), /应当正好是/);
+  await writeFile(join(packages, packageName('0.3.0', 'mac-x64')), 'intel package');
+  const built = await buildFeed(inputs, packages, out, env);
+  assert.deepEqual(built.files, ['captain-agents_0.3.0_macos-arm64.zip', 'captain-agents_0.3.0_macos-x64.zip', 'latest-v2.json', 'latest.json']);
+  const feed = verifyFeed(await readFile(join(out, 'latest-v2.json')), publicKey), legacy = verifyLegacyFeed(await readFile(join(out, 'latest.json')), publicKey);
+  assert.equal(feed.version, '0.3.0'); assert.equal(feed.minimumVersion, '0.2.0'); assert.deepEqual(Object.keys(feed.packages), ['darwin-arm64', 'darwin-x64']);
+  assert.deepEqual(feed.packages['darwin-x64'].urls, ['https://store.example.invalid/0.3.0/captain-agents_0.3.0_macos-x64.zip', 'https://pages.example.invalid/v0.3.0/captain-agents_0.3.0_macos-x64.zip']);
+  assert.equal(legacy.packages['darwin-arm64'].url, 'https://pages.example.invalid/v0.3.0/captain-agents_0.3.0_macos-arm64.zip');
+  assert.equal(legacy.packages['darwin-arm64'].sha256, feed.packages['darwin-arm64'].sha256);
+  // 多了一个不该有的文件也不签；配置写错在读的时候就拦下。
+  await writeFile(join(packages, 'extra.zip'), 'x');
+  await assert.rejects(buildFeed(inputs, packages, join(c.temp, 'feeds2'), env), /应当正好是/);
+  await writeFile(join(root, 'release/config.json'), JSON.stringify({ ...config, targets: ['mac-arm64', 'mac-arm64'] }));
+  await assert.rejects(readInputs(root), /targets/);
 });

@@ -1,0 +1,160 @@
+name: Release
+
+# Pushing the tag v<version> is the release:
+#   prepare   gates: tag == package.json version, release notes exist, the private key matches
+#             the public key in release/config.json
+#   build     the packages listed in release/config.json, on native runners (build.yml)
+#   publish   sign both update feeds, check everything against them, create a draft release,
+#             download it back and compare byte for byte, then publish it as the latest release
+#
+# Copying the packages and the feed to the shared download bucket is NOT done here: the release
+# owner runs `npm run update:store` afterwards (docs/release-checklist.md).
+#
+# Started by hand it is a rehearsal: the same gates, builds, signing and checks, but nothing is
+# published and the signed feeds are thrown away.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Check the release inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      targets: ${{ steps.check.outputs.targets }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Tag, release notes and signing keys
+        id: check
+        shell: bash
+        env:
+          XA_UPDATE_PRIVATE_KEY: ${{ secrets.XA_UPDATE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          # A rehearsal has no tag; it checks everything else against the version in package.json.
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then tag="$GITHUB_REF_NAME"; else tag="v$version"; fi
+          node scripts/release/release-inputs.mjs check --tag "$tag"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]] && gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists: $tag" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "targets=$(node scripts/release/release-inputs.mjs targets)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build
+    needs: prepare
+    uses: ./.github/workflows/build.yml
+    with:
+      targets: ${{ needs.prepare.outputs.targets }}
+    # The private key never reaches the build jobs.
+
+  publish:
+    name: Sign the feeds and publish
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Download the packages built by this run
+        uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: ${{ runner.temp }}/packages
+          merge-multiple: true
+
+      - name: Sign both update feeds and check them against the packages
+        shell: bash
+        env:
+          XA_UPDATE_PRIVATE_KEY: ${{ secrets.XA_UPDATE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/feeds"
+          ls -l "$RUNNER_TEMP/packages"
+          node scripts/release/release-inputs.mjs feed --dir "$RUNNER_TEMP/packages" --out "$RUNNER_TEMP/feeds"
+          shasum -a 256 "$RUNNER_TEMP"/packages/*
+
+      - name: Rehearsal ends here
+        if: github.event_name != 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/feeds"
+          echo "Rehearsal for $VERSION passed: gates, builds, signing and checks. Nothing was published."
+
+      - name: Create the draft release
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          test "$GITHUB_REF_NAME" = "$tag"
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --title "$VERSION" --notes-file "release/notes/$VERSION.txt" \
+            "$RUNNER_TEMP"/packages/* "$RUNNER_TEMP/feeds/latest-v2.json" "$RUNNER_TEMP/feeds/latest.json"
+
+      - name: Download the draft back and compare byte for byte
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/back" "$RUNNER_TEMP/expected"
+          cp "$RUNNER_TEMP"/packages/* "$RUNNER_TEMP"/feeds/* "$RUNNER_TEMP/expected/"
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/back"
+          diff -r "$RUNNER_TEMP/expected" "$RUNNER_TEMP/back"
+          ls -l "$RUNNER_TEMP/back"
+
+      - name: Publish as the latest release
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+
+      - name: Remove the draft when something failed
+        if: failure() && github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" == "true" ]]; then
+            gh release delete "v$VERSION" --repo "$GITHUB_REPOSITORY" --yes
+          fi

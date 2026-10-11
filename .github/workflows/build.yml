@@ -1,11 +1,11 @@
 name: Build desktop
 
-# Builds the three packages on native runners: Apple silicon Mac, Intel Mac and Windows x64.
+# Builds packages on native runners: Apple silicon Mac, Intel Mac and Windows x64.
 # Started by hand it only produces workflow artifacts and publishes nothing.
-# The release workflow calls it and attaches the same files to a draft release.
+# The release workflow calls it and publishes the same files.
 #
-# The three XA_UPDATE_* values below are public (feed addresses, download hosts and the public key);
-# they are compiled into the app. The private key is never needed for a build.
+# What is compiled into the app (feed addresses, download hosts, the public key) comes from
+# release/config.json. Those values are public; the private key is never needed for a build.
 
 on:
   workflow_dispatch:
@@ -24,11 +24,6 @@ on:
 
 permissions:
   contents: read
-
-env:
-  XA_UPDATE_FEED: https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/latest-v2.json,https://github.com/heihuzi-labs/captain-agents/releases/latest/download/latest-v2.json
-  XA_UPDATE_HOSTS: release-assets.githubusercontent.com,objects.githubusercontent.com
-  XA_UPDATE_PUBLIC_KEY: sJBh/Cd2G8sUFBOKF99n+LLJHfpzImZsXsrepIPK6XQ=
 
 jobs:
   build:
@@ -58,25 +53,16 @@ jobs:
           npm install --global pnpm@10.33.2
           pnpm install --frozen-lockfile
 
-      - name: Read the version and name the package
+      - name: Read the release settings and name the package
         shell: bash
         run: |
           set -euo pipefail
-          version="$(node -p "require('./package.json').version")"
-          # What the packaged app must report, how the file is named in the shared download bucket,
-          # and whether this job runs the test suites.
-          case "${{ matrix.target }}" in
-            mac-arm64) expected=darwin-arm64; package=macos-arm64.zip; tests=true ;;
-            mac-x64) expected=darwin-x64; package=macos-x64.zip; tests=false ;;
-            win-x64) expected=win32-x64; package=windows-x64.exe; tests=false ;;
-            *) echo "Unknown target: ${{ matrix.target }}" >&2; exit 1 ;;
-          esac
-          {
-            echo "APP_VERSION=$version"
-            echo "PACKAGE_NAME=captain-agents_${version}_${package}"
-            echo "EXPECTED_TARGET=$expected"
-            echo "RUN_TESTS=$tests"
-          } >> "$GITHUB_ENV"
+          # The update settings compiled into the app, the package file name used in the shared
+          # download bucket, and what the packaged app must report when it starts.
+          node scripts/release/release-inputs.mjs env >> "$GITHUB_ENV"
+          node scripts/release/release-inputs.mjs describe "${{ matrix.target }}" >> "$GITHUB_ENV"
+          # The test suites run once, on the Apple silicon runner.
+          echo "RUN_TESTS=${{ matrix.target == 'mac-arm64' }}" >> "$GITHUB_ENV"
 
       - name: Type check
         shell: bash
