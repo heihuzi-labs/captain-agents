@@ -20,7 +20,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     ['node_modules/electron-vite/bin/electron-vite.js', 'build'],
     ['scripts/prepare-platform.mjs'],
     ['scripts/check-desktop-bundle.mjs'],
-    ['node_modules/electron-builder/cli.js', ...TARGETS[target]],
+    // --publish never：打包工具在流水线里会自作主张去发布；发不发版只由发版流程决定。
+    ['node_modules/electron-builder/cli.js', ...TARGETS[target], '--publish', 'never'],
   ];
   for (const [script, ...args] of steps) {
     const result = spawnSync(process.execPath, [script, ...args], { cwd: root, stdio: 'inherit' });
