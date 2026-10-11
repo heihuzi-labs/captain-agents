@@ -1,5 +1,5 @@
 import { cp, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const platformParts = ['bin', 'src', 'sandbox', 'rules.md', 'guide', 'package.json'];
@@ -33,7 +33,7 @@ export async function checkPlatform(root) {
   const checked = new Set();
   async function dependencies(name, from) {
     const dir = await packageRoot(name, from);
-    if (!dir.startsWith(resolve(root) + '/')) throw new Error(`平台依赖落在包外：${name}`);
+    if (!dir.startsWith(resolve(root) + sep)) throw new Error(`平台依赖落在包外：${name}`);
     if (checked.has(dir)) return;
     checked.add(dir);
     const pkg = JSON.parse(await readFile(join(dir, 'package.json'), 'utf8'));

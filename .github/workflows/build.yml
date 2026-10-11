@@ -9,7 +9,18 @@ name: Build desktop
 
 on:
   workflow_dispatch:
+    inputs:
+      targets:
+        description: Which packages to build, as a JSON list
+        required: false
+        type: string
+        default: '["mac-arm64","mac-x64","win-x64"]'
   workflow_call:
+    inputs:
+      targets:
+        required: false
+        type: string
+        default: '["mac-arm64","mac-x64","win-x64"]'
 
 permissions:
   contents: read
@@ -21,29 +32,14 @@ env:
 
 jobs:
   build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.target }}
+    # Native runners: Apple silicon, Intel and Windows.
+    runs-on: ${{ matrix.target == 'win-x64' && 'windows-2022' || matrix.target == 'mac-x64' && 'macos-15-intel' || 'macos-15' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: macOS arm64
-            runner: macos-15
-            target: mac-arm64
-            expected: darwin-arm64
-            package: macos-arm64.zip
-            tests: true
-          - name: macOS x64
-            runner: macos-15-intel
-            target: mac-x64
-            expected: darwin-x64
-            package: macos-x64.zip
-          - name: Windows x64
-            runner: windows-2022
-            target: win-x64
-            expected: win32-x64
-            package: windows-x64.exe
+        target: ${{ fromJSON(inputs.targets) }}
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1
@@ -67,8 +63,20 @@ jobs:
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
-          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
-          echo "PACKAGE_NAME=captain-agents_${version}_${{ matrix.package }}" >> "$GITHUB_ENV"
+          # What the packaged app must report, how the file is named in the shared download bucket,
+          # and whether this job runs the test suites.
+          case "${{ matrix.target }}" in
+            mac-arm64) expected=darwin-arm64; package=macos-arm64.zip; tests=true ;;
+            mac-x64) expected=darwin-x64; package=macos-x64.zip; tests=false ;;
+            win-x64) expected=win32-x64; package=windows-x64.exe; tests=false ;;
+            *) echo "Unknown target: ${{ matrix.target }}" >&2; exit 1 ;;
+          esac
+          {
+            echo "APP_VERSION=$version"
+            echo "PACKAGE_NAME=captain-agents_${version}_${package}"
+            echo "EXPECTED_TARGET=$expected"
+            echo "RUN_TESTS=$tests"
+          } >> "$GITHUB_ENV"
 
       - name: Type check
         shell: bash
@@ -79,12 +87,12 @@ jobs:
       # On Windows the core suite does not finish yet (3 of the first 15 tests failed, then it hung
       # for 20 minutes): the core and its isolation have only been measured on macOS so far.
       - name: Core tests
-        if: matrix.tests
+        if: env.RUN_TESTS == 'true'
         shell: bash
         run: npm test
 
       - name: UI tests
-        if: matrix.tests
+        if: env.RUN_TESTS == 'true'
         shell: bash
         run: npm run test:ui
 
@@ -121,7 +129,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p shots
-          node test/e2e/packaged.ts "$APP_EXECUTABLE" "${{ matrix.expected }}" "shots/${{ matrix.target }}.png"
+          node test/e2e/packaged.ts "$APP_EXECUTABLE" "$EXPECTED_TARGET" "shots/${{ matrix.target }}.png"
 
       - name: Print size and SHA-256
         shell: bash
