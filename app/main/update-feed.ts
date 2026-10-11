@@ -3,8 +3,10 @@ import { createPublicKey, verify } from 'node:crypto';
 export const MAX_PACKAGE_SIZE = 1024 ** 3;
 export const MAX_FEED_SIZE = 128 * 1024;
 export const MAX_NOTES_LENGTH = 8000;
-export type UpdatePackage = { url: string; size: number; sha256: string };
+export type UpdatePackage = { urls: string[]; size: number; sha256: string };
 export type UpdateFeed = { version: string; publishedAt: string; notes: string; minimumVersion: string; packages: Record<string, UpdatePackage> };
+export type LegacyUpdatePackage = { url: string; size: number; sha256: string };
+export type LegacyUpdateFeed = Omit<UpdateFeed, 'packages'> & { packages: Record<string, LegacyUpdatePackage> };
 const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 function fields(v: unknown, keys: string[], label: string): asserts v is Record<string, unknown> {
   if (!object(v) || Object.keys(v).length !== keys.length || keys.some(k => !Object.hasOwn(v, k))) throw new Error(`${label}字段不完整或含有不认识的字段。`);
@@ -25,7 +27,12 @@ export function httpsUrl(value: unknown): URL {
   if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('更新地址必须是 HTTPS，且不能含登录信息或片段。');
   return url;
 }
-export function validateFeed(v: unknown): UpdateFeed {
+export function packageUrls(value: unknown): asserts value is string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) throw new Error('安装包地址须有 1–4 个。');
+  const urls = Array.from(value, address => httpsUrl(address).href);
+  if (new Set(urls).size !== urls.length) throw new Error('安装包地址不能重复。');
+}
+function validateBody(v: unknown, legacy: boolean): UpdateFeed | LegacyUpdateFeed {
   fields(v, ['version', 'publishedAt', 'notes', 'minimumVersion', 'packages'], '更新清单');
   if (!validVersion(v.version) || !validVersion(v.minimumVersion)) throw new Error('版本号必须是规范的 x.y.z。');
   if (compareVersions(v.minimumVersion, v.version) > 0) throw new Error('最低支持版本不能高于发布版本。');
@@ -35,13 +42,16 @@ export function validateFeed(v: unknown): UpdateFeed {
   if (!object(v.packages) || Object.keys(v.packages).length < 1 || Object.keys(v.packages).length > 16) throw new Error('安装包列表须有 1–16 个平台。');
   for (const [platform, pkg] of Object.entries(v.packages)) {
     if (!/^[a-z][a-z0-9]{0,19}-[a-z0-9]{1,20}$/.test(platform)) throw new Error('安装包的平台名称不对。');
-    fields(pkg, ['url', 'size', 'sha256'], '安装包');
-    httpsUrl(pkg.url);
+    fields(pkg, [legacy ? 'url' : 'urls', 'size', 'sha256'], '安装包');
+    if (legacy) httpsUrl(pkg.url); else packageUrls(pkg.urls);
     if (!Number.isSafeInteger(pkg.size) || (pkg.size as number) <= 0 || (pkg.size as number) > MAX_PACKAGE_SIZE) throw new Error('安装包大小须为正整数，且不能超过 1 GB。');
     if (typeof pkg.sha256 !== 'string' || !/^[a-fA-F0-9]{64}$/.test(pkg.sha256)) throw new Error('安装包 SHA-256 须为 64 位十六进制。');
   }
-  return v as UpdateFeed;
+  return v as UpdateFeed | LegacyUpdateFeed;
 }
+export function validateFeed(v: unknown): UpdateFeed { return validateBody(v, false) as UpdateFeed; }
+// 仅发布工具用于兼容已发布的旧客户端，应用不回退到旧协议。
+export function validateLegacyFeed(v: unknown): LegacyUpdateFeed { return validateBody(v, true) as LegacyUpdateFeed; }
 function base64(value: unknown, bytes: number, label: string): Buffer {
   if (typeof value !== 'string' || value.length !== Math.ceil(bytes / 3) * 4) throw new Error(`${label}格式不对。`);
   const data = Buffer.from(value, 'base64');
@@ -52,7 +62,7 @@ export function updatePublicKey(value: string) {
   const raw = base64(value, 32, '更新公钥');
   return createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw]), format: 'der', type: 'spki' });
 }
-export function verifyFeed(input: Uint8Array | string, publicKey: string): UpdateFeed {
+function verifiedBody(input: Uint8Array | string, publicKey: string): unknown {
   const bytes = typeof input === 'string' ? Buffer.from(input, 'utf8') : input;
   if (bytes.byteLength > MAX_FEED_SIZE) throw new Error('更新清单太大。');
   let envelope: unknown;
@@ -64,8 +74,10 @@ export function verifyFeed(input: Uint8Array | string, publicKey: string): Updat
   if (!verify(null, Buffer.from(envelope.body, 'utf8'), updatePublicKey(publicKey), signature)) throw new Error('更新清单签名不对，没有安装。');
   let body: unknown;
   try { body = JSON.parse(envelope.body); } catch { throw new Error('清单正文不是有效的 JSON。'); }
-  return validateFeed(body);
+  return body;
 }
+export function verifyFeed(input: Uint8Array | string, publicKey: string): UpdateFeed { return validateFeed(verifiedBody(input, publicKey)); }
+export function verifyLegacyFeed(input: Uint8Array | string, publicKey: string): LegacyUpdateFeed { return validateLegacyFeed(verifiedBody(input, publicKey)); }
 export function selectUpdate(feed: UpdateFeed, current: string, platform: string, arch: string): UpdatePackage | null {
   if (compareVersions(feed.version, current) <= 0) return null;
   if (compareVersions(current, feed.minimumVersion) < 0) throw new Error(`当前版本过旧，请手动安装 ${feed.version}。`);

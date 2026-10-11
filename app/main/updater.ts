@@ -8,7 +8,8 @@ export type UpdateClock = { now(): number; setTimeout(callback: () => void, ms: 
 const realClock: UpdateClock = { now: Date.now, setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>) };
 export type UpdaterOptions = {
   version: string; platform: string; arch: string; publicKey: string; autoCheck: boolean; offReason?: string;
-  fetchFeed(): Promise<Uint8Array>;
+  // 取数器逐地址调用同一份核对，只有核对通过才返回；版本与平台选择留在循环外。
+  fetchFeed(verify: (bytes: Uint8Array) => UpdateFeed): Promise<UpdateFeed>;
   download(pkg: UpdatePackage, progress: (received: number) => void): Promise<string>;
   prepare(zip: string, version: string): Promise<string>;
   restart(staged: string, version: string): Promise<void>;
@@ -35,7 +36,7 @@ export function createUpdater(options: UpdaterOptions) {
     busy = true; available = undefined; staged = undefined;
     change({ phase: 'checking' });
     try {
-      const feed = verifyFeed(await options.fetchFeed(), options.publicKey);
+      const feed = await options.fetchFeed(bytes => verifyFeed(bytes, options.publicKey));
       const pkg = selectUpdate(feed, options.version, options.platform, options.arch);
       if (pkg) { available = { feed, pkg }; change({ phase: 'available', version: feed.version, notes: feed.notes, size: pkg.size }); }
       else change({ phase: 'idle', checked: new Date(clock.now()).toISOString() });

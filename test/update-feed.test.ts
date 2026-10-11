@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
-import { compareVersions, MAX_FEED_SIZE, selectUpdate, verifyFeed } from '../app/main/update-feed.ts';
+import { compareVersions, MAX_FEED_SIZE, selectUpdate, verifyFeed, verifyLegacyFeed } from '../app/main/update-feed.ts';
 import { feed, pkg, publicKey, signed } from './update-helpers.ts';
 
 test('清单按原文 UTF-8 验签：合法、换空格、改一个字节、错签名、错公钥', () => {
@@ -40,7 +40,7 @@ test('未知字段、缺字段和所有坏包字段整份拒绝（包括非本�
   const original = feed();
   for (const name of Object.keys(original)) { const changed = { ...original } as Record<string, unknown>; delete changed[name]; assert.throws(() => verifyFeed(signed(changed), publicKey)); }
   assert.throws(() => verifyFeed(signed({ ...feed(), extra: 1 }), publicKey), /字段/);
-  for (const change of [{ url: 'http://updates.example.invalid/a' }, { url: 'https://u:p@updates.example.invalid/a' }, { url: 'https://updates.example.invalid/a#b' }, { url: 'https://updates.example.invalid/ a' }, { url: null }, { size: 0 }, { size: 1.5 }, { size: 1024 ** 3 + 1 }, { size: '12' }, { sha256: 'x'.repeat(64) }, { sha256: 'a'.repeat(63) }, { sha256: null }, { extra: 1 }]) {
+  for (const change of [{ urls: ['http://updates.example.invalid/a'] }, { urls: ['https://u:p@updates.example.invalid/a'] }, { urls: ['https://updates.example.invalid/a#b'] }, { urls: ['https://updates.example.invalid/ a'] }, { urls: [null] }, { size: 0 }, { size: 1.5 }, { size: 1024 ** 3 + 1 }, { size: '12' }, { sha256: 'x'.repeat(64) }, { sha256: 'a'.repeat(63) }, { sha256: null }, { extra: 1 }]) {
     assert.throws(() => verifyFeed(signed(feed({ packages: { 'darwin-arm64': pkg, 'other-x64': { ...pkg, ...change } as never } })), publicKey));
   }
 });
@@ -52,4 +52,19 @@ test('只认严格更新：相等、更旧不动，数值比较、最低版本�
   assert.throws(() => compareVersions('1.0', '1.0.0'), /版本号/);
   assert.throws(() => selectUpdate(feed(), '0.0.9', 'darwin', 'arm64'), /手动安装/);
   assert.throws(() => selectUpdate(feed(), '0.1.0', 'darwin', 'x64'), /这个平台暂时没有更新包/);
+});
+
+test('新旧协议严格区分，地址数量、重复与类型检查', () => {
+  for (const urls of [[], Array(5).fill(pkg.urls[0]), [pkg.urls[0], pkg.urls[0]], [pkg.urls[0], 'https://updates.example.invalid:443/app.zip'], 'https://updates.example.invalid/a', [null], ['http://updates.example.invalid/a']]) {
+    assert.throws(() => verifyFeed(signed(feed({ packages: { 'darwin-arm64': { ...pkg, urls } as never } })), publicKey));
+  }
+  const legacy = { ...feed(), packages: { 'darwin-arm64': { url: pkg.urls[0], size: pkg.size, sha256: pkg.sha256 } } };
+  assert.deepEqual(verifyLegacyFeed(signed(legacy), publicKey), legacy);
+  assert.throws(() => verifyFeed(signed(legacy), publicKey), /字段/);
+  assert.throws(() => verifyLegacyFeed(signed(), publicKey), /字段/);
+  assert.throws(() => verifyFeed(signed({ ...feed(), packages: { 'darwin-arm64': { ...pkg, url: pkg.urls[0] } } }), publicKey), /字段/);
+  for (const count of [1, 4]) {
+    const valid = feed({ packages: { 'darwin-arm64': { ...pkg, urls: Array.from({ length: count }, (_, i) => `https://updates.example.invalid/${i}.zip`) } } });
+    assert.deepEqual(verifyFeed(signed(valid), publicKey), valid);
+  }
 });

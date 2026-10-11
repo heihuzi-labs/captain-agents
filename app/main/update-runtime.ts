@@ -33,7 +33,7 @@ export async function desktopUpdater(config: {
   if (!reason) await cleanPartialDownloads(directory).catch(() => {});
   return createUpdater({
     ...config, offReason: reason, autoCheck: await readAutoUpdateCheck(), saveAutoCheck: setAutoUpdateCheck,
-    fetchFeed: async () => { if (!client) throw configurationError; return client.feed(); },
+    fetchFeed: async verify => { if (!client) throw configurationError; return client.feed(verify); },
     download: async (pkg, progress) => {
       if (!client) throw configurationError;
       return client.download(pkg, directory, progress);

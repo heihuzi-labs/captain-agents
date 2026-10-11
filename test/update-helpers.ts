@@ -6,7 +6,7 @@ import type { UpdateResponse } from '../app/main/update-download.ts';
 export const keys = generateKeyPairSync('ed25519');
 export const publicKey = Buffer.from(keys.publicKey.export({ format: 'jwk' }).x!, 'base64url').toString('base64');
 export const data = Buffer.from('假的应用安装包');
-export const pkg = { url: 'https://updates.example.invalid/app.zip', size: data.length, sha256: createHash('sha256').update(data).digest('hex') };
+export const pkg = { urls: ['https://updates.example.invalid/app.zip'], size: data.length, sha256: createHash('sha256').update(data).digest('hex') };
 export function feed(extra: Partial<UpdateFeed> = {}): UpdateFeed {
   return { version: '0.2.0', publishedAt: '2026-10-10T12:00:00.000Z', notes: '修好一件事\n第二行', minimumVersion: '0.1.0', packages: { 'darwin-arm64': { ...pkg } }, ...extra };
 }

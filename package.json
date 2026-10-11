@@ -1,6 +1,6 @@
 {
   "name": "xagents",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "派活工作台：把活派给本机的 Codex、Grok、Cursor 命令行，登记、隔离、验收、看板",
   "license": "MIT",
@@ -23,7 +23,8 @@
     "verify": "npm run typecheck && npm test && npm run test:ui && npm run build && npm run test:e2e",
     "icon": "electron scripts/make-icon.mjs",
     "update:key": "node scripts/release/generate-update-key.mjs",
-    "update:manifest": "node scripts/release/make-update.mjs"
+    "update:manifest": "node scripts/release/make-update.mjs",
+    "update:store": "node scripts/release/publish-store.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.77",
