@@ -185,12 +185,21 @@ test('还在不在：进程在才算在；Windows 上还要创建时间对得上
     assert.equal(stillRunning(child.pid, since - 3_600_000), !isWindows);
   } finally { child.kill('SIGKILL'); }
   await until(async () => !alive(child.pid));
-  // 等一下再看：Windows 上进程刚被结束的头几毫秒，系统配给它的控制台进程（算它的子进程）还没退完。
-  await until(async () => !stillRunning(child.pid, since));
+  assert.equal(stillRunning(child.pid, since), false);
+});
+
+test('进程树：最上面那个不在了、只知道这件活哪一刻算结束时，只收出生不晚于那一刻的子孙', () => {
+  // 100 号是当初起的（1000 时起的），已经不在。101 是它生前起的；102 是很久以后别的进程用了 100 这个号又起的，和我们无关。
+  const rows = [{ pid: 101, parent: 100, created: 1500 }, { pid: 103, parent: 101, created: 9_000_000 }, { pid: 102, parent: 100, created: 5_000_000 }];
+  assert.deepEqual(treeOf(rows, 100, 1000, undefined, 60_000), [101, 103]);
+  assert.deepEqual(treeOf(rows, 100, 1000), [101, 103, 102], '不给上限就分不出来');
+  // 100 号还在而且是我们起的：上限不起作用。
+  const alive = [{ pid: 100, parent: 1, created: 1000 }, ...rows];
+  assert.deepEqual(treeOf(alive, 100, 1000, undefined, 60_000), treeOf(alive, 100, 1000));
 });
 
 // 派活进程或看管进程被直接杀掉时就是这种情况：系统只带走它直接起的那一个，那一个自己起的还在跑、还占着副本目录。
-test('还在不在：最上面那个没了、它起的子孙还活着，Windows 上算还在；killTree 把留下的收走以后才算不在', async t => {
+test('还在不在：最上面那个没了、它起的子孙还活着，问的时候给了期限 Windows 上才算还在；killTree 把留下的收走以后才算不在', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'xa-orphan-')), file = join(dir, 'pid');
   t.after(() => rm(dir, { recursive: true, force: true }));
   // sh 起一个 Node，后面再跟一条命令，sh 自己就得留着等。路径加引号、用正斜杠（Git 的 sh 会吃掉没加引号的反斜杠）。
@@ -205,9 +214,13 @@ test('还在不在：最上面那个没了、它起的子孙还活着，Windows 
     process.kill(root.pid!, 'SIGKILL');
     await until(async () => !alive(root.pid));
     assert.equal(alive(orphan), true, '它起的那个还活着');
-    // macOS 上只看组长在不在（和以前一样）；Windows 上留下的子孙也算。
-    assert.equal(stillRunning(root.pid, since), isWindows);
-  } finally { killTree(root.pid, 'SIGKILL', since); }
+    // 缺省只认最上面那个：不在了。给了“这件活到什么时候为止”，Windows 上留下的子孙也算；macOS 上只看组长在不在（和以前一样）。
+    assert.equal(stillRunning(root.pid, since), false);
+    assert.equal(stillRunning(root.pid, since, Date.now()), isWindows);
+    // 上限早于它们出生：不算。
+    assert.equal(stillRunning(root.pid, since, since - 60_000), false);
+  } finally { killTree(root.pid, 'SIGKILL', since, undefined, Date.now()); }
   await until(async () => !alive(orphan));
-  await until(async () => !stillRunning(root.pid, since));
+  // 等一下再看：Windows 上进程刚被结束的头几毫秒，系统配给它的控制台进程（算它的子进程）还没退完。
+  await until(async () => !stillRunning(root.pid, since, Date.now()));
 });

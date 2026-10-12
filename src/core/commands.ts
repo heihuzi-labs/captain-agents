@@ -41,9 +41,12 @@ export async function collect(id: string, report: (text: string) => void = () =>
 export async function stop(id: string) {
   for (const job of await selectJobs(id)) {
     await updateJob(job.id, j => {
-      if (!active(j) && j.state !== 'lost' && !stillRunning(j.setupPid, j.setupSince)) return;
+      // 准备进程：派发进程被直接杀掉时，Windows 上它自己跟着没了，它起的子孙还在跑（platform.ts 的 stillRunning）。
+      // 留下的只可能出生在这件活结束之前；还没结束的，到现在为止。
+      const leftBy = setupLeftBy(j);
+      if (!active(j) && j.state !== 'lost' && !stillRunning(j.setupPid, j.setupSince, leftBy)) return;
       j.stopRequested = true;
-      killGroup(j.setupPid, 'SIGKILL', j.setupSince);
+      killGroup(j.setupPid, 'SIGKILL', j.setupSince, undefined, leftBy);
       if (alive(j.pid)) {
         // Windows 没有“请你退出”的信号（发了就是直接结束，看管进程来不及收尾）：这里直接停掉选手的进程树，
         // 看管进程等到选手退出、看到上面的记号，自己收尾成“被停止”；它每 2 秒也会看一次这个记号。
@@ -153,8 +156,9 @@ function checkRated(jobs: Job[]) {
   const missing = jobs.filter(j => j.decision && !j.rating);
   if (missing.length) throw new Error(`这些任务已拍板但还没打分：${missing.map(j => j.id).join('、')}。请先 xagents rate <任务号> --score 1-5，再清理。`);
 }
+const setupLeftBy = (j: Job) => j.ended ? Date.parse(j.ended) : Date.now();
 function checkClean(j: Job) {
-  if (stillRunning(j.setupPid, j.setupSince)) throw new Error(`任务 ${j.id} 的准备进程仍在，请先 xagents stop ${j.id}。`);
+  if (stillRunning(j.setupPid, j.setupSince, setupLeftBy(j))) throw new Error(`任务 ${j.id} 的准备进程仍在，请先 xagents stop ${j.id}。`);
   if (active(j) || (!j.started && alive(j.queuedBy))) throw new Error(`任务 ${j.id} 仍在运行或准备，请先 stop 并等派发命令退出，再 clean。`);
   if (j.state === 'lost' && stillRunning(j.workerPid, j.workerSince)) throw new Error(`任务 ${j.id} 失联后选手可能仍在运行，请先 xagents stop ${j.id}。`);
 }

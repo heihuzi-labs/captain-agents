@@ -20,8 +20,8 @@ import { workerEnv, passEnv } from './env.ts';
 import { assertTreeControl, killTree, treeSpawn } from './platform.ts';
 
 // 停掉选手（或准备命令）带出来的所有进程。since 是起它的时间，只有 Windows 用得上（见 platform.ts）。
-export function killGroup(pid: number | undefined, signal: 'SIGTERM' | 'SIGKILL', since?: number, exitedAt?: number) {
-  killTree(pid, signal, since, exitedAt);
+export function killGroup(pid: number | undefined, signal: 'SIGTERM' | 'SIGKILL', since?: number, exitedAt?: number, bornBy?: number) {
+  killTree(pid, signal, since, exitedAt, bornBy);
 }
 export async function reconcileSafely() {
   try { await listJobs(true); }
