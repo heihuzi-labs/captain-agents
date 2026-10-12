@@ -148,6 +148,7 @@ async function probeCase(name, args, env, tool) {
   const entry = { exit: r.exit, timedOut: r.timedOut ?? false, ms: r.ms, requests: requests.map(q => `${q.method} ${q.path} → ${q.replied ?? '404'}`),
     arrived: posts.length, auth: [...new Set(posts.map(q => q.auth === `Bearer ${fakeKey}` ? '假钥匙（登录文件里的）' : q.auth === `Bearer ${envKey}` ? '假钥匙（环境变量里的）' : q.auth ? '别的值' : '没带'))],
     tools: posts[0]?.tools ?? [], final: await fs.readFile(path.join(base, 'final.md'), 'utf8').catch(() => null), inner,
+    toolOutput: requests.flatMap(q => q.outputs).join(' ').slice(0, 500),
     notifyRan: await exists(marks.notify), mcpRan: await exists(marks.mcp), homeFileLeft: await exists(homeFile), stderr: tail(r.stderr), stdout: tail(r.stdout, 300) };
   result.cases[name] = entry;
   console.log(`[${name}] 退出码 ${entry.exit}${entry.timedOut ? '（超时）' : ''}，到假接口 ${entry.arrived} 次，钥匙 ${entry.auth.join('、') || '—'}，通知程序${entry.notifyRan ? '被执行了' : '没执行'}，外部连接${entry.mcpRan ? '被执行了' : '没执行'}，隔离里 ${JSON.stringify(inner)}`);
@@ -170,6 +171,12 @@ try {
     await probeCase('没装隔离：免安装的做法，权限表不带禁读', bare(['-c', 'windows.sandbox="unelevated"'], plain), platformEnv(), true);
     await probeCase('没装隔离：什么做法都不写，权限表不带禁读', bare([], plain), platformEnv(), true);
     await probeCase('没装隔离：免安装的做法，权限表带禁读', bare(['-c', 'windows.sandbox="unelevated"'], permissions), platformEnv(), true);
+    // 只读的活（审查、调研）：主人电脑上报“cannot enforce split writable root sets”。看是哪一种权限表引起的。
+    const un = ['-c', 'windows.sandbox="unelevated"'];
+    const plainRo = codexPermissions({ ...job, mode: 'read-only' }, { denyReadExtra: [] }, tmp, false, undefined, true);
+    await probeCase('没装隔离：只读的活，现在的权限表（只读 + 任务临时目录可写）', bare(un, plainRo), platformEnv(), true);
+    await probeCase('没装隔离：只读的活，权限表什么都不加', bare(un, 'permissions.xa={extends=":read-only",filesystem={}}'), platformEnv(), true);
+    await probeCase('没装隔离：能改文件的活，权限表什么都不加', bare(un, 'permissions.xa={extends=":workspace",filesystem={}}'), platformEnv(), true);
     const setup = await run(codex, ['sandbox', 'setup', '--elevated', '--current-user'], { env: platformEnv(), timeout: 300_000 });
     result.sandboxSetup = { exit: setup.exit, stderr: tail(setup.stderr, 300) };
     console.log(`[装隔离] 退出码 ${setup.exit}`);
