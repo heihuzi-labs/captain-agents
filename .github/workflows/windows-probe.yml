@@ -147,6 +147,63 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # The three things the platform starts a hidden PowerShell for (keeping the machine awake, the process list, the
+  # recycle bin), done by calling the system directly instead, and compared with today's way (docs/design-windows.md 13).
+  native:
+    name: System calls without PowerShell (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025, windows-11-arm]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.33.2
+          pnpm install --frozen-lockfile
+
+      - name: Run the probe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force probe-results | Out-Null
+          node scripts/probe/windows-native.mjs "probe-results/native-${{ matrix.os }}.json"
+
+      # The pipeline runs as an administrator; a user's machine normally does not. The same probe once more from a
+      # process without administrator rights. For the lead to look at: it may not be possible on a runner at all.
+      - name: Run the probe without administrator rights
+        if: always()
+        shell: pwsh
+        run: |
+          $out = Join-Path $PWD "probe-results\native-plain-${{ matrix.os }}.json"
+          $cmd = Join-Path $env:RUNNER_TEMP 'native-plain.cmd'
+          "@echo off`r`ncd /d `"$PWD`"`r`nnode scripts\probe\windows-native.mjs `"$out`" > `"$out.log`" 2>&1" | Out-File -FilePath $cmd -Encoding ascii
+          runas /trustlevel:0x20000 $cmd
+          for ($i = 0; $i -lt 60 -and -not (Test-Path $out); $i++) { Start-Sleep -Seconds 2 }
+          if (Test-Path $out) { Get-Content $out } else { 'the run without administrator rights left no result'; if (Test-Path "$out.log") { Get-Content "$out.log" } }
+          exit 0
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-native-${{ matrix.os }}
+          path: probe-results/*
+          if-no-files-found: warn
+          retention-days: 14
+
   # Whole pages at several display scales, for the lead to look at (docs/design-windows.md section 11.2).
   # The app is built but not packed, so a round takes a few minutes.
   page-shots:

@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.77",
+    "koffi": "3.3.2",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -51,6 +52,9 @@
     "onlyBuiltDependencies": [
       "electron",
       "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "koffi"
     ]
   },
   "main": "out/main/index.js",

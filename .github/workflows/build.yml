@@ -162,6 +162,19 @@ jobs:
           & $exe $cli windows-setup --remove | Out-Host
           exit $dispatch
 
+      # For the lead to look at: does the module that calls the system directly load when the runtime is the app's
+      # own program (docs/design-windows.md section 13). The probe and the module come from the source tree here.
+      - name: System calls without PowerShell, through the app's own program (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ELECTRON_RUN_AS_NODE: '1'
+        run: |
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\captain-agents\captain-agents.exe'
+          & $exe scripts\probe\windows-native.mjs shots\native-packaged.json | Out-Host
+          "probe through the app's own program: exit code $LASTEXITCODE"
+          exit 0
+
       - name: Print size and SHA-256
         shell: bash
         run: |
