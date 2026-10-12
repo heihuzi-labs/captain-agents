@@ -147,7 +147,10 @@ async function outer(codex, resultFile) {
       'credentials-roaming': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Credentials'), 'credentials-local': path.join(home, 'AppData', 'Local', 'Microsoft', 'Credentials'),
       'protect-roaming': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Protect'), 'codex-home': codexHome, worktree },
     outsideFile, port: server.address().port, port6: server6.address()?.port ?? 1, portAny: serverAny.address().port, httpPort: http.address().port, lanHosts, pipe, credential,
-    commands: { node: [process.execPath, '--version'], git: ['git.exe', '--version'], whoami: ['whoami.exe'], 'whoami-groups': ['whoami.exe', '/groups', '/fo', 'csv', '/nh'] },
+    commands: { node: [process.execPath, '--version'], git: ['git.exe', '--version'], whoami: ['whoami.exe'], 'whoami-groups': ['whoami.exe', '/groups', '/fo', 'csv', '/nh'],
+      powershell: ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', '1+1'],
+      // Windows 上 Python 的 asyncio 起事件循环时要在本机回环上连自己一下：拦了回环它还能不能用。
+      'python-asyncio': ['python.exe', '-c', 'import asyncio; asyncio.run(asyncio.sleep(0)); print("asyncio ok")'] },
   };
   const specFile = path.join(worktree, 'spec.json'); await fs.writeFile(specFile, JSON.stringify(spec));
   const probe = path.join(worktree, 'probe.mjs'); await fs.copyFile(self, probe);
@@ -201,6 +204,20 @@ async function outer(codex, resultFile) {
     // 对照：另外两种做法和“什么都不写”。只为记录它们为什么不能用。
     await sandboxCase('unelevated:xa-write', 'unelevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
     await sandboxCase('unset:xa-write', null, ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    // 补救试验：给离线专用账户加“拦本机回环”的系统过滤规则，再跑一遍；最后撤掉，确认恢复原样。
+    const fence = action => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(path.dirname(self), 'windows-loopback-fence.ps1'), '-Action', action], { timeout: 120_000 });
+    result.fenceInstall = brief(await fence('install'));
+    console.log(`[fence install] 退出码 ${result.fenceInstall.exit} ${result.fenceInstall.stdout} ${result.fenceInstall.stderr.slice(0, 500)}`);
+    await sandboxCase('fenced:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    await sandboxCase('fenced:xa-readonly', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':read-only'), '-c', envPolicy]);
+    await sandboxCase('fenced:xa-network-on', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', ',network={enabled=true}'), '-c', envPolicy]);
+    const fencedOutside = await run(process.execPath, [probe, '--inner', specFile], { cwd: worktree, env });
+    const fencedLine = fencedOutside.stdout.split(/\r?\n/).find(l => l.startsWith(MARK));
+    result.cases['fenced:outside-sandbox'] = { run: brief(fencedOutside), probes: fencedLine ? JSON.parse(fencedLine.slice(MARK.length)) : null };
+    result.fenceInstallAgain = brief(await fence('install'));
+    result.fenceRemove = brief(await fence('remove'));
+    console.log(`[fence remove] 退出码 ${result.fenceRemove.exit} ${result.fenceRemove.stdout} ${result.fenceRemove.stderr.slice(0, 500)}`);
+    await sandboxCase('unfenced:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
     result.sandboxLogs = {};
     for (const name of await fs.readdir(path.join(codexHome, '.sandbox')).catch(() => [])) {
       if (name.endsWith('.log')) result.sandboxLogs[name] = (await fs.readFile(path.join(codexHome, '.sandbox', name), 'utf8').catch(() => '')).slice(-5000);
