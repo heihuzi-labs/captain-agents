@@ -70,6 +70,8 @@ test('Windows 的探针脚本：能被 Node 解析，查的是给定的位置，
     for (const piece of ['whoami.exe', 'cmdkey.exe', "'TEMP', 'TMP'", "Test 'worktree'", "Test 'internet'", "Unread 'keychain-system'", '$spec.marker']) assert.ok(source.includes(piece), piece);
     assert.doesNotMatch(source, /New-Item -ItemType Directory|mkdir|Remove-Item|rmdir/i, '探针不建、不删文件夹');
     assert.doesNotMatch(source, /node|ELECTRON/i, '探针不依赖 Node，也不依赖应用自己的程序');
+    assert.doesNotMatch(source, /\.ToLower\(\)|\.ToUpper\(\)/, '大小写按与地区无关的规则折叠');
+    assert.equal(json.includes('\n'), false, '说明必须是一行');
     assert.match(windowsProbeScript({ ...spec, credential: null }), /"credential":null/);
     // 在真的 Windows 上让系统自带的 PowerShell 解析一遍：语法错了当场报出来。
     if (isWindows) {

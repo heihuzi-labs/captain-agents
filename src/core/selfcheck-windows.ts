@@ -99,6 +99,9 @@ export function windowsProbeScript(spec: WindowsProbeSpec) {
     logins: [['login-codex', '.codex', 'auth.json'], ['login-grok', '.grok', 'auth.json'], ['login-cursor', '.cursor', 'cli-config.json']],
     deepseek: deepseekHome(), keychainUser: keychainDirs(true)[0], keychainSystem: keychainDirs(true)[1] };
   // 说明放进一段原样字符串里再解析，路径里有引号、空格、中文都不用另外转义。
+  // 这段 JSON 必须保持一行：原样字符串只在“行首是 '@”时结束，JSON.stringify 把换行都转义了，所以数据里出不了这样一行。改成多行排版就等于给脚本开了注入的口子。
+  // 大小写一律按“与地区无关”的规则折叠（外面用的 JS toLowerCase 也是）：按当地规则折叠的话，土耳其语系统上带 I 的账户名会对不上，把主人的账户认成别人。
+  // 只有“拒绝访问”算挡住；“权限不够”这类系统原因不算，归到拿不准。
   return '\uFEFF' + `$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $spec = @'
@@ -117,12 +120,12 @@ function Code($e) {
       return $k
     }
     if ($x -is [System.UnauthorizedAccessException] -or $x -is [System.Security.SecurityException]) { return 'EPERM' }
-    if ($x -is [System.ComponentModel.Win32Exception] -and ($x.NativeErrorCode -eq 5 -or $x.NativeErrorCode -eq 1314)) { return 'EPERM' }
+    if ($x -is [System.ComponentModel.Win32Exception] -and $x.NativeErrorCode -eq 5) { return 'EPERM' }
     if ($x -is [System.IO.FileNotFoundException] -or $x -is [System.IO.DirectoryNotFoundException]) { return 'ENOENT' }
     if ($x -is [System.TimeoutException]) { return 'ETIMEDOUT' }
     if ($x -is [System.InvalidOperationException] -and $x.Message -eq 'TEMP_MISMATCH') { return 'TEMP_MISMATCH' }
     $h = $x.HResult
-    if ($h -eq -2147024891 -or $h -eq -2147023582) { return 'EPERM' }
+    if ($h -eq -2147024891) { return 'EPERM' }
     if ($h -eq -2147024894 -or $h -eq -2147024893) { return 'ENOENT' }
     if ($h -eq -2147024629) { return 'ENOTDIR' }
     if ($h -eq -2147024816 -or $h -eq -2147024713) { return 'EEXIST' }
@@ -157,7 +160,7 @@ Test 'worktree' { $p = Under $spec.worktree 'write-probe'; NewFile $p; [System.I
 Test 'tmpdir' {
   foreach ($n in 'TEMP', 'TMP') {
     $v = [Environment]::GetEnvironmentVariable($n)
-    if (-not $v -or $v.TrimEnd('\\', '/').ToLower() -ne $spec.tmp.ToLower()) { throw (New-Object System.InvalidOperationException 'TEMP_MISMATCH') }
+    if (-not $v -or $v.TrimEnd('\\', '/').ToLowerInvariant() -ne $spec.tmp.ToLowerInvariant()) { throw (New-Object System.InvalidOperationException 'TEMP_MISMATCH') }
   }
   $p = Under $spec.tmp 'write-probe'; NewFile $p; [System.IO.File]::Delete($p)
 }
@@ -166,7 +169,7 @@ Test 'home' { NewFile $spec.homeFile }
 if ($probes[$probes.Count - 1].outcome -eq 'allowed') { try { [System.IO.File]::Delete($spec.homeFile) } catch { $probes[$probes.Count - 1].reason += '，清理失败：' + (Code $_.Exception) } }
 # 身份：隔离里必须是专用账户。还是主人的账户，说明跑的不是我们认的那种隔离。
 $who = $null
-try { $who = (& whoami.exe | Out-String).Trim().ToLower() } catch { }
+try { $who = (& whoami.exe | Out-String).Trim().ToLowerInvariant() } catch { }
 if (-not $who -or $LASTEXITCODE -ne 0) { Add 'account' 'unknown' '查不到当前账户' }
 elseif (($who -split '\\\\')[-1] -eq $spec.owner) { Add 'account' 'allowed' '还是主人的账户' }
 else { Add 'account' 'denied' '是另一个账户' }
@@ -201,7 +204,7 @@ function Unreadable($name, $files) {
 Unreadable 'shell-files' $spec.shellFiles
 Unreadable 'credential-files' $spec.credentialFiles
 # 环境变量：外面放的假变量看不到，也没有别的名字带密钥字样的变量，才算挡住。只报名字。
-$seen = @([Environment]::GetEnvironmentVariables().Keys | Where-Object { $n = [string]$_; ($spec.fakes -contains $n) -or (@($spec.words | Where-Object { $n.ToUpper().Contains($_) }).Count -gt 0) })
+$seen = @([Environment]::GetEnvironmentVariables().Keys | Where-Object { $n = [string]$_; ($spec.fakes -contains $n) -or (@($spec.words | Where-Object { $n.ToUpperInvariant().Contains($_) }).Count -gt 0) })
 if ($seen.Count) { Add 'env-secret' 'allowed' ('看得到 ' + ($seen -join '、')) } else { Add 'env-secret' 'denied' '看不到' }
 # 登录文件：不存在（没登录）时改查它所在的文件夹能不能列出，被挡住说明将来登录生成的文件同样读不到。
 foreach ($l in $spec.logins) {
