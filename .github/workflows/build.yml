@@ -123,6 +123,36 @@ jobs:
         shell: bash
         run: node scripts/probe/windows-launcher.mjs "$APP_EXECUTABLE" shots/launcher.json || echo "launcher check did not finish"
 
+      # The pipeline's other self-check runs from the source tree with plain Node. An installed app runs the
+      # platform through its own program instead, and the probe inside the isolation is started with that
+      # program too. This is that path, from the place a per-user install lands (docs/design-windows.md 11.5).
+      - name: Self-check through the packaged app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          XAGENTS_HOME: ${{ runner.temp }}\xagents-home-packaged
+          CODEX_NON_INTERACTIVE: '1'
+          CODEX_RELEASE: 0.162.1
+        run: |
+          $script = Join-Path $env:RUNNER_TEMP 'codex-install.ps1'
+          Invoke-WebRequest -Uri 'https://chatgpt.com/codex/install.ps1' -OutFile $script
+          & $script
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\captain-agents'
+          Copy-Item -Recurse -Force dist\win-unpacked $app
+          $exe = Join-Path $app 'captain-agents.exe'
+          $cli = Join-Path $app 'resources\platform\bin\xagents'
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          New-Item -ItemType Directory -Force $env:XAGENTS_HOME | Out-Null
+          & $exe $cli windows-setup | Out-Host
+          "setup exit code: $LASTEXITCODE"
+          foreach ($n in 1, 2) {
+            $t = Measure-Command { & $exe $cli selfcheck | Out-Host }
+            "self-check through the packaged app, run ${n}: exit code $LASTEXITCODE, $([int]$t.TotalSeconds) seconds"
+          }
+          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') shots\selfcheck-packaged.json -ErrorAction SilentlyContinue
+          & $exe $cli windows-setup --remove | Out-Host
+          exit 0
+
       - name: Print size and SHA-256
         shell: bash
         run: |
