@@ -226,6 +226,15 @@ Codex 靠 Windows 防火墙的规则拦本机回环，规则确实装上了，�
 
 第 1 到第 3 步不需要主人的电脑；第 4 步需要。第 5 步可以和第 4 步错开做。
 
+**做到哪了（2026-10-12 当天）：**
+
+- 第 1 步做完：流水线的 Windows 机器上核心测试 625 项通过、0 失败（另有 40 条只属于 macOS 的在 Windows 上跳过），并排跑三遍结果一样；界面测试 282 项通过。macOS 上 `npm run verify` 全过。正式的构建流水线在 Windows 上也跑这两套测试了。
+- 第 2 步做完：探针报告见 [research/windows-codex-sandbox-2026-10-12.md](research/windows-codex-sandbox-2026-10-12.md)；平台自己的 `xagents windows-setup` 和 `xagents selfcheck` 在三台真的 Windows 机器上跑通，自检 54 项通过。
+- 第 3 步做了代码，没在真的窗口里看过：命令行安装、防休眠、回收站、标题栏、快捷键、托盘、通知。流水线上只确认了安装包能打出来、应用能启动、页面截图里顶栏的留白是对的；系统画的窗口按钮、托盘、通知、回收站、防休眠都要到真机上看。
+- 第 4 步没做，等主人的 Windows 电脑：照 [windows-real-machine.md](windows-real-machine.md) 做。
+- 第 5 步没做：Windows 上应用里写明暂时不带在线更新；`release/config.json` 的发版目标没有加 `win-x64`。
+- 第 6 步做了文档同步和对齐主线；真机验收过后再交主会话。
+
 全程在自己的分支和工作副本里做，不合并主线、不发版。
 
 ## 8. 分工
