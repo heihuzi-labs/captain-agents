@@ -61,17 +61,16 @@ jobs:
           # download bucket, and what the packaged app must report when it starts.
           node scripts/release/release-inputs.mjs env >> "$GITHUB_ENV"
           node scripts/release/release-inputs.mjs describe "${{ matrix.target }}" >> "$GITHUB_ENV"
-          # The test suites run once, on the Apple silicon runner.
-          echo "RUN_TESTS=${{ matrix.target == 'mac-arm64' }}" >> "$GITHUB_ENV"
+          # The test suites run on the Apple silicon runner and on Windows (not on the Intel Mac).
+          echo "RUN_TESTS=${{ matrix.target == 'mac-arm64' || matrix.target == 'win-x64' }}" >> "$GITHUB_ENV"
 
       - name: Type check
         shell: bash
         run: npm run typecheck
 
-      # The test suites run once, on the Apple silicon runner. macOS minutes are the expensive ones and
-      # the Intel job would only repeat the same result (2026-10-12: 625 core tests passed on both).
-      # On Windows the core suite does not finish yet (3 of the first 15 tests failed, then it hung
-      # for 20 minutes): the core and its isolation have only been measured on macOS so far.
+      # The test suites run on the Apple silicon runner and on Windows. macOS minutes are the expensive
+      # ones and the Intel job would only repeat the same result (2026-10-12: 625 core tests passed on
+      # both). Windows runs its own: paths, processes and the isolation differ there.
       - name: Core tests
         if: env.RUN_TESTS == 'true'
         shell: bash

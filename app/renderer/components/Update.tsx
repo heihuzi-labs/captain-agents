@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { isWindows } from '../ui/platform.ts';
 import type { AppInfo, CliStatus } from '../../shared/ipc.ts';
 import { errorReason } from '../lib/errors.ts';
 import { fmtTime } from '../lib/board.ts';
@@ -88,7 +89,7 @@ export function UpdateSettings() {
 const CLI_NOTE: Record<Exclude<CliStatus, 'unavailable'>, string> = {
   installed: '已安装。终端里的 xagents 用的就是这个应用里的平台，以后跟着应用一起更新。',
   missing: '还没安装。装好后在终端里就能用 xagents，以后跟着应用一起更新。',
-  other: '~/.local/bin/xagents 已经有一个别的（比如链到源码目录的开发版）。替换后改用这个应用里的那一份。',
+  other: isWindows ? '终端里已经有一个别的 xagents 命令。替换后改用这个应用里的那一份。' : '~/.local/bin/xagents 已经有一个别的（比如链到源码目录的开发版）。替换后改用这个应用里的那一份。',
 };
 export function CliSettings() {
   const [status, setStatus] = useState<CliStatus | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirm, setConfirm] = useState(false);
@@ -109,6 +110,6 @@ export function CliSettings() {
       {status === 'missing' && <Button size="sm" disabled={busy} onClick={() => void install(false)}>安装</Button>}
       {status === 'other' && <Button size="sm" disabled={busy} onClick={() => setConfirm(true)}>替换…</Button>}
     </SettingRow>
-    {confirm && <ConfirmDialog tone="primary" busy={busy} message="把现有的 ~/.local/bin/xagents 换成这个应用里的那一份？" detail="原来那个文件会被覆盖；如果它是你自己链到源码目录的开发版，换了以后终端里用的就不再是源码目录里的代码。" confirmLabel="替换" onCancel={() => setConfirm(false)} onConfirm={() => void install(true)} />}
+    {confirm && <ConfirmDialog tone="primary" busy={busy} message={isWindows ? "把现有的 xagents 命令换成这个应用里的那一份？" : "把现有的 ~/.local/bin/xagents 换成这个应用里的那一份？"} detail="原来那个文件会被覆盖；如果它是你自己链到源码目录的开发版，换了以后终端里用的就不再是源码目录里的代码。" confirmLabel="替换" onCancel={() => setConfirm(false)} onConfirm={() => void install(true)} />}
   </SettingGroup>;
 }

@@ -7,8 +7,8 @@ h1, h2, h3 { font-weight: 650; }
 
 /* ---------- 外框：顶栏固定，内容区域滚动 ---------- */
 .app { display: flex; flex-direction: column; height: 100vh; }
-/* 顶栏就是窗口的标题栏：整条可拖动，控件不可拖；左边给 macOS 红黄绿按钮留位置。规范见 docs/ui-spec.md 第 11 节。 */
-.top { flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--topbar-h); padding: 0 var(--sp-4) 0 var(--titlebar-inset); border-bottom: 1px solid var(--line); background: var(--bg); -webkit-app-region: drag; }
+/* 顶栏就是窗口的标题栏：整条可拖动，控件不可拖；左边给 macOS 红黄绿按钮留位置，Windows 上改成右边给窗口按钮留位置。规范见 docs/ui-spec.md 第 11 节。 */
+.top { flex: none; display: flex; align-items: center; gap: var(--sp-3); height: var(--topbar-h); padding: 0 var(--titlebar-right) 0 var(--titlebar-inset); border-bottom: 1px solid var(--line); background: var(--bg); -webkit-app-region: drag; }
 button, a, input, textarea, select, summary { -webkit-app-region: no-drag; }
 .top .status { margin-left: auto; }
 /* 更新提示（第 18 节）：有新版本时才出现，在额度圆环左边；出现时由它把右边一组推到最右。 */

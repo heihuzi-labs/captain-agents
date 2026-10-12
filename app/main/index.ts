@@ -19,7 +19,7 @@ import { readSettings, writeSettings, setNetworkAllowed, keepModels, loadConfigu
 import { queryQuota, readQuotaCache } from '../../src/core/quota.ts';
 import type { View } from '../../src/core/view-types.ts';
 import type { Destination, CliStatus } from '../shared/ipc.ts';
-import { applyAppearance, syncBackground, windowBackground } from './appearance.ts';
+import { applyAppearance, syncBackground, titleBarOverlay, windowBackground } from './appearance.ts';
 import { jobActions, quotaRefreshHandler, quotaRefresher, settingsActions, teamActions, chatActions } from './actions.ts';
 import { noticeTitle, notificationTracker } from './notifications.ts';
 import type { Notice } from './notifications.ts';
@@ -45,6 +45,8 @@ declare const __XA_UPDATE_PUBLIC_KEY__: string;
 declare const __XA_UPDATE_HOSTS__: string[];
 protocol.registerSchemesAsPrivileged([{ scheme: 'xa-icon', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 app.setName('派活工作台');
+// Windows：系统通知要认得出是哪个应用才弹得出来，用和安装包一致的应用标识。
+if (process.platform === 'win32') app.setAppUserModelId('app.xagents.desk');
 process.env.PATH = desktopPath(process.env.PATH);
 // 安装脚本请旧进程退出时，也走 before-quit 保存窗口位置、停止定时清理。
 process.once('SIGTERM', () => app.quit());
@@ -118,14 +120,19 @@ async function openWindow() {
       const area = display.workArea;
       return bounds.x! < area.x + area.width && bounds.x! + bounds.width > area.x && bounds.y! < area.y + area.height && bounds.y! + bounds.height > area.y;
     })) { delete bounds.x; delete bounds.y; }
+    // 顶栏就是标题栏。macOS：左上角留红黄绿按钮；Windows：右上角三个窗口按钮由系统画在顶栏上，不显示菜单栏。
+    const chrome = process.platform === 'win32'
+      ? { titleBarStyle: 'hidden' as const, titleBarOverlay: titleBarOverlay(nativeTheme.shouldUseDarkColors), autoHideMenuBar: true }
+      : { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: TRAFFIC_LIGHTS };
     const current = new BrowserWindow({ ...bounds, minWidth: 900, minHeight: 600, title: '派活工作台',
-      titleBarStyle: 'hiddenInset', trafficLightPosition: TRAFFIC_LIGHTS, show: false,
+      ...chrome, show: false,
       backgroundColor: windowBackground(nativeTheme.shouldUseDarkColors),
       webPreferences: { ...securePreferences, preload: join(import.meta.dirname, '../preload/index.cjs'), partition: 'xa-desktop' } });
     window = current;
-    // 留给页面处理，防止默认菜单的 Cmd+R 先把整个窗口重载。
+    // 留给页面处理，防止默认菜单的 Cmd+R（Windows 上是 Ctrl+R）先把整个窗口重载。
     current.webContents.on('before-input-event', (_event, input) => {
-      current.webContents.setIgnoreMenuShortcuts(input.meta && ['1', '2', '3', 'r'].includes(input.key.toLowerCase()));
+      const modifier = process.platform === 'win32' ? input.control : input.meta;
+      current.webContents.setIgnoreMenuShortcuts(modifier && ['1', '2', '3', '4', 'r'].includes(input.key.toLowerCase()));
     });
     current.webContents.on('will-navigate', event => event.preventDefault());
     current.webContents.on('will-redirect', event => event.preventDefault());

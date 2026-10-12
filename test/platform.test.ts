@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { join, posix, win32 } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { backgroundSpawn, expandHomePath, findSh, isWindows, killTree, parseSnapshot, relativeInside, samePath, shell, treeOf, treeSpawn } from '../src/core/platform.ts';
+import { backgroundSpawn, expandHomePath, findSh, isWindows, killTree, parseSnapshot, relativeInside, samePath, shell, stillRunning, treeOf, treeSpawn } from '../src/core/platform.ts';
 import { alive } from '../src/core/fsx.ts';
 import { until, killLeftover } from './helpers.ts';
 
@@ -175,4 +175,19 @@ test('被占用时重试：只在 Windows 上、只对“没权限 / 被占用�
   await assert.rejects(retryBusy(other.fn, true), { code: 'ENOENT' }); assert.equal(other.calls(), 1);
   const stuck = failing(['EPERM', 'EPERM', 'EPERM', 'EPERM']);
   await assert.rejects(retryBusy(stuck.fn, true, 3), { code: 'EPERM' }); assert.equal(stuck.calls(), 3);
+});
+
+test('还在不在：进程在才算在；Windows 上还要创建时间对得上（号被别的进程重用不算）', async () => {
+  assert.equal(stillRunning(undefined), false); assert.equal(stillRunning(0), false); assert.equal(stillRunning(2 ** 30, Date.now()), false);
+  const since = Date.now();
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { ...treeSpawn(), stdio: 'ignore' });
+  try {
+    await until(async () => alive(child.pid));
+    assert.equal(stillRunning(child.pid, since), true);
+    assert.equal(stillRunning(child.pid), true, '不知道起始时间就只看在不在');
+    // 同一个号，但“当初起它的时间”是一小时前：Windows 上认定不是那个进程了；macOS 上只看在不在。
+    assert.equal(stillRunning(child.pid, since - 3_600_000), !isWindows);
+  } finally { child.kill('SIGKILL'); }
+  await until(async () => !alive(child.pid));
+  assert.equal(stillRunning(child.pid, since), false);
 });

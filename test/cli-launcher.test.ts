@@ -103,7 +103,8 @@ test('Windows 的命令行安装：两个文件都对才算已安装；别人的
 });
 
 test('Windows 的命令行启动脚本真的能跑：参数和中文、空格原样交给应用里的平台', { skip: process.platform !== 'win32' ? '只在 Windows 上成立：要用命令提示符和 Git 的终端真的启动' : false }, async t => {
-  const c = await context(t, false), bin = join(c.temp, 'bin dir'), platform = join(c.temp, '平台 目录');
+  // 放启动脚本的目录不带空格（真实位置 WindowsApps 也不带）：命令提示符对“带引号的程序路径再加带引号的参数”有自己的一套拆法，那是它的事，不是启动脚本的事。
+  const c = await context(t, false), bin = join(c.temp, 'bin'), platform = join(c.temp, '平台 目录');
   const capture = join(c.temp, 'capture.json');
   await mkdir(join(platform, 'bin'), { recursive: true });
   // 替身“应用”就是 Node；替身“平台入口”只记下参数和运行时开关。

@@ -37,8 +37,8 @@
   --chart: #2f6bd8; /* 单系列图表的柱色（dataviz 校验：浅色底通过亮度带与 3:1 对比） */
   /* 尺寸：图标、批次色带 */
   --icon-sm: 16px; --icon-md: 22px; --icon-lg: 28px; --band: 3px; --hairline: 1px;
-  /* 标题栏给 macOS 左上角三个按钮留的宽度 */
-  --titlebar-inset: 86px;
+  /* 标题栏给 macOS 左上角三个按钮留的宽度；右边平常只是普通边距 */
+  --titlebar-inset: 86px; --titlebar-right: var(--sp-4);
   /* 顶栏（就是标题栏）高度；额度圆环直径。红黄绿按钮的位置在 app/main/index.ts，随顶栏高度一起改 */
   --topbar-h: 48px; --ring: 24px;
   /* 协作页右边成员栏的宽度（docs/ui-spec.md 第 17 节） */
@@ -61,3 +61,6 @@
     --chart: #5f93ef; /* 深色底另取一档：主色 #7ba8f6 在深色亮度带之外 */
   }
 }
+
+/* Windows：窗口的三个按钮由系统画在顶栏右上角，左边不用留位置，右边留出它们的宽度（docs/ui-spec.md 第 11 节）。 */
+:root[data-platform="windows"] { --titlebar-inset: var(--sp-4); --titlebar-right: 148px; }

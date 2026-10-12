@@ -10,6 +10,7 @@ import type { UpdateState } from '../shared/ipc.ts';
 
 export function updateOffReason(config: { development: boolean; packaged: boolean; feed: string; publicKey: string; platform: string }): string | undefined {
   if (config.development || !config.packaged || !config.feed || !config.publicKey) return '这个版本不带在线更新';
+  if (config.platform === 'win32') return 'Windows 版暂时不带在线更新，新版本要手动下载安装程序来装。';
   if (config.platform !== 'darwin') return '这个平台暂不支持在线更新';
   return undefined;
 }
