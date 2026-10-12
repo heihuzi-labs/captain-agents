@@ -14,6 +14,8 @@ import type { Job } from '../src/core/job.ts';
 import { resumeMember } from '../src/core/wake.ts';
 
 const session = '01234567-89ab-cdef-0123-456789abcdef';
+// Windows 上这几条先跳过，Windows 的续接核对另补用例（docs/design-windows.md 4.6 记着这一条还没测）。
+const winTable = process.platform === 'win32' ? '只属于 macOS：续接时核对旧权限表这一套是按 macOS 的权限表测的；Windows 的权限表只写本机存在的路径，用例里的假路径都不存在' : false;
 const resume = { round: 2, prompt: 'prompt-r2.md' };
 async function setup(t: TestContext, who: Job['who'] = 'codex', extra: Partial<Job> = {}) {
   const c = await context(t, false);
@@ -30,7 +32,7 @@ async function setup(t: TestContext, who: Job['who'] = 'codex', extra: Partial<J
 }
 
 for (const who of ['codex', 'grok'] as const) {
-  test(`${who} 每轮命令等于当前生成器的结果再做原续接变形，只读保持，命令与包逐轮留痕`, async t => {
+  test(`${who} 每轮命令等于当前生成器的结果再做原续接变形，只读保持，命令与包逐轮留痕`, { skip: winTable }, async t => {
     const { job, first } = await setup(t, who);
     const second = await prepareRun(job, '第二轮', { denyReadExtra: ['new-secret'], denyReadHome: ['xa-new-secret'] }, resume);
     const fresh = await command(job, '第二轮', second.isolation, join(jobDir(job.id), second.runtime));
@@ -58,7 +60,7 @@ for (const who of ['codex', 'grok'] as const) {
       JSON.stringify({ round: 1, command: first.command, actual: first.actual, isolation: first.isolation }, null, 2) + '\n');
   });
 
-  test(`${who} 旧任务没有额外禁读输入记录，也从旧有效权限恢复后取并集`, async t => {
+  test(`${who} 旧任务没有额外禁读输入记录，也从旧有效权限恢复后取并集`, { skip: winTable }, async t => {
     const { job } = await setup(t, who);
     delete job.isolation; delete job.launches;
     const oldCommand = structuredClone(job.command);
@@ -86,7 +88,7 @@ test('切换成功后只留当前和上一轮的运行包，更早的删掉；�
 
 // 2026-10-10 真实探针抓到：联网开着时权限表结尾多一段 network，旧的解析把它吞进条目里，真实成员一律续接不了。
 for (const who of ['codex', 'grok'] as const) {
-  test(`${who} 联网开着派的任务：旧权限能完整核对，续接照常，联网状态不变`, async t => {
+  test(`${who} 联网开着派的任务：旧权限能完整核对，续接照常，联网状态不变`, { skip: winTable }, async t => {
     const { job } = await setup(t, who, { network: true, mode: 'workspace-write' });
     if (who === 'codex') assert.match(job.command!.args.find(a => a.startsWith('permissions.xa='))!, /,network=\{enabled=true\}\}$/);
     const second = await prepareRun(job, '第二轮', { denyReadExtra: ['new-secret'], denyReadHome: [] }, resume);
@@ -98,7 +100,7 @@ for (const who of ['codex', 'grok'] as const) {
   });
 }
 
-test('旧权限无法完整识别、旧禁读被读例外覆盖、网络不符，一律拒绝且不切换旧包', async t => {
+test('旧权限无法完整识别、旧禁读被读例外覆盖、网络不符，一律拒绝且不切换旧包', { skip: winTable }, async t => {
   const { job } = await setup(t);
   const original = structuredClone(job);
   const position = job.command!.args.findIndex(arg => arg.startsWith('permissions.xa='));

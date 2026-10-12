@@ -6,7 +6,7 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import { paths } from './paths.ts';
 import { readJson, writeJson, hasCode, withLock } from './fsx.ts';
 import { sandbox, codexPermissions, deepseekHome, keychainDirs, SHELL_FILES, CREDENTIAL_FILES } from './sandbox.ts';
-import { srtPath, securityPath } from './workers.ts';
+import { codexPath, srtPath, securityPath } from './workers.ts';
 import { SECRET_WORDS, SRT_OWN_VARS, codexEnvPolicy, exactEnv, workerEnv } from './env.ts';
 import { extraDenyRead } from './settings.ts';
 import { whos, isolationOf, isolations } from './roster.ts';
@@ -265,7 +265,7 @@ await unreadable('credential-files', ${JSON.stringify(CREDENTIAL_FILES)});
   const seen = Object.keys(process.env).filter(n => fakes.includes(n) || (words.some(w => n.toUpperCase().includes(w)) && !(own.includes(n) && proxyPassword !== null && process.env[n] === proxyPassword)));
   probes.push({name:'env-secret', outcome:seen.length ? 'allowed' : 'denied', reason:seen.length ? '看得到 ' + seen.join('、') : '看不到'});
 }
-${expectedProbes(mode).filter(n => n.startsWith('login-')).map(name => {
+${expectedProbes(mode, false).filter(n => n.startsWith('login-')).map(name => {
     // 文件夹由自检在外面先建好，所以查“能不能列出”，没登录时也有确定的结果。
     if (name === 'login-deepseek') return `await test('login-deepseek', () => readdir(${JSON.stringify(deepseekHome())}));`;
     const path = { 'login-codex': '.codex/auth.json', 'login-grok': '.grok/auth.json', 'login-cursor': '.cursor/cli-config.json' }[name]!;
@@ -378,7 +378,7 @@ export async function readSelfcheck(now = Date.now()): Promise<{ ok: boolean | n
 export async function codexProbe(job: Pick<Job, 'mode' | 'repo' | 'worktree'>, project: Pick<Project, 'denyReadExtra'>, script: string, tmp: string, run: Executor = execute, inherited: NodeJS.ProcessEnv = process.env, inner: Record<string, string> = {}) {
   const home = await mkdtemp(join(tmpdir(), 'xagents-codex-home-'));
   try {
-    const file = process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
+    const file = codexPath();
     const env = exactEnv(externalEnvironment({ ...workerEnv(inherited, { CODEX_HOME: home, TMPDIR: tmp }), ...inner }), { ...process.env, ...inherited });
     return await run(file, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '-c', codexEnvPolicy(), '--', ...nodeInvocation([script])], job.worktree, 20000, undefined, env);
   } finally { await rm(home, { recursive: true, force: true }); }

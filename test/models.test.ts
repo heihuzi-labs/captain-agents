@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { isAbsolute } from 'node:path';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -64,7 +65,7 @@ test('Codex 用与派活相同的路径（不在 PATH 上）；真实样本里�
     return sample(cmd.file === 'grok' ? 'grok-models-real.txt' : cmd.file === 'cursor-agent' ? 'cursor-models-real.txt' : 'codex-models-real.json');
   });
   const result = await run();
-  assert.equal(files[0], codexPath()); assert.ok(codexPath().startsWith('/'));
+  assert.equal(files[0], codexPath()); assert.ok(isAbsolute(codexPath()));
   process.env.XAGENTS_CODEX = '/opt/自定义/codex'; await run();
   assert.equal(files[3], '/opt/自定义/codex'); assert.equal(codexPath(), '/opt/自定义/codex');
   // 派活用的启动命令取的就是同一个函数的结果。
@@ -79,7 +80,7 @@ test('Codex 用与派活相同的路径（不在 PATH 上）；真实样本里�
 });
 
 test('找不到 Codex 时也列出当前模型，写明无法核对', async () => {
-  const result = await queryModels(async cmd => { if (cmd.file.endsWith('codex')) throw new Error('spawn codex ENOENT'); return sample(cmd.file === 'grok' ? 'grok-models.txt' : 'cursor-models.txt'); });
+  const result = await queryModels(async cmd => { if (/codex(\.exe)?$/.test(cmd.file)) throw new Error('spawn codex ENOENT'); return sample(cmd.file === 'grok' ? 'grok-models.txt' : 'cursor-models.txt'); });
   assert.equal(result[0].current[0].present, null);
   assert.match(formatModels(result), /Codex：查不到（spawn codex ENOENT）\n {2}当前 codex：gpt-6-astra（无法核对）/);
 });

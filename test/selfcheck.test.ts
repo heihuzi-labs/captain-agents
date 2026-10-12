@@ -78,7 +78,7 @@ test('缓存一天有效，过期重检；失败和损坏拦截，不能仅凭 o
   assert.equal((await readSelfcheck(now - 1)).ok, null);
   await ensureSelfcheck(checker); assert.equal(calls, 1);
   await writeFile(file, JSON.stringify(current(new Date(now - 86400000).toISOString()))); await ensureSelfcheck(checker); assert.equal(calls, 2);
-  await writeFile(file, JSON.stringify({ version: 7, ok: true, at: new Date().toISOString(), results: [] }));
+  await writeFile(file, JSON.stringify({ version: 7, platform: process.platform, ok: true, at: new Date().toISOString(), results: [] }));
   await assert.rejects(ensureSelfcheck(checker), /自检没过/); assert.equal(calls, 2);
   // 旧版本的缓存（探针做法改之前）即使名字齐全、写着通过，也要重新自检；版本 4 还没有钥匙串探针。
   await writeFile(file, JSON.stringify({ ...current(), version: 4 }));

@@ -155,7 +155,7 @@ describe('项目群聊推进', { concurrency: 1 }, () => {
     assert.equal((await c.jobs()).length, 1);
   });
 
-  test('续接重建两种隔离：新增禁读生效，首轮禁读删除后仍保留，只读和成员身份不变', async t => {
+  test('续接重建两种隔离：新增禁读生效，首轮禁读删除后仍保留，只读和成员身份不变', { skip: process.platform === 'win32' ? '只属于 macOS：续接时核对旧权限表这一套是按 macOS 的权限表测的；Windows 的权限表只写本机存在的路径，用例里的假路径都不存在' : false }, async t => {
     const c = await setup(t, { grok: '完成', deepseek: '完成' });
     const config = join(c.home, 'config.json'), projectFile = join(c.home, 'projects/测试.json');
     const deny = async (home: string, repo: string) => {

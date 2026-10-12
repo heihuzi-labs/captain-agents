@@ -90,7 +90,7 @@ test('Windows 的公用可写位置和存凭据的系统文件夹：按环境变
   assert.deepEqual(temp, { 'tmp-user': 'T', 'tmp-shared': join('S', 'Temp'), 'tmp-public': 'P', 'tmp-programdata': 'D', 'tmp-root': temp['tmp-root'], 'npm-logs': join('L', 'npm-cache', '_logs') });
   assert.deepEqual(keychainDirs(true, home, { APPDATA: 'R', LOCALAPPDATA: 'L' }), [join('R', 'Microsoft', 'Credentials'), join('L', 'Microsoft', 'Credentials'), join('R', 'Microsoft', 'Protect'), join('R', 'Microsoft', 'Vault'), join('L', 'Microsoft', 'Vault')]);
   assert.deepEqual(keychainDirs(true, home, {}).slice(0, 2), [join(home, 'AppData', 'Roaming', 'Microsoft', 'Credentials'), join(home, 'AppData', 'Local', 'Microsoft', 'Credentials')]);
-  assert.deepEqual(keychainDirs(false, '/Users/me'), ['/Users/me/Library/Keychains', '/Library/Keychains']);
+  assert.deepEqual(keychainDirs(false, '/Users/me'), [join('/Users/me', 'Library/Keychains'), '/Library/Keychains']);
   assert.ok(homeDeny(true).includes('Documents/PowerShell') && homeDeny(true).includes('.netrc'));
   assert.ok(!homeDeny(false).includes('Documents/PowerShell'));
 });

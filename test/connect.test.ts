@@ -214,7 +214,9 @@ test('CLI 列出各家、接入、撤下、备份位置、错误参数；guide �
   const guide = await c.cli(['guide']); assert.equal(guide.code, 0, guide.stderr); assert.match(guide.stdout, /接入的 AI：Claude 还没接入；Codex 还没接入；Grok 和 Claude 共用；Cursor 还没接入；DeepSeek Harness 还没接入/);
   const fakeHome = join(c.temp, '不是目录'); await fs.writeFile(fakeHome, '');
   const failedRead = await c.cli(['guide'], { HOME: fakeHome, USERPROFILE: fakeHome });
-  assert.equal(failedRead.code, 0, failedRead.stderr); assert.match(failedRead.stdout, /接入状态读不出：/);
+  assert.equal(failedRead.code, 0, failedRead.stderr);
+  // 家目录其实是个文件：macOS 上读它下面的东西报“不是目录”，算读不出；Windows 上报的是“不存在”，和没装分不开，所以只在非 Windows 上看这句话。
+  if (process.platform !== 'win32') assert.match(failedRead.stdout, /接入状态读不出：/);
 });
 
 test('主进程三条处理都先 guard，接入和撤下用可测参数校验，缺参、多参、非名单都拒绝', async () => {

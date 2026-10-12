@@ -125,11 +125,11 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] })));
   // 三种隔离都禁读终端配置文件和命令历史（主人常把钥匙写在里面，Grok 的登录式 bash 还会自动读），以及常见的登录凭据文件。
   for (const f of [...SHELL_FILES, ...CREDENTIAL_FILES]) {
-    assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`${JSON.stringify(join(homedir(), f))}="deny"`), f);
+    assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, () => true).includes(`${JSON.stringify(join(homedir(), f))}="deny"`), f);
     for (const who of ['grok', 'cursor-grok'] as Who[]) assert.ok((await sandbox(job(who), { denyReadExtra: [] })).filesystem.denyRead.includes(join(homedir(), f)), `${who} ${f}`);
   }
   // 三种隔离都禁读 DeepSeek 的登录文件夹。
-  assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`${JSON.stringify(join(c.home, 'deepseek'))}="deny"`));
+  assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, () => true).includes(`${JSON.stringify(join(c.home, 'deepseek'))}="deny"`));
   const grok = await command(job('grok'), '题目', { denyReadExtra: [] });
   assert.equal(Object.keys(grok.env).length, 13); assert.equal(Object.values(grok.env).filter(v => v === 'false').length, 10);
   // srt 用 CLAUDE_CODE_TMPDIR 给选手设 TMPDIR（不设就是公用的 /tmp/claude）。
@@ -184,7 +184,8 @@ test('Codex 权限表完整禁读、开口 tmp、合并项目双份路径并去�
   const { homedir } = await import('node:os');
   const p = { denyReadExtra: ['.data', 'secret-dir', '.data'] };
   for (const ro of [false, true]) {
-    const j = job('codex', ro), table = codexPermissions(j, p);
+    // 第五个参数：把名单上的路径都当成本机存在的（Windows 上权限表只写存在的路径，这里要看的是完整名单）。
+    const j = job('codex', ro), table = codexPermissions(j, p, undefined, false, () => true);
     assert.ok(table.startsWith(`permissions.xa={extends="${ro ? ':read-only' : ':workspace'}",filesystem={`));
     for (const entry of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc']) assert.ok(table.includes(`${JSON.stringify(join(homedir(), entry))}="deny"`), entry);
     assert.ok(table.includes(`${JSON.stringify(join(homedir(), '.codex/tmp'))}="read"`));
@@ -201,7 +202,7 @@ test('Codex 权限表完整禁读、开口 tmp、合并项目双份路径并去�
 test('Codex TOML 路径转义引号和反斜杠，保留空格中文，拒绝控制字符和越界路径', () => {
   const j = { ...job('codex'), repo: resolve('/仓库 空格"反\\斜'), worktree: resolve('/副本 空格"反\\斜') };
   const extra = '目录 空格"反\\斜';
-  const table = codexPermissions(j, { denyReadExtra: [extra] });
+  const table = codexPermissions(j, { denyReadExtra: [extra] }, undefined, false, () => true);
   for (const root of [j.repo, j.worktree]) assert.ok(table.includes(`${JSON.stringify(join(root, extra))}="deny"`));
   for (const char of ['\n', '\r', '\t', '\0', '\x1f', '\x7f', '\x85']) {
     assert.throws(() => codexPermissions(j, { denyReadExtra: [`secret${char}/..hidden`] }), /控制字符/);
@@ -321,7 +322,8 @@ test('设置里额外禁读的家目录位置，三家隔离都加上；写错�
   }
   process.env.XAGENTS_CODEX = resolve('/test/codex');
   const codex = await command(job('codex'), '题目', home);
-  assert.ok(codex.args.some(a => a.includes(`${JSON.stringify(join(homedir(), '.my-secrets'))}="deny"`)));
+  // Windows 上权限表只写本机存在的路径，这个假位置不存在，所以那里不会出现在启动参数里（见 selfcheck-windows.test.ts）。
+  if (process.platform !== 'win32') assert.ok(codex.args.some(a => a.includes(`${JSON.stringify(join(homedir(), '.my-secrets'))}="deny"`)));
   for (const bad of [['../escape'], ['/abs'], ['~/.x'], ['.'], [''], 'x', [1], ['a\nb']]) {
     await writeFile(join(c.home, 'config.json'), JSON.stringify({ denyReadHome: bad }));
     await assert.rejects(extraDenyRead(), /denyReadHome|路径必须/, JSON.stringify(bad));
