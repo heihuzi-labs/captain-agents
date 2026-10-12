@@ -1,5 +1,6 @@
-import { builtinWhos, isBuiltin, isChannel, isModelName, isWho, keptWhos, loadRoster, setModelsCatalog, spec, specFor, vendorOf, whos } from './roster.ts';
-import type { ModelsConfig, Vendor } from './roster.ts';
+import { listedProviders, listedWho } from './listed.ts';
+import { builtinWhos, floor, isBuiltin, isChannel, isModelName, isWho, keptWhos, loadRoster, setModelsCatalog, spec, specFor, vendorOf, whos } from './roster.ts';
+import type { Effort, ModelsConfig, Vendor } from './roster.ts';
 import { discoveredModel, readModelsCache, timestamp } from './model-cache.ts';
 import type { ModelsCache } from './model-cache.ts';
 import { join } from 'node:path';
@@ -100,6 +101,10 @@ export async function writeSettings(update: SettingsPatch | ((current: Settings)
     const workersPatch = Object.hasOwn(patch, 'workers') ? validateWorkersPatch(patch.workers) : {};
     const workers = { ...current.workers, ...workersPatch };
     if (!keptWhos.some(who => workers[who]?.enabled)) throw new Error('至少要有一位选手开着，请先打开另一位选手。');
+    if (Object.keys(workersPatch).length) {
+      const listed = await listedProviders(), available = keptWhos.filter(who => listedWho(listed, who));
+      if (available.length && !available.some(who => workers[who]?.enabled)) throw new Error('至少要有一位选手开着，请先打开另一位选手。');
+    }
     const archived = patch.archivedProjects ? { archivedProjects: tidyArchived(patch.archivedProjects) } : {};
     const { network: _network, ...retained } = config;
     await writeJson(join(paths().home, 'config.json'), { ...retained, ...current, ...patch, ...archived, workers });
@@ -135,6 +140,8 @@ export function effectiveModels(stored: unknown): ModelsConfig {
   if (!object(stored)) return result;
   if (object(stored.extra)) for (const [who, value] of Object.entries(stored.extra)) {
     if (!object(value) || !isChannel(value.channel) || value.channel === 'deepseek' || !timestamp(value.added)) continue;
+    if (value.manual !== undefined && (value.manual !== true || value.channel !== 'codex')) continue;
+    if (value.manual === true && (!Array.isArray(value.efforts) || !Array.from(value.efforts).every(e => floor.efforts.includes(e)) || value.fast !== undefined)) continue;
     const m = discoveredModel(value.channel, { ...value, fast: value.fast !== undefined });
     if (!m) continue;
     const s = specFor(value.channel, m);
@@ -142,7 +149,8 @@ export function effectiveModels(stored: unknown): ModelsConfig {
     if (value.fast !== undefined && (!object(value.fast) || !s.fast || Object.keys(value.fast).length !== 1
       || ('model' in s.fast ? value.fast.model !== s.fast.model : value.fast.suffix !== s.fast.suffix))) continue;
     result.extra[who] = { channel: value.channel, model: m.model, shown: m.shown, efforts: m.efforts,
-      ...(m.description !== undefined ? { description: m.description } : {}), ...(s.fast ? { fast: s.fast } : {}), added: value.added };
+      ...(m.description !== undefined ? { description: m.description } : {}), ...(s.fast ? { fast: s.fast } : {}), added: value.added,
+      ...(value.manual === true ? { manual: true } : {}) };
   }
   const known = new Set([...builtinWhos, ...Object.keys(result.extra)]);
   if (Array.isArray(stored.dropped)) result.dropped = [...new Set(stored.dropped.filter((w): w is string => typeof w === 'string' && known.has(w)))];
@@ -155,11 +163,40 @@ export function effectiveModels(stored: unknown): ModelsConfig {
 export async function loadConfiguredRoster(): Promise<void> { await readSettings(); }
 
 // 桥与核心共用参数边界；只接受整份模型名列表，绝不收通道接法、隔离或任意配置字段。
-export function modelSelection(channel: unknown, models: unknown): { channel: Vendor; models: string[] } {
+export function modelSelection(channel: unknown, models: unknown, dropManual: unknown = []): { channel: Vendor; models: string[]; dropManual: string[] } {
   if (!isChannel(channel)) throw new Error('模型通道只能选 Codex、Grok、Cursor 或 DeepSeek。');
   if (!Array.isArray(models) || models.length > 500 || !Array.from(models).every(isModelName)) throw new Error('保留模型须为模型名列表，最多 500 项。');
   if (new Set(models).size !== models.length) throw new Error('保留的模型不能重复。');
-  return { channel, models: [...models] };
+  if (!Array.isArray(dropManual) || dropManual.length > 500 || !Array.from(dropManual).every(isModelName)
+    || new Set(dropManual).size !== dropManual.length || dropManual.some(m => models.includes(m))) throw new Error('明确不保留的手动模型须为不重复的模型名列表，不能同时保留，最多 500 项。');
+  if (dropManual.length && channel !== 'codex') throw new Error('只有 Codex 通道有手动添加的模型。');
+  return { channel, models: [...models], dropManual: [...dropManual] };
+}
+// 桥与核心共用，手动添加只收模型名和底线内的强度，不接受任何通道接法或快速版字段。
+export function manualModelInput(channel: unknown, model: unknown, efforts: unknown): { channel: 'codex'; model: string; efforts: Effort[] } {
+  if (channel !== 'codex') throw new Error('只有 Codex 通道支持手动添加模型；其他通道只能保留程序名单里的模型，DeepSeek 只用内置模型。');
+  if (!isModelName(model)) throw new Error('模型名格式不对：须以字母或数字开头，只能含字母、数字、点、下划线、加号和连字符，最多 160 字。');
+  if (!Array.isArray(efforts) || !efforts.length || efforts.length > floor.efforts.length || !Array.from(efforts).every(e => floor.efforts.includes(e))
+    || new Set(efforts).size !== efforts.length) throw new Error('允许的强度至少选一个，只能选中档、高档、超高档，不能重复。');
+  return { channel, model, efforts: (floor.efforts as readonly Effort[]).filter(e => efforts.includes(e)) };
+}
+export async function addModel(channelValue: unknown, modelValue: unknown, effortValues: unknown): Promise<void> {
+  const { channel, model, efforts } = manualModelInput(channelValue, modelValue, effortValues);
+  await withLock(paths().home, async () => {
+    const config = await readConfig(), current = settings(config);
+    const existing = whos.find(w => vendorOf(w) === channel && spec(w).model === model);
+    const extra = { ...current.models.extra };
+    let who = existing;
+    if (who === undefined) {
+      const s = specFor(channel, { model, shown: model, efforts, fast: false });
+      if (isWho(s.who)) throw new Error(`模型 ${model} 的选手号 ${s.who} 与已有模型冲突，不能添加。`);
+      who = s.who;
+      extra[who] = { channel, model, shown: model, efforts, added: new Date().toISOString(), manual: true };
+    }
+    const next: ModelsConfig = { ...current.models, extra, dropped: current.models.dropped.filter(w => w !== who) };
+    await writeJson(join(paths().home, 'config.json'), { ...config, models: next });
+    loadRoster(next.extra, next.dropped);
+  });
 }
 // 第一次问到某一家的名单时，把它记成基线（seen）：之后新冒出来的才标“新”，不然头一回三十个模型全是“新”，没有意义。
 // 已经有基线的通道不动（主人保存选择时才更新）。
@@ -175,14 +212,16 @@ export async function baselineSeenModels(cache: ModelsCache | null): Promise<voi
     if (changed) await writeJson(join(paths().home, 'config.json'), { ...config, models: { ...current.models, seen } });
   });
 }
-export async function keepModels(channelValue: unknown, modelValues: unknown): Promise<void> {
-  const { channel, models } = modelSelection(channelValue, modelValues);
+export async function keepModels(channelValue: unknown, modelValues: unknown, dropManualValues: unknown = []): Promise<void> {
+  const { channel, models, dropManual } = modelSelection(channelValue, modelValues, dropManualValues);
   await withLock(paths().home, async () => {
     const config = await readConfig();
     const current = settings(config);
     const cache = await readModelsCache();
     const latest = channel === 'deepseek' ? [] : cache?.channels[channel]?.models ?? [];
     const extra = { ...current.models.extra };
+    const manualWhos = whos.filter(w => vendorOf(w) === channel && extra[w]?.manual === true);
+    if (dropManual.some(m => !manualWhos.some(w => spec(w).model === m))) throw new Error('明确不保留的模型必须是这一家已有的手动模型。');
     const chosen: string[] = [];
     for (const model of models) {
       const existing = whos.find(w => vendorOf(w) === channel && spec(w).model === model);
@@ -199,6 +238,8 @@ export async function keepModels(channelValue: unknown, modelValues: unknown): P
     }
     const dropped = new Set(current.models.dropped);
     for (const who of whos.filter(w => vendorOf(w) === channel)) {
+      // 旧界面的整份选择不认识手动项：遗漏时保持原保留状态，只有明确列出才取消。
+      if (manualWhos.includes(who) && !dropManual.includes(spec(who).model) && !chosen.includes(who)) continue;
       if (chosen.includes(who)) dropped.delete(who); else dropped.add(who);
     }
     for (const who of chosen) dropped.delete(who);

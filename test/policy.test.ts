@@ -18,6 +18,10 @@ async function registry(t: TestContext) {
   const c = await context(t, false), previous = process.env.XAGENTS_HOME;
   process.env.XAGENTS_HOME = c.home;
   t.after(() => { if (previous === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = previous; });
+  for (const [key, value] of Object.entries({ XAGENTS_FAKE_WORKER: fixture, CODEX_HOME: join(c.temp, 'codex-config') })) {
+    const old = process.env[key]; process.env[key] = value;
+    t.after(() => { if (old === undefined) delete process.env[key]; else process.env[key] = old; });
+  }
   return c;
 }
 

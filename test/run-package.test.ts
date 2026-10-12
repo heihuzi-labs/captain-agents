@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { context, root } from './helpers.ts';
@@ -146,5 +146,28 @@ test('任务锁内确认上一轮看管进程已退出，存活时不准备下�
   } finally {
     // helpers 清理不能把测试进程当作看管进程停止。
     await updateJob(job.id, current => { delete current.pid; });
+  }
+});
+
+test('续接时主人的 Codex 配置换了放钥匙的变量：命令里“不给哪些变量”的名单变了，拒绝续接', { skip: winTable }, async t => {
+  const c = await context(t, false), codexHome = join(c.temp, 'codex-home'), config = join(codexHome, 'config.toml');
+  const keys = ['XAGENTS_HOME', 'XAGENTS_FAKE_WORKER', 'CODEX_HOME'];
+  const saved = keys.map(key => process.env[key]);
+  process.env.XAGENTS_HOME = c.env.XAGENTS_HOME!; process.env.XAGENTS_FAKE_WORKER = c.env.XAGENTS_FAKE_WORKER!; process.env.CODEX_HOME = codexHome;
+  t.after(() => keys.forEach((key, i) => { if (saved[i] === undefined) delete process.env[key]; else process.env[key] = saved[i]; }));
+  const relay = (envKey: string) => `model_provider = "relay"\n[model_providers.relay]\nbase_url = "https://relay.test/v1"\n${envKey ? `env_key = "${envKey}"\n` : ''}`;
+  await mkdir(codexHome, { recursive: true }); await writeFile(config, relay('RELAY_HANDLE'));
+  const job: Job = { ...selection('codex:high'), id: '1012-endpoint', batch: 'batch', project: '测试', repo: c.repo, worktree: c.repo, branch: 'xa/test', base: 'base', mode: 'read-only',
+    kind: '审查', title: '测试', summary: '测试运行包', state: 'done', created: 'T0', started: 'T0', ended: 'T1', session };
+  const first = await prepareRun(job, '第一轮', { denyReadExtra: [] });
+  usePreparedRun(job, first);
+  assert.deepEqual(first.command.pass, ['RELAY_HANDLE']);
+  // 配置没变：照常续接，接口那几项原样留在续接命令里。
+  const same = await prepareRun(job, '第二轮', { denyReadExtra: [] }, resume);
+  assert.ok(same.actual.args.includes('model_provider="relay"')); assert.deepEqual(same.command.pass, ['RELAY_HANDLE']);
+  // 换了变量名、或不再点名：上一轮不给命令的那个变量，这一轮命令就看得到了，不能悄悄续接。
+  for (const next of ['OTHER_HANDLE', '']) {
+    await writeFile(config, relay(next));
+    await assert.rejects(prepareRun(job, '第二轮', { denyReadExtra: [] }, resume), /环境变量过滤无法证明兼容/);
   }
 });

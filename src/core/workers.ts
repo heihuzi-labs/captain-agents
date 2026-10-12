@@ -18,6 +18,7 @@ import type { Isolated } from './sandbox.ts';
 import { allowedEfforts, fastWhos, isWho, isolationOf, launchModel, spec, supportsFast, vendorOf, whos } from './roster.ts';
 import type { Effort } from './roster.ts';
 import { isWindows } from './platform.ts';
+import { codexEndpoint, official } from './endpoint.ts';
 
 const effortNames: Record<Effort, string> = { medium: '中档', high: '高档', xhigh: '超高档' };
 // --who 写法：选手:强度[:fast]。强度只开中档、高档、超高档，永远不拉满，也不开最低档；允许哪些由 roster 决定。
@@ -124,7 +125,7 @@ export async function command(job: Job, text: string, project: Isolated, runtime
   const unset = [...(vendorOf(job.who) === 'deepseek' ? KEY_VARS : []), ...(network ? ['NODE_USE_SYSTEM_CA'] : [])];
   // 联网任务避免读取系统钥匙串，npm 缓存只写任务专用临时目录（负责人隔离实测）。
   if (network) env.npm_config_cache = join(tmp, 'npm-cache');
-  let file: string, args: string[];
+  let file: string, args: string[], pass: string[] = [];
   // 每件活一个专用临时目录，选手只能写它（见 sandbox.ts 的 jobTmpDir）。
   await mkdir(tmp, { recursive: true });
   if (isolationOf(job.who) === 'codex') {
@@ -134,7 +135,11 @@ export async function command(job: Job, text: string, project: Isolated, runtime
     file = codexPath();
     const deepseek = vendorOf(job.who) === 'deepseek';
     const disable = ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories'];
-    args = ['exec', '--ignore-user-config', ...(isWindows ? WINDOWS_SANDBOX : []), ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : []), '-c', codexEnvPolicy(deepseek ? KEY_VARS : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
+    // 用户的 Codex 连的是哪个接口，原样带上（--ignore-user-config 会把它一起丢掉，接自定义接口的人就派不出活）。
+    // 钥匙放在环境变量里的：只把配置里点名的那一个交给 Codex 主程序，并明写不给它跑的命令（docs/design-scan.md 规则二）。
+    const endpoint = deepseek ? official : await codexEndpoint();
+    if (endpoint.envKey) pass = [endpoint.envKey];
+    args = ['exec', '--ignore-user-config', ...(isWindows ? WINDOWS_SANDBOX : []), ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : endpoint.args), '-c', codexEnvPolicy(deepseek ? KEY_VARS : pass), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
   } else {
     file = nodeRunner().file;
     // 替身模式仍传入完整参数；无需安装或执行真正的 srt。
@@ -162,7 +167,7 @@ export async function command(job: Job, text: string, project: Isolated, runtime
     file = nodeRunner().file;
     args = [resolve(process.env.XAGENTS_FAKE_WORKER), ...args];
   }
-  return { file, args, env, ...(unset.length ? { unset } : {}), ...(isolationOf(job.who) === 'cursor' ? { login: 'cursor' as const } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
+  return { file, args, env, ...(unset.length ? { unset } : {}), ...(pass.length ? { pass } : {}), ...(isolationOf(job.who) === 'cursor' ? { login: 'cursor' as const } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
 }
 // Grok 的登录每 6 小时换一次新令牌、旧令牌作废；写回 ~/.grok/auth.json 要在 ~/.grok 里新建临时文件，选手隔离里做不到。
 // 所以派 Grok 活前先在隔离外刷新：剩不到 5 小时就换新，选手干活期间用不着自己刷新（跑着的选手会直接用磁盘上的新令牌）。

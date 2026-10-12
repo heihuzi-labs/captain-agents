@@ -26,7 +26,8 @@ if (process.argv[2] === '--inner') {
   });
   const secretNames = Object.keys(process.env).filter(name => /KEY|TOKEN|SECRET|PASS|CREDENTIAL|AUTH|COOKIE|PRIVATE/i.test(name));
   console.log(MARK + JSON.stringify({ inside: await write(path.join(process.cwd(), 'inner.txt')), tmp: await write(path.join(spec.tmp, 'inner.txt')),
-    home: await write(spec.homeFile), internet: await connect('1.1.1.1', 443), local: await connect('127.0.0.1', spec.port), secretNames }));
+    home: await write(spec.homeFile), internet: await connect('1.1.1.1', 443), local: await connect('127.0.0.1', spec.port), secretNames,
+    seen: (spec.watch ?? []).filter(name => name in process.env) }));
   process.exit(0);
 }
 // 用户配置里的两种“会在隔离外执行程序”的东西都指到这里：被执行了就留下记号。
@@ -105,7 +106,9 @@ const server = http.createServer((req, res) => {
 await new Promise(done => server.listen(0, '127.0.0.1', done));
 port = server.address().port;
 const baseUrl = `http://127.0.0.1:${port}/v1`;
-await fs.writeFile(specFile, JSON.stringify({ tmp, homeFile, port }));
+// watch：两个名字里不带密钥字样的变量。一个是配置里点名放钥匙的（启动参数里明写不给命令），一个什么都不做（对照，命令应当看得到）。
+const HANDLE = 'XA_PROBE_RELAY_HANDLE', PLAIN = 'XA_PROBE_PLAIN';
+await fs.writeFile(specFile, JSON.stringify({ tmp, homeFile, port, watch: [HANDLE, PLAIN] }));
 
 // 用户的 Codex 配置：接自定义接口，另带两样会在隔离外执行程序的东西（任务结束时的通知程序、一个外部连接）。
 const toml = value => JSON.stringify(value);
@@ -121,8 +124,8 @@ const permissions = codexPermissions(job, { denyReadExtra: [] }, tmp, false);
 const sandboxFlag = windows ? ['-c', 'windows.sandbox="elevated"'] : [];
 // 和 src/core/workers.ts 里派 Codex 活的参数一字不差（探针另加的只有 extra）。
 const disable = ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories'];
-const platformArgs = (extra = []) => ['exec', '--ignore-user-config', ...sandboxFlag, ...disable.flatMap(n => ['--disable', n]), ...extra,
-  '-c', codexEnvPolicy(), '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort="medium"', '-c', 'default_permissions="xa"', '-c', permissions,
+const platformArgs = (extra = [], hidden = []) => ['exec', '--ignore-user-config', ...sandboxFlag, ...disable.flatMap(n => ['--disable', n]), ...extra,
+  '-c', codexEnvPolicy(hidden), '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort="medium"', '-c', 'default_permissions="xa"', '-c', permissions,
   '-C', worktree, '--json', '-o', path.join(base, 'final.md'), '-'];
 // 对照：读用户配置、什么都不关。用来证明上面那两个记号在配置生效时确实会出现。
 const controlArgs = ['exec', ...sandboxFlag, '-c', codexEnvPolicy(), '-m', 'gpt-6-astra', '-c', 'default_permissions="xa"', '-c', permissions,
@@ -171,6 +174,9 @@ try {
   const envProvider = ['-c', 'model_provider="probe"', '-c', provider('env_key="XA_PROBE_RELAY_KEY"')];
   await probeCase('钥匙在环境变量：不过滤', platformArgs(envProvider), { ...platformEnv(), XA_PROBE_RELAY_KEY: envKey }, true);
   await probeCase('钥匙在环境变量：按平台过滤', platformArgs(envProvider), platformEnv({ ...process.env, XA_PROBE_RELAY_KEY: envKey }), false);
+  // 变量名里不带密钥字样时，靠的只有启动参数里点名的那一条：命令里必须看不到它，对照的那个必须看得到。
+  const handleProvider = ['-c', 'model_provider="probe"', '-c', provider(`env_key="${HANDLE}"`)];
+  await probeCase('钥匙变量的名字不带密钥字样：点名不给命令', platformArgs(handleProvider, [HANDLE]), { ...platformEnv(), [HANDLE]: envKey, [PLAIN]: 'plain' }, true);
 
   requests = []; wantTool = false;
   const models = await run(codex, ['debug', 'models', '-c', 'model_provider="probe"', '-c', provider()], { env: platformEnv() });

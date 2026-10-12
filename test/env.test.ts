@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SECRET_WORDS, isSecretName, workerEnv, exactEnv, codexEnvPolicy } from '../src/core/env.ts';
+import { SECRET_WORDS, isSecretName, workerEnv, exactEnv, codexEnvPolicy, passEnv } from '../src/core/env.ts';
 import { execute } from '../src/core/verify.ts';
 import { context } from './helpers.ts';
 
@@ -32,4 +32,13 @@ test('交给执行器时没列出的变量写成 undefined，子进程真的看�
 test('Codex 那一层：同一组词写成通配，另外点名的变量原样加在后面', () => {
   assert.equal(codexEnvPolicy(), 'shell_environment_policy.exclude=["*KEY*","*TOKEN*","*SECRET*","*PASS*","*CREDENTIAL*","*AUTH*","*COOKIE*","*PRIVATE*"]');
   assert.ok(codexEnvPolicy(['OPENAI_FEDERATION_RULE_ID']).endsWith(',"OPENAI_FEDERATION_RULE_ID"]'));
+});
+
+test('点名放行：过滤之后只把点到名的变量补回，别的带密钥字样的照旧没有；来源里没有的不补', () => {
+  const inherited = { PATH: '/bin', RELAY_KEY: 'k', OTHER_API_KEY: 'o' };
+  const env = passEnv(workerEnv(inherited), ['RELAY_KEY', 'MISSING_KEY'], inherited);
+  assert.deepEqual(env, { PATH: '/bin', RELAY_KEY: 'k' });
+  assert.deepEqual(passEnv(workerEnv(inherited), undefined, inherited), { PATH: '/bin' });
+  // 平台给选手设好的、这件活点名不要的，点名放行也不算数。
+  assert.deepEqual(passEnv({ TMPDIR: '/job/tmp' }, ['TMPDIR', 'DROPPED', 'RELAY_KEY'], { TMPDIR: '/owner/tmp', DROPPED: 'x', RELAY_KEY: 'k' }, ['TMPDIR', 'DROPPED']), { TMPDIR: '/job/tmp', RELAY_KEY: 'k' });
 });

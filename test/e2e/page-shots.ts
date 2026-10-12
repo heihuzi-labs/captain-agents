@@ -88,6 +88,12 @@ try {
         for (const name of full ? SETTINGS : ['选手与模型']) {
           await page.getByRole('dialog').getByRole('tab', { name, exact: true }).click();
           await shot(`${theme}-settings-${SETTINGS.indexOf(name) + 1}`);
+          // “管理模型”：叠在设置上的窄弹窗，Codex 这一家最下面有“手动添加”一行。有 Codex 才截。
+          const manage = page.getByRole('region', { name: 'Codex', exact: true }).getByRole('button', { name: /管理模型/ });
+          if (name === '选手与模型' && await manage.count()) {
+            await manage.click(); await shot(`${theme}-picker`);
+            await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+          }
         }
         await page.keyboard.press('Escape'); await page.waitForTimeout(200);
       }

@@ -123,6 +123,27 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   assert.deepEqual(ds.unset, KEY_VARS); assert.equal(codex.unset, undefined);
   for (const name of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']) assert.ok(KEY_VARS.includes(name), name);
   assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] })));
+  // 主人的 Codex 接的是自定义接口：那一段原样带进启动参数，别的配置不带；钥匙变量只记名字，值不进命令（docs/design-scan.md 规则二）。
+  const oldHome = process.env.CODEX_HOME, relayHome = join(c.temp, 'relay-codex');
+  await mkdir(relayHome, { recursive: true });
+  await writeFile(join(relayHome, 'config.toml'), 'model_provider = "relay"\nnotify = ["bad"]\n[model_providers.relay]\nbase_url = "https://relay.test/v1"\nwire_api = "responses"\nenv_key = "RELAY_SECRET_KEY"\n');
+  process.env.CODEX_HOME = relayHome; process.env.RELAY_SECRET_KEY = 'sk-do-not-store';
+  try {
+    const relay = await command(job('codex', true), '题目', { denyReadExtra: [] });
+    assert.ok(relay.args.includes('--ignore-user-config')); assert.ok(relay.args.includes('model_provider="relay"'));
+    assert.ok(relay.args.includes('model_providers.relay={base_url="https://relay.test/v1",wire_api="responses",env_key="RELAY_SECRET_KEY"}'));
+    assert.deepEqual(relay.pass, ['RELAY_SECRET_KEY']); assert.ok(relay.args.includes(codexEnvPolicy(['RELAY_SECRET_KEY'])));
+    assert.ok(!JSON.stringify(relay).includes('sk-do-not-store'), '钥匙的值不进命令（命令会写进任务记录）');
+    assert.ok(!relay.args.some(v => v.includes('bad')), '通知程序这类别的配置不带');
+    // 除了多出来的这几项，其余参数和官方接口时一字不差：隔离、关掉的功能都没变。
+    const extra = new Set(['model_provider="relay"', relay.args.find(v => v.startsWith('model_providers.relay='))!]);
+    const same = (args: string[]) => args.filter(v => !v.startsWith('shell_environment_policy.'));
+    assert.deepEqual(same(relay.args.filter((v, i) => !extra.has(v) && !(v === '-c' && extra.has(relay.args[i + 1])))), same(codex.args));
+    // DeepSeek 不看主人的 Codex 配置，仍连它自己的接口。
+    const ds2 = await command(job('deepseek', true, 'deepseek:high'), '题目', { denyReadExtra: [] });
+    assert.deepEqual(ds2.args, ds.args); assert.equal(ds2.pass, undefined);
+  } finally { oldHome === undefined ? delete process.env.CODEX_HOME : process.env.CODEX_HOME = oldHome; delete process.env.RELAY_SECRET_KEY; }
+  assert.equal(codex.pass, undefined);
   // 三种隔离都禁读终端配置文件和命令历史（主人常把钥匙写在里面，Grok 的登录式 bash 还会自动读），以及常见的登录凭据文件。
   for (const f of [...SHELL_FILES, ...CREDENTIAL_FILES]) {
     assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, () => true).includes(`${JSON.stringify(join(homedir(), f))}="deny"`), f);

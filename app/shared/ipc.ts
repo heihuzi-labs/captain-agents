@@ -2,6 +2,7 @@ import type { View } from '../../src/core/view-types.ts';
 import type { WorkersPolicy } from '../../src/core/policy.ts';
 import type { Appearance, Limits, Storage } from '../../src/core/settings.ts';
 import type { ConnectAi, ConnectStatus } from '../../src/core/intro.ts';
+import type { Effort } from '../../src/core/roster.ts';
 
 // 唯一的 IPC 白名单；没有通用文件、命令或任意 IPC 入口。
 export const channels = {
@@ -16,7 +17,7 @@ export const channels = {
   quotaRefresh: 'xa:quota-refresh', copyIntro: 'xa:copy-intro',
   connectStatus: 'xa:connect-status', connect: 'xa:connect', disconnect: 'xa:disconnect',
   networkAllowed: 'xa:network-allowed',
-  modelsRefresh: 'xa:models-refresh', modelsKeep: 'xa:models-keep',
+  modelsRefresh: 'xa:models-refresh', modelsKeep: 'xa:models-keep', modelsAdd: 'xa:models-add',
 } as const;
 export type UpdateState =
   | { phase: 'off'; reason: string }
@@ -80,7 +81,10 @@ export type XaBridge = {
   disconnect(ai: ConnectAi): Promise<ConnectStatus[]>;
   // 选手模型（docs/design-models.md）：重新问各家有哪些模型；这一家保留哪些模型（整份替换，只认名单里的或已有的）。
   modelsRefresh(): Promise<void>;
-  modelsKeep(channel: string, models: string[]): Promise<void>;
+  // 整份替换时遗漏手动模型会保持原状态；dropManual 明确取消保留，仍保留历史记录。
+  modelsKeep(channel: string, models: string[], dropManual?: string[]): Promise<void>;
+  // 只有 Codex 通道能手动添加；不问接口，不提供快速版。
+  modelsAdd(channel: string, model: string, efforts: Effort[]): Promise<void>;
   getView(): Promise<View>;
   onView(callback: (view: View) => void): () => void;
 };

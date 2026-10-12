@@ -1,3 +1,4 @@
+import { checkListed, listedProviders } from './listed.ts';
 import { nodeCommand } from './node-runtime.ts';
 import { backgroundSpawn, samePath } from './platform.ts';
 import { spawn } from 'node:child_process';
@@ -47,6 +48,7 @@ export async function dispatch(file: string, options: RunOptions, start: typeof 
   if (!options.who.length) throw new Error('还没选择选手，请加上 --who codex:xhigh（可以重复）。');
   const { workers, archivedProjects, limits, networkAllowed } = await readSettings();
   const chosen = options.who.map(selection);
+  checkListed(await listedProviders(), chosen);
   for (const choice of chosen) checkChoice(workers, choice);
   const kind = options.kind || '实现';
   if (!['修复', '实现', '审查', '调研', '测量'].includes(kind)) throw new Error('--kind 只允许修复、实现、审查、调研、测量，请修改后重试。');

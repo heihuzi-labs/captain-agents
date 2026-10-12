@@ -1,3 +1,5 @@
+import { listedProviders, listedWho, unlistedLine } from '../core/listed.ts';
+import { codexEndpoint } from '../core/endpoint.ts';
 import { recordRealCheck } from '../core/real.ts';
 import { fileURLToPath } from 'node:url';
 import { ensureHome } from '../core/paths.ts';
@@ -252,7 +254,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     if (cmd === 'quota') {
       const p = parse(rest, [], ['json']); arity(p.positional, 0);
       const quota = await queryQuota();
-      console.log(p.switches.has('json') ? JSON.stringify(quota, null, 2) : formatQuota(quota)); return 0;
+      console.log(p.switches.has('json') ? JSON.stringify(quota, null, 2) : formatQuota(quota, (await codexEndpoint()).custom)); return 0;
     }
     if (cmd === 'models') {
       if (rest.length && (rest.length !== 1 || rest[0] !== 'refresh')) throw new Error('模型命令只支持 xagents models 或 xagents models refresh。');
@@ -266,12 +268,14 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     if (cmd === 'workers') {
       arity(rest, 0);
       const { workers, limits, networkAllowed } = await readSettings();
-      console.log(table(['选手', '模型', '允许的强度', '快速版', '开关'], keptWhos.map(who => {
+      const listed = await listedProviders();
+      console.log(table(['选手', '模型', '允许的强度', '快速版', '开关'], keptWhos.filter(who => listedWho(listed, who)).map(who => {
         const worker = workers[who], s = spec(who);
         return [`${s.name}（${who}）`, s.shown, worker.efforts.map(e => `${e}（${effortNames[e]}）`).join('、'), worker.fast ? '允许' : '未开放', worker.enabled ? '开启' : '关闭'];
       })));
       console.log(`派活限制：同时最多 ${limits.maxRunning} 件；${limits.quotaStop === null ? '额度不设停派线（主人在设置里关掉了）' : `额度用到 ${limits.quotaStop}% 停派`}（设置 → 选手与模型）`);
       console.log(`选手联网：${networkAllowed ? '开（打开后网络完全不限）' : '关'}（设置 → 联网）`);
+      if (unlistedLine(listed)) console.log(unlistedLine(listed));
       return 0;
     }
     if (cmd === 'project') {
@@ -366,6 +370,13 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       console.log(table(['任务号', '选手', '副本位置'], jobs.map(j => [j.id, j.who, j.worktree])));
       for (const j of jobs) if (j.network === true && j.state !== 'failed') {
         console.log(`${j.id}：这件能联网`);
+      }
+      // Codex 配置里连接口的那一段没能完整带上时说一声（比如钥匙直接写在了配置里）；不拦派活。
+      const { vendorOf } = await import('../core/roster.ts');
+      if (jobs.some(j => vendorOf(j.who) === 'codex')) {
+        const { codexEndpoint } = await import('../core/endpoint.ts');
+        const { problem } = await codexEndpoint();
+        if (problem) console.log(`提醒：${problem}`);
       }
       console.log(`批号：${jobs[0].batch}\n用 xagents status 或 xagents wait ${jobs[0].batch} 查看进度。`);
       for (const j of jobs) if (j.error) console.error(`${j.id}：${j.error}`);

@@ -106,7 +106,8 @@ function checkEnvironment(old: Command, next: Command) {
   for (const [key, value] of Object.entries(old.env))
     if (next.env[key] !== value) return fail(`运行环境 ${key} 发生变化。`);
   if (old.unset?.some(key => !next.unset?.includes(key))) return fail('环境变量过滤少了旧条目。');
-  const policies = (cmd: Command) => cmd.args.filter(arg => arg.startsWith('shell_environment_policy='));
+  // 参数的实际写法是 shell_environment_policy.exclude=[…]（env.ts 的 codexEnvPolicy）。2026-10-12 以前这里按“=”去筛，一条都筛不到，这道核对等于没做。
+  const policies = (cmd: Command) => cmd.args.filter(arg => arg.startsWith('shell_environment_policy.'));
   if (!isDeepStrictEqual(policies(old), policies(next))) return fail('Codex 环境变量过滤无法证明兼容。');
   for (let i = 0; i < old.args.length; i++) {
     if (old.args[i] === '--disable' && !next.args.some((arg, n) => arg === '--disable' && next.args[n + 1] === old.args[i + 1]))

@@ -179,6 +179,7 @@ h3.sec { font-size: var(--fs-sm); font-weight: 600; color: var(--muted); letter-
 
 /* ---------- 设置里的“选手与模型”：按厂家分组，组内一张对齐的表（列宽同一份，表头只在页面顶部出现一次） ---------- */
 .wk { --wk-cols: minmax(0, 1fr) 52px 52px 60px 60px 60px; }
+.wk-unlisted { margin: var(--sp-3) var(--sp-1) 0; font-size: var(--fs-sm); color: var(--faint); }
 .wk-hint { margin: 0 0 var(--sp-3); font-size: var(--fs-sm); color: var(--muted); }
 /* 上面有“派活限制”一组时，和它隔开一段，这句明确属于下面的选手表。 */
 .setting-group + .wk { margin-top: var(--sp-6); }
@@ -205,6 +206,11 @@ h3.sec { font-size: var(--fs-sm); font-weight: 600; color: var(--muted); letter-
 .mp-search { resize: none; }
 .mp-scroll { flex: 1; min-height: 0; max-height: min(520px, 62vh); overflow-y: auto; padding: 0 var(--sp-5) var(--sp-5); }
 .mp-long .mp-scroll { flex: none; height: min(520px, 62vh); }
+.mp-add { flex: none; display: flex; flex-direction: column; gap: var(--sp-2); padding: var(--sp-3) var(--sp-5); border-top: 1px solid var(--line); }
+.mp-add-row { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.mp-add-name { flex: 1; min-width: 0; resize: none; }
+.mp-add-effort { flex: none; display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; cursor: pointer; }
+.mp-add-error { margin: 0; font-size: var(--fs-sm); color: var(--bad); }
 .mp-label { margin: var(--sp-3) var(--sp-1) var(--sp-2); font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
 .mp-list { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); }
 .mp-row { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; min-height: 40px; padding: var(--sp-2) var(--sp-3); cursor: pointer; }

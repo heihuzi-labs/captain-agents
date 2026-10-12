@@ -8,7 +8,7 @@ import { fixtureBridge, fixtureView } from './fixtures.tsx';
 afterEach(() => { cleanup(); localStorage.clear(); });
 type Model = View['models']['channels'][number]['models'][number];
 const model = (model: string, shown: string, extra: Partial<Model> = {}): Model =>
-  ({ model, who: 'codex', shown, description: null, efforts: ['medium', 'high', 'xhigh'], fast: false, kept: false, builtin: false, fresh: false, gone: false, ...extra });
+  ({ model, who: 'codex', shown, description: null, efforts: ['medium', 'high', 'xhigh'], fast: false, kept: false, builtin: false, manual: false, fresh: false, gone: false, ...extra });
 function modelsView(): View {
   const v = fixtureView();
   v.models = { at: '2026-10-10T02:00:00.000Z', channels: [
@@ -57,7 +57,8 @@ test('管理模型：分“已保留”“未保留”两段列出模型（说�
   fireEvent.click(within(group('Codex')).getByRole('button', { name: /管理模型/ }));
   const dialog = await screen.findByRole('dialog', { name: '管理模型：Codex' });
   expect(within(dialog).getByText(/上次检查/)).toBeTruthy();
-  const boxes = within(dialog).getAllByRole('checkbox');
+  // 清单里的勾（“手动添加”那一行另有三个强度的勾，不在清单里）。
+  const boxes = within(dialog).getAllByRole('checkbox', { name: /^保留 / });
   expect(boxes.map(b => [b.getAttribute('aria-label'), b.getAttribute('aria-checked')])).toEqual([['保留 GPT-6 Astra', 'true'], ['保留 GPT-6 Luna', 'true'], ['保留 GPT-6.1 Sol', 'false']]);
   expect(within(within(dialog).getByRole('region', { name: '已保留' })).getAllByRole('checkbox')).toHaveLength(2);
   expect(within(within(dialog).getByRole('region', { name: '未保留' })).getAllByRole('checkbox')).toHaveLength(1);
@@ -68,14 +69,14 @@ test('管理模型：分“已保留”“未保留”两段列出模型（说�
   expect(within(dialog).getByText('新')).toBeTruthy(); expect(within(dialog).getByText('已下线')).toBeTruthy();
   // 右边只写例外：Luna 少一档才写；Astra 三档齐全、没有快速版，什么都不写。
   expect(within(dialog).getByText('只有高档、超高档')).toBeTruthy();
-  expect(within(dialog).queryByText(/中档/)).toBeNull();
+  expect(within(within(dialog).getByRole('region', { name: '已保留' })).queryByText(/中档/)).toBeNull();
   const save = within(dialog).getByRole('button', { name: '保存' }) as HTMLButtonElement;
   expect(save.disabled).toBe(true);
   fireEvent.click(boxes[2]); fireEvent.click(boxes[1]);
   expect(save.disabled).toBe(false);
   // 概况跟着勾选变；行留在原来那一段，不跳。
   expect(within(dialog).getByText('已保留 2 个')).toBeTruthy();
-  expect(within(dialog).getAllByRole('checkbox').map(b => b.getAttribute('aria-checked'))).toEqual(['true', 'false', 'true']);
+  expect(within(dialog).getAllByRole('checkbox', { name: /^保留 / }).map(b => b.getAttribute('aria-checked'))).toEqual(['true', 'false', 'true']);
   fireEvent.click(save);
   await waitFor(() => expect(window.xa.modelsKeep).toHaveBeenCalledWith('codex', ['gpt-6-astra', 'gpt-6.1-sol']));
   await waitFor(() => expect(screen.queryByRole('dialog', { name: '管理模型：Codex' })).toBeNull());
@@ -108,7 +109,7 @@ test('管理模型：模型多时出搜索框，按名字筛；Cursor 的模型�
   await open(v);
   fireEvent.click(within(group('Cursor')).getByRole('button', { name: /管理模型/ }));
   const dialog = await screen.findByRole('dialog', { name: '管理模型：Cursor' });
-  const shown = () => within(dialog).getAllByRole('checkbox').map(b => b.getAttribute('aria-label')!.replace('保留 ', ''));
+  const shown = () => within(dialog).getAllByRole('checkbox', { name: /^保留 / }).map(b => b.getAttribute('aria-label')!.replace('保留 ', ''));
   expect(shown()).toEqual(['Grok 4.7', 'Claude Sonnet 5.5', 'Claude Opus 5.5 1M', 'Claude Opus 5 1M', 'Claude Opus 4.8 1M', 'Claude Haiku 5.5', 'GPT-5.6 Sol 1M', 'GPT-5.5 1M', 'GPT-5.4 1M']);
   expect(within(dialog).getByText('有快速版')).toBeTruthy();
   expect(dialog.querySelectorAll('.mp-row .logo').length).toBe(9);
@@ -120,4 +121,49 @@ test('管理模型：模型多时出搜索框，按名字筛；Cursor 的模型�
   expect(within(dialog).getByText('没有名字里带这几个字的模型')).toBeTruthy();
   // 筛掉的行，勾选状态还在：概况不变。
   expect(within(dialog).getByText('已保留 1 个')).toBeTruthy();
+});
+
+test('管理模型：Codex 可以手动添加一个模型名（填名字、选强度）；加不成写出原因', async () => {
+  const modelsAdd = vi.fn(async () => {});
+  await open(modelsView(), { modelsAdd });
+  fireEvent.click(within(group('Codex')).getByRole('button', { name: /管理模型/ }));
+  const dialog = await screen.findByRole('dialog', { name: '管理模型：Codex' });
+  const row = within(dialog).getByRole('group', { name: '手动添加模型' });
+  const button = within(row).getByRole('button', { name: '添加' }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  fireEvent.change(within(row).getByRole('textbox', { name: '模型名' }), { target: { value: ' relay-model-x ' } });
+  fireEvent.click(within(row).getByRole('checkbox', { name: '中档' }));
+  fireEvent.click(button);
+  await waitFor(() => expect(modelsAdd).toHaveBeenCalledWith('codex', 'relay-model-x', ['high', 'xhigh']));
+  await waitFor(() => expect((within(row).getByRole('textbox', { name: '模型名' }) as HTMLInputElement).value).toBe(''));
+  // 至少留一种强度：只剩一个时点不掉。
+  fireEvent.click(within(row).getByRole('checkbox', { name: '高档' }));
+  fireEvent.click(within(row).getByRole('checkbox', { name: '超高档' }));
+  expect(within(row).getByRole('checkbox', { name: '超高档' }).getAttribute('aria-checked')).toBe('true');
+  modelsAdd.mockRejectedValueOnce(new Error('模型名格式不对'));
+  fireEvent.change(within(row).getByRole('textbox', { name: '模型名' }), { target: { value: 'bad name' } });
+  fireEvent.click(button);
+  await waitFor(() => expect(within(row).getByRole('alert').textContent).toBe('没能添加：模型名格式不对'));
+});
+
+test('管理模型：别的厂家没有“手动添加”这一行', async () => {
+  await open();
+  fireEvent.click(within(group('DeepSeek')).getByRole('button', { name: /管理模型/ }));
+  const dialog = await screen.findByRole('dialog', { name: '管理模型：DeepSeek' });
+  expect(within(dialog).queryByRole('group', { name: '手动添加模型' })).toBeNull();
+});
+
+test('选手与模型：没列出来的厂家在表下面用一行小字写原因；一家都没列出来时这一页还在，只剩这一行', async () => {
+  const some = modelsView();
+  some.unlisted = [{ name: 'Grok', reason: '这台电脑上没找到 Grok' }, { name: 'Cursor', reason: 'Cursor 在 Windows 版上暂时不能派' }];
+  await open(some);
+  expect(screen.getByText('这台电脑上没找到 Grok；Cursor 在 Windows 版上暂时不能派。')).toBeTruthy();
+  cleanup();
+  const none = modelsView();
+  none.roster = []; none.unlisted = [{ name: 'Codex', reason: '这台电脑上没找到 Codex' }];
+  window.xa = fixtureBridge();
+  render(<Settings close={() => {}} view={none} />);
+  fireEvent.click(await screen.findByRole('tab', { name: '选手与模型' }));
+  expect(await screen.findByText('这台电脑上没找到 Codex。')).toBeTruthy();
+  expect(screen.queryByText(/关掉的不会被派活/)).toBeNull();
 });

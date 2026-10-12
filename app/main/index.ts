@@ -1,5 +1,5 @@
 import { refreshModelsWithBaseline, readModelsCache } from '../../src/core/models.ts';
-import { modelsRefresher, modelsRefreshHandler, modelsKeepHandler, modelsScheduler } from './models.ts';
+import { modelsRefresher, modelsRefreshHandler, modelsKeepHandler, modelsAddHandler, modelsScheduler } from './models.ts';
 import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeTheme, protocol, screen, session, shell } from 'electron';
 import { connect, connectArgument, connectStatus, disconnect } from '../../src/core/connect.ts';
 import { INTRO_TEXT } from '../../src/core/intro.ts';
@@ -15,7 +15,7 @@ import { addComment, cleanComment } from '../../src/core/comments.ts';
 import { createChat, renameChat, sayInChat } from '../../src/core/chat.ts';
 import { stopChat } from '../../src/core/chat-engine.ts';
 import { sayInTeam, stopTeam } from '../../src/core/team.ts';
-import { readSettings, writeSettings, setNetworkAllowed, keepModels, loadConfiguredRoster } from '../../src/core/settings.ts';
+import { readSettings, writeSettings, setNetworkAllowed, keepModels, addModel, loadConfiguredRoster } from '../../src/core/settings.ts';
 import { queryQuota, readQuotaCache } from '../../src/core/quota.ts';
 import type { View } from '../../src/core/view-types.ts';
 import type { Destination, CliStatus } from '../shared/ipc.ts';
@@ -259,6 +259,7 @@ else {
     ipcMain.handle(channels.teamStop, async (event, ...args: unknown[]) => { guard(event); await teamBridge('stop', args); });
     ipcMain.handle(channels.modelsRefresh, modelsRefreshHandler(models, event => trustedSender(event, window, pageUrl)));
     ipcMain.handle(channels.modelsKeep, modelsKeepHandler({ keep: keepModels }, async () => { await loadConfiguredRoster(); publish(await readDesktopView()); }, event => trustedSender(event, window, pageUrl)));
+    ipcMain.handle(channels.modelsAdd, modelsAddHandler({ add: addModel }, async () => { await loadConfiguredRoster(); publish(await readDesktopView()); }, event => trustedSender(event, window, pageUrl)));
     ipcMain.handle(channels.quotaRefresh, quotaRefreshHandler(quota, event => trustedSender(event, window, pageUrl)));
     // 复制对接提示词：只写固定的那一份，不收参数；窗口自己没有剪贴板权限（security.ts 拒绝一切权限请求）。
     ipcMain.handle(channels.copyIntro, (event, ...args: unknown[]) => { guard(event); if (args.length) throw new Error('复制对接提示词不需要参数。'); clipboard.writeText(INTRO_TEXT); });

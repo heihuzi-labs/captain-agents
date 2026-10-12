@@ -26,7 +26,7 @@ const rememberPage = (id: string) => { try { window.localStorage.setItem(PAGE_KE
 const APPEARANCES: { id: Values['appearance']; label: string }[] = [{ id: 'system', label: '跟随系统' }, { id: 'light', label: '浅色' }, { id: 'dark', label: '深色' }];
 
 // view 里有“选手名单”和展示信息（看板数据），有了才显示“选手与模型”页；设置本身仍单独读、单独存。
-export function Settings({ close, view }: { close(): void; view?: Pick<View, 'roster' | 'workers' | 'quota' | 'storage' | 'projects' | 'models'> }) {
+export function Settings({ close, view }: { close(): void; view?: Pick<View, 'roster' | 'workers' | 'quota' | 'storage' | 'projects' | 'models' | 'unlisted'> }) {
   const [values, setValues] = useState<Values | null>(null), [error, setError] = useState(''), [workersError, setWorkersError] = useState('');
   const latest = useRef<Values | null>(null), saved = useRef<Values | null>(null), queued = useRef<SettingsPatch | null>(null);
   const saving = useRef(false), mounted = useRef(true), [remembered, setRemembered] = useState(readPage);
@@ -93,7 +93,7 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
       if (mounted.current) setError('没能保存：' + errorReason(e));
     } finally { if (mounted.current) setNetworkSaving(false); }
   };
-  const pages = [{ id: 'general', label: '通用' }, ...(view && view.roster.length > 0 ? [{ id: 'workers', label: '选手与模型' }] : []), { id: 'network', label: '联网' }, { id: 'colors', label: '看板颜色' }, { id: 'intro', label: '接入 AI' }];
+  const pages = [{ id: 'general', label: '通用' }, ...(view ? [{ id: 'workers', label: '选手与模型' }] : []), { id: 'network', label: '联网' }, { id: 'colors', label: '看板颜色' }, { id: 'intro', label: '接入 AI' }];
   const page = pages.find(p => p.id === remembered)?.id ?? 'general';
   return <Modal size="lg" flush label="设置" title="设置" onClose={close}>
     <SideNavLayout label="设置分页" items={pages} value={page} onChange={id => { setRemembered(id); rememberPage(id); }}>

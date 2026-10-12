@@ -16,7 +16,7 @@ import { SleepMonitor } from './sleeps.ts';
 import { readQuotaCache } from './quota.ts';
 import { collectRealSteps } from './real.ts';
 import { cursorToken, resumeCommand, selection } from './workers.ts';
-import { workerEnv } from './env.ts';
+import { workerEnv, passEnv } from './env.ts';
 import { killTree, treeSpawn } from './platform.ts';
 
 // 停掉选手（或准备命令）带出来的所有进程。since 是起它的时间，只有 Windows 用得上（见 platform.ts）。
@@ -104,7 +104,8 @@ export async function runWorker(id: string) {
       if (input) handles.push(input);
       if (!stopping && !fatalFailure) {
         // 名字带密钥字样的环境变量不交给选手（规则在 env.ts）；平台设的照给，这件活点名不要的再去掉。
-        const env = externalEnvironment(workerEnv(process.env, cmd.env, cmd.unset));
+        // 点名放行的变量（主人的 Codex 配置里放钥匙的那一个）：过滤之后再补回，只给选手的主程序；值不进任务记录。
+        const env = passEnv(externalEnvironment(workerEnv(process.env, cmd.env, cmd.unset)), cmd.pass, process.env, [...Object.keys(cmd.env), ...(cmd.unset ?? [])]);
         // Cursor 的登录在隔离外现取，只放进这次进程的环境，不进任务记录（见 workers.ts 的 cursorToken）。
         // 必须放在上面那步过滤之后：它的名字带 TOKEN，先加再过滤就会被去掉，Cursor 就成了没登录。
         // 替身模式下没指定假的 security 就不取，测试不碰真钥匙串。

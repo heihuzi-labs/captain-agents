@@ -37,7 +37,7 @@ export async function context(t: TestContext, repository = true) {
   const home = join(temp, 'registry'), repo = join(temp, 'repo with spaces');
   await mkdir(home); await mkdir(repo);
   await mkdir(join(temp, 'user-home'));
-  const env = { ...process.env, XAGENTS_TRASH: join(temp, 'trash'), XAGENTS_HOME: home, XAGENTS_CAFFEINATE: join(temp, 'no-caffeinate'), XAGENTS_FAKE_WORKER: fixture, XAGENTS_APPLICATIONS: join(temp, 'Applications'), XAGENTS_MAX_RUNNING: '6', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: '测试', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: '测试', GIT_COMMITTER_EMAIL: 'test@example.invalid' };
+  const env = { ...process.env, XAGENTS_TRASH: join(temp, 'trash'), XAGENTS_HOME: home, CODEX_HOME: join(temp, 'codex-config'), XAGENTS_CAFFEINATE: join(temp, 'no-caffeinate'), XAGENTS_FAKE_WORKER: fixture, XAGENTS_APPLICATIONS: join(temp, 'Applications'), XAGENTS_MAX_RUNNING: '6', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: '测试', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: '测试', GIT_COMMITTER_EMAIL: 'test@example.invalid' };
   delete env.XAGENTS_SRT;
   const cli = (args: string[], extra: NodeJS.ProcessEnv = {}, cwd = repo) => exec(process.execPath, [join(root, 'src/cli/cli.ts'), ...args], cwd, { ...env, ...(['guide', 'connect'].includes(args[0]) ? { HOME: join(temp, 'user-home') } : {}), ...extra });
   const git = async (args: string[]) => {
@@ -89,7 +89,7 @@ export async function context(t: TestContext, repository = true) {
 export async function desktopView(home: string): Promise<View> {
   const result = await exec(process.execPath, ['--input-type=module', '-e',
     "import { buildView } from './src/core/view.ts'; console.log(JSON.stringify(await buildView()));"], root,
-    { ...process.env, XAGENTS_HOME: home });
+    { ...process.env, XAGENTS_HOME: home, CODEX_HOME: join(home, 'codex-config'), XAGENTS_FAKE_WORKER: fixture });
   assert.equal(result.code, 0, result.stderr);
   return JSON.parse(result.stdout) as View;
 }

@@ -119,6 +119,9 @@ jobs:
     name: Page screenshots (windows-2022)
     runs-on: windows-2022
     timeout-minutes: 20
+    env:
+      CODEX_RELEASE: 0.162.1
+      CODEX_NON_INTERACTIVE: '1'
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1
@@ -140,6 +143,17 @@ jobs:
       - name: Build
         shell: bash
         run: npm run build
+
+      # With Codex on the machine the workers page lists it (and DeepSeek, which borrows its program);
+      # Grok and Cursor are not offered on Windows, so the page shows the line that says why.
+      - name: Install the Codex command line (official installer)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Join-Path $env:RUNNER_TEMP 'codex-install.ps1'
+          Invoke-WebRequest -Uri 'https://chatgpt.com/codex/install.ps1' -OutFile $script
+          & $script
+          & (Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin\codex.exe') --version
 
       # The default screen of a runner is smaller than the window the screenshots use.
       - name: Make the screen larger

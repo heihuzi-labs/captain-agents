@@ -111,7 +111,7 @@ export function launchModels() {
 }
 
 export type DiscoveredModel = { model: string; shown: string; description?: string; efforts: Effort[]; fast: boolean };
-export type ExtraModel = Omit<DiscoveredModel, 'fast'> & { channel: Vendor; fast?: Exclude<Spec['fast'], null>; added: string };
+export type ExtraModel = Omit<DiscoveredModel, 'fast'> & { channel: Vendor; fast?: Exclude<Spec['fast'], null>; added: string; manual?: true };
 export type ModelsConfig = { extra: Record<Who, ExtraModel>; dropped: Who[]; seen: Partial<Record<Vendor, string[]>> };
 export type ModelsCache = { at: string; channels: Partial<Record<Isolation, { at: string; error?: string; models: DiscoveredModel[] }>> };
 export const channelNames = Object.fromEntries(Object.entries(channelTemplates).map(([channel, template]) => [channel, template.name])) as Record<Vendor, string>;
@@ -123,12 +123,14 @@ export const isBuiltin = (who: Who) => Object.hasOwn(builtinRoster, who);
 export const keptWhos: Who[] = [...whos];
 export const workerHandles: Record<Who, string> = Object.fromEntries(whos.map(who => [who, spec(who).handle]));
 const dropped = new Set<Who>();
+const manual = new Set<Who>();
 let catalog: ModelsCache | null = null;
 export const isKept = (who: Who) => isWho(who) && !dropped.has(who);
+export const isManualModel = (who: Who) => manual.has(who);
 export const setModelsCatalog = (value: ModelsCache | null) => { catalog = value; };
 export function modelGone(who: Who, cache = catalog): boolean {
   const channel = vendorOf(who);
-  if (channel === 'deepseek') return false;
+  if (channel === 'deepseek' || isManualModel(who)) return false;
   const latest = cache?.channels[channel];
   return !!latest && latest.error === undefined && !latest.models.some(m => m.model === spec(who).model);
 }
@@ -167,6 +169,7 @@ export function loadRoster(extra: ModelsConfig['extra'] = {}, removed: readonly 
   for (const key of Object.keys(roster)) delete roster[key];
   Object.assign(roster, next);
   whos.splice(0, whos.length, ...Object.keys(next));
+  manual.clear(); for (const [who, model] of Object.entries(extra)) if (model.channel === 'codex' && model.manual === true) manual.add(who);
   dropped.clear(); for (const who of removed) if (isWho(who)) dropped.add(who);
   keptWhos.splice(0, keptWhos.length, ...whos.filter(isKept));
   fastWhos.splice(0, fastWhos.length, ...whos.filter(supportsFast));
