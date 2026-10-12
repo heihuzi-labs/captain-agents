@@ -6,7 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, parse } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import net from 'node:net';
-import { nodeCommand, externalEnvironment } from './node-runtime.ts';
+import { externalEnvironment } from './node-runtime.ts';
 import { paths, toolRoot } from './paths.ts';
 import { codexPermissions, deepseekHome, keychainDirs, SHELL_FILES, CREDENTIAL_FILES, WINDOWS_SHELL_FILES, WINDOWS_CREDENTIAL_FILES } from './sandbox.ts';
 import { codexPath, WINDOWS_SANDBOX } from './workers.ts';
@@ -16,7 +16,7 @@ import { whos, isolationOf } from './roster.ts';
 import type { Executor } from './verify.ts';
 import type { Job } from './job.ts';
 import type { IsolationResult, Probe } from './selfcheck.ts';
-import { globalTargets, permissionOutcome } from './selfcheck.ts';
+import { globalTargets } from './selfcheck.ts';
 
 // 自检用的 Codex 文件夹。Windows 上每个 Codex 文件夹要各装一次隔离，所以不能像 macOS 那样每次现建一个空的：
 // 固定用这一个，由 xagents windows-setup 和主人的、DeepSeek 的一起装好。里面不放登录和主人的配置。
@@ -85,105 +85,152 @@ export async function resolveWriteProbe(name: string, path: string, dir: boolean
   }
 }
 export type WindowsProbeSpec = {
-  worktree: string; tmp: string; homeFile: string; linkTarget: string; marker: string; token: string;
+  worktree: string; tmp: string; home: string; homeFile: string; linkTarget: string; marker: string; token: string;
   port: number; pipe: string; owner: string; credential: string | null; fakes: string[]; writes: WriteProbe[];
 };
+// 隔离里跑的探针是一份 PowerShell 脚本（系统自带，隔离里的专用账户一定能运行）。
+// 2026-10-12 以前用的是 Node 脚本，由“平台自己的运行时”来跑：从源码目录跑时那是 Node，没事；装好的应用里那是应用自己的程序，
+// 专用账户要么没权限启动它，要么启动了就崩（流水线实测），主人的电脑上则是一直卡到超时。所以探针不再依赖任何要另外装的运行时。
 // 只输出结果和错误码；不输出文件名、凭据内容，也不向本机端口发送数据。
-export function windowsProbeSource(spec: WindowsProbeSpec) {
-  const j = JSON.stringify;
-  return `import { writeFile, rm, readdir, open, link } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { execFile } from 'node:child_process';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import net from 'node:net';
-const probes = [];
-const outcome = ${permissionOutcome.toString()};
-async function test(name, fn) {
-  try { await fn(); probes.push({name, outcome:'allowed', reason:'操作成功'}); }
-  catch(e) { probes.push({name, outcome:outcome(e.code), reason:e.code || '未知错误'}); }
+// 写成带 BOM 的 UTF-8：系统自带的 PowerShell 按本机代码页读没有 BOM 的脚本，中文会被读坏。
+export function windowsProbeScript(spec: WindowsProbeSpec) {
+  const data = { ...spec, owner: spec.owner.toLowerCase(), pipe: spec.pipe.replace(/^\\\\\.\\pipe\\/, ''), words: SECRET_WORDS,
+    shellFiles: [...SHELL_FILES, ...WINDOWS_SHELL_FILES], credentialFiles: [...CREDENTIAL_FILES, ...WINDOWS_CREDENTIAL_FILES],
+    logins: [['login-codex', '.codex', 'auth.json'], ['login-grok', '.grok', 'auth.json'], ['login-cursor', '.cursor', 'cli-config.json']],
+    deepseek: deepseekHome(), keychainUser: keychainDirs(true)[0], keychainSystem: keychainDirs(true)[1] };
+  // 说明放进一段原样字符串里再解析，路径里有引号、空格、中文都不用另外转义。
+  return '\uFEFF' + `$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$spec = @'
+${JSON.stringify(data)}
+'@ | ConvertFrom-Json
+$probes = New-Object System.Collections.ArrayList
+function Add($name, $outcome, $reason) { [void]$probes.Add(@{ name = $name; outcome = $outcome; reason = $reason }) }
+# 把系统给的错误归成几类：没有权限、不存在、不是文件夹、连接类的几种；认不出的原样报类型名，一律算拿不准。
+function Code($e) {
+  for ($x = $e; $x; $x = $x.InnerException) {
+    if ($x -is [System.Net.Sockets.SocketException]) {
+      $k = [string]$x.SocketErrorCode
+      if ($k -eq 'AccessDenied') { return 'EACCES' }
+      if ($k -eq 'ConnectionRefused') { return 'ECONNREFUSED' }
+      if ($k -eq 'TimedOut') { return 'ETIMEDOUT' }
+      return $k
+    }
+    if ($x -is [System.UnauthorizedAccessException] -or $x -is [System.Security.SecurityException]) { return 'EPERM' }
+    if ($x -is [System.ComponentModel.Win32Exception] -and ($x.NativeErrorCode -eq 5 -or $x.NativeErrorCode -eq 1314)) { return 'EPERM' }
+    if ($x -is [System.IO.FileNotFoundException] -or $x -is [System.IO.DirectoryNotFoundException]) { return 'ENOENT' }
+    if ($x -is [System.TimeoutException]) { return 'ETIMEDOUT' }
+    if ($x -is [System.InvalidOperationException] -and $x.Message -eq 'TEMP_MISMATCH') { return 'TEMP_MISMATCH' }
+    $h = $x.HResult
+    if ($h -eq -2147024891 -or $h -eq -2147023582) { return 'EPERM' }
+    if ($h -eq -2147024894 -or $h -eq -2147024893) { return 'ENOENT' }
+    if ($h -eq -2147024629) { return 'ENOTDIR' }
+    if ($h -eq -2147024816 -or $h -eq -2147024713) { return 'EEXIST' }
+  }
+  return $e.GetType().Name
 }
-// 读类的探针：Windows 上权限表只写本机存在的路径，所以“本机没有”就是没有可读的东西，和挡住同等对待。
-async function unread(name, fn) {
-  try { await fn(); probes.push({name, outcome:'allowed', reason:'读得到'}); }
-  catch(e) { probes.push(e && e.code === 'ENOENT' ? {name, outcome:'denied', reason:'本机没有'} : {name, outcome:outcome(e.code), reason:e.code || '未知错误'}); }
+function Outcome($code) { if ($code -eq 'EPERM' -or $code -eq 'EACCES') { 'denied' } else { 'unknown' } }
+function Test($name, $fn) {
+  try { & $fn; Add $name 'allowed' '操作成功' }
+  catch { $c = Code $_.Exception; Add $name (Outcome $c) $c }
 }
-const command = (file, args) => new Promise(resolve => execFile(file, args, {timeout:10000, windowsHide:true}, (e, stdout) => resolve({e, stdout:String(stdout)})));
-await test('worktree', async () => { const p = join(${j(spec.worktree)}, 'write-probe'); await writeFile(p, 'probe', {flag:'wx'}); await rm(p); });
-// 任务专用临时目录：TEMP、TMP 必须正好指向它，而且写得进去。
-await test('tmpdir', async () => {
-  for (const name of ['TEMP', 'TMP']) if ((process.env[name] || '').replace(/[\\\\/]+$/, '').toLowerCase() !== ${j(spec.tmp)}.toLowerCase()) throw {code:'TEMP_MISMATCH'};
-  const p = join(${j(spec.tmp)}, 'write-probe'); await writeFile(p, 'probe', {flag:'wx'}); await rm(p);
-});
-await test('hardlink', async () => { const p = join(${j(spec.tmp)}, ${j(spec.token)}); await link(${j(spec.linkTarget)}, p); await rm(p).catch(() => {}); });
-await test('home', () => writeFile(${j(spec.homeFile)}, 'xagents selfcheck', {flag:'wx'}));
-if (probes.at(-1).outcome === 'allowed') await rm(${j(spec.homeFile)}).catch(e => { probes.at(-1).reason += '，清理失败：' + (e.code || '未知错误'); });
-// 身份：隔离里必须是专用账户。还是主人的账户，说明跑的不是我们认的那种隔离。
-{
-  const r = await command('whoami.exe', []);
-  const name = r.stdout.trim().toLowerCase().split('\\\\').pop();
-  if (r.e || !name) probes.push({name:'account', outcome:'unknown', reason:'查不到当前账户'});
-  else probes.push(name === ${j(spec.owner.toLowerCase())} ? {name:'account', outcome:'allowed', reason:'还是主人的账户'} : {name:'account', outcome:'denied', reason:'是另一个账户'});
+# 读类的探针：Windows 上权限表只写本机存在的路径，所以“本机没有”就是没有可读的东西，和挡住同等对待。
+function Unread($name, $fn) {
+  try { & $fn; Add $name 'allowed' '读得到' }
+  catch { $c = Code $_.Exception; if ($c -eq 'ENOENT') { Add $name 'denied' '本机没有' } else { Add $name (Outcome $c) $c } }
 }
-function connect(options, ms = 2500) { return new Promise((resolve, reject) => {
-  const s = net.connect(options);
-  const done = (e) => { s.destroy(); e ? reject(e) : resolve(); };
-  s.once('connect', () => done()); s.once('error', done); s.setTimeout(ms, () => done({code:'ETIMEDOUT'}));
-}); }
-// 本机端口：浏览器调试口（没开着也必须是“不许连”，而不是“没人接”）、自检在外面开的一个监听口、自己开监听口。
-await test('chrome', () => connect({host:'127.0.0.1', port:9222}));
-await test('listener', () => connect({host:'127.0.0.1', port:${spec.port}}));
-await test('listen', () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => s.close(() => resolve())); }));
-await test('pipe', () => connect({path:${j(spec.pipe)}}));
-// 外网：直接连一个公共 IP 的 443 端口，只看能否建立连接。
-await test('internet', () => connect({host:'1.1.1.1', port:443}, 4000));
-await unread('ssh', () => readdir(join(homedir(), '.ssh')));
-await unread('npmrc', async () => { const fd = await open(join(homedir(), '.npmrc'), 'r'); await fd.close(); });
-// 本机有的必须读不到，本机没有的不算数；读得到任何一个就是放行。只看能不能打开（目录看能不能列出），不读内容，也不报文件名。
-async function unreadable(name, files) {
-  const results = [];
-  for (const f of files) {
-    try { await readdir(join(homedir(), f)); results.push('allowed'); }
-    catch (e) {
-      if (e.code !== 'ENOTDIR') { results.push(e.code === 'ENOENT' ? 'absent' : outcome(e.code)); continue; }
-      try { const fd = await open(join(homedir(), f), 'r'); await fd.close(); results.push('allowed'); }
-      catch (e2) { results.push(e2.code === 'ENOENT' ? 'absent' : outcome(e2.code)); }
+function NewFile($path) { $s = [System.IO.File]::Open($path, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write); $s.Close() }
+function OpenRead($path) { $s = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, 7); $s.Close() }
+function OpenWrite($path) { $s = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, 7); $s.Close() }
+function ListDir($path) { [void][System.IO.Directory]::GetFileSystemEntries($path) }
+function Under($base, $rel) { [System.IO.Path]::Combine($base, ($rel -replace '/', '\\')) }
+function Connect($hostName, $port, $ms) {
+  $c = New-Object System.Net.Sockets.TcpClient
+  try {
+    $a = $c.BeginConnect($hostName, $port, $null, $null)
+    if (-not $a.AsyncWaitHandle.WaitOne($ms)) { throw (New-Object System.Net.Sockets.SocketException 10060) }
+    $c.EndConnect($a)
+  } finally { $c.Close() }
+}
+Test 'worktree' { $p = Under $spec.worktree 'write-probe'; NewFile $p; [System.IO.File]::Delete($p) }
+# 任务专用临时目录：TEMP、TMP 必须正好指向它，而且写得进去。
+Test 'tmpdir' {
+  foreach ($n in 'TEMP', 'TMP') {
+    $v = [Environment]::GetEnvironmentVariable($n)
+    if (-not $v -or $v.TrimEnd('\\', '/').ToLower() -ne $spec.tmp.ToLower()) { throw (New-Object System.InvalidOperationException 'TEMP_MISMATCH') }
+  }
+  $p = Under $spec.tmp 'write-probe'; NewFile $p; [System.IO.File]::Delete($p)
+}
+Test 'hardlink' { $p = Under $spec.tmp $spec.token; [void](New-Item -ItemType HardLink -Path $p -Value $spec.linkTarget); try { [System.IO.File]::Delete($p) } catch { } }
+Test 'home' { NewFile $spec.homeFile }
+if ($probes[$probes.Count - 1].outcome -eq 'allowed') { try { [System.IO.File]::Delete($spec.homeFile) } catch { $probes[$probes.Count - 1].reason += '，清理失败：' + (Code $_.Exception) } }
+# 身份：隔离里必须是专用账户。还是主人的账户，说明跑的不是我们认的那种隔离。
+$who = $null
+try { $who = (& whoami.exe | Out-String).Trim().ToLower() } catch { }
+if (-not $who -or $LASTEXITCODE -ne 0) { Add 'account' 'unknown' '查不到当前账户' }
+elseif (($who -split '\\\\')[-1] -eq $spec.owner) { Add 'account' 'allowed' '还是主人的账户' }
+else { Add 'account' 'denied' '是另一个账户' }
+# 本机端口：浏览器调试口（没开着也必须是“不许连”，而不是“没人接”）、自检在外面开的一个监听口、自己开监听口。
+Test 'chrome' { Connect '127.0.0.1' 9222 2500 }
+Test 'listener' { Connect '127.0.0.1' $spec.port 2500 }
+Test 'listen' { $l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0); $l.Start(); $l.Stop() }
+Test 'pipe' { $c = New-Object System.IO.Pipes.NamedPipeClientStream('.', $spec.pipe, [System.IO.Pipes.PipeDirection]::InOut); try { $c.Connect(2500) } finally { $c.Dispose() } }
+# 外网：直接连一个公共 IP 的 443 端口，只看能否建立连接。
+Test 'internet' { Connect '1.1.1.1' 443 4000 }
+Unread 'ssh' { ListDir (Under $spec.home '.ssh') }
+Unread 'npmrc' { OpenRead (Under $spec.home '.npmrc') }
+# 本机有的必须读不到，本机没有的不算数；读得到任何一个就是放行。只看能不能打开（目录看能不能列出），不读内容，也不报文件名。
+function Unreadable($name, $files) {
+  $count = @{ allowed = 0; denied = 0; unknown = 0; absent = 0 }
+  foreach ($f in $files) {
+    $p = Under $spec.home $f
+    try { ListDir $p; $count.allowed++ }
+    catch {
+      $c = Code $_.Exception
+      if ($c -eq 'ENOENT') { $count.absent++ }
+      elseif ($c -ne 'ENOTDIR') { $count[(Outcome $c)]++ }
+      else {
+        try { OpenRead $p; $count.allowed++ }
+        catch { $c2 = Code $_.Exception; if ($c2 -eq 'ENOENT') { $count.absent++ } else { $count[(Outcome $c2)]++ } }
+      }
     }
   }
-  const count = o => results.filter(r => r === o).length;
-  probes.push({name, outcome:count('allowed') ? 'allowed' : count('unknown') ? 'unknown' : 'denied', reason:'读得到 ' + count('allowed') + ' 个，挡住 ' + count('denied') + ' 个，拿不准 ' + count('unknown') + ' 个，本机没有 ' + count('absent') + ' 个'});
+  $o = if ($count.allowed) { 'allowed' } elseif ($count.unknown) { 'unknown' } else { 'denied' }
+  Add $name $o ('读得到 ' + $count.allowed + ' 个，挡住 ' + $count.denied + ' 个，拿不准 ' + $count.unknown + ' 个，本机没有 ' + $count.absent + ' 个')
 }
-await unreadable('shell-files', ${j([...SHELL_FILES, ...WINDOWS_SHELL_FILES])});
-await unreadable('credential-files', ${j([...CREDENTIAL_FILES, ...WINDOWS_CREDENTIAL_FILES])});
-// 环境变量：外面放的假变量看不到，也没有别的名字带密钥字样的变量，才算挡住。只报名字。
-{
-  const fakes = ${j(spec.fakes)}, words = ${j(SECRET_WORDS)};
-  const seen = Object.keys(process.env).filter(n => fakes.includes(n) || words.some(w => n.toUpperCase().includes(w)));
-  probes.push({name:'env-secret', outcome:seen.length ? 'allowed' : 'denied', reason:seen.length ? '看得到 ' + seen.join('、') : '看不到'});
+Unreadable 'shell-files' $spec.shellFiles
+Unreadable 'credential-files' $spec.credentialFiles
+# 环境变量：外面放的假变量看不到，也没有别的名字带密钥字样的变量，才算挡住。只报名字。
+$seen = @([Environment]::GetEnvironmentVariables().Keys | Where-Object { $n = [string]$_; ($spec.fakes -contains $n) -or (@($spec.words | Where-Object { $n.ToUpper().Contains($_) }).Count -gt 0) })
+if ($seen.Count) { Add 'env-secret' 'allowed' ('看得到 ' + ($seen -join '、')) } else { Add 'env-secret' 'denied' '看不到' }
+# 登录文件：不存在（没登录）时改查它所在的文件夹能不能列出，被挡住说明将来登录生成的文件同样读不到。
+foreach ($l in $spec.logins) {
+  $dir = Under $spec.home $l[1]; $file = Under $dir $l[2]
+  Unread $l[0] { try { OpenRead $file } catch { if ((Code $_.Exception) -ne 'ENOENT') { throw }; ListDir $dir } }
 }
-// 登录文件：不存在（没登录）时改查它所在的文件夹能不能列出，被挡住说明将来登录生成的文件同样读不到。
-for (const [name, dir, file] of ${j([['login-codex', '.codex', 'auth.json'], ['login-grok', '.grok', 'auth.json'], ['login-cursor', '.cursor', 'cli-config.json']])}) {
-  await unread(name, async () => { try { const fd = await open(join(homedir(), dir, file), 'r'); await fd.close(); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; await readdir(join(homedir(), dir)); } });
+Unread 'login-deepseek' { ListDir $spec.deepseek }
+# 凭据库：外面放了一个随机名的测试条目，这里看列不列得出它的名字。只比名字，不读内容。
+if (-not $spec.credential) { Add 'keychain' 'unknown' '没能在凭据库里放测试条目' }
+else {
+  $listed = $null
+  try { $listed = (& cmdkey.exe /list | Out-String) } catch { }
+  if ($null -eq $listed -or $LASTEXITCODE -ne 0) { Add 'keychain' 'unknown' '列不了凭据库' }
+  elseif ($listed.Contains($spec.credential)) { Add 'keychain' 'allowed' '看得到测试条目' }
+  else { Add 'keychain' 'denied' '看不到测试条目' }
 }
-await unread('login-deepseek', () => readdir(${j(deepseekHome())}));
-// 凭据库：外面放了一个随机名的测试条目，这里看列不列得出它的名字。只比名字，不读内容。
-${spec.credential ? `{
-  const r = await command('cmdkey.exe', ['/list']);
-  if (r.e) probes.push({name:'keychain', outcome:'unknown', reason:'列不了凭据库'});
-  else probes.push(r.stdout.includes(${j(spec.credential)}) ? {name:'keychain', outcome:'allowed', reason:'看得到测试条目'} : {name:'keychain', outcome:'denied', reason:'看不到测试条目'});
-}` : "probes.push({name:'keychain', outcome:'unknown', reason:'没能在凭据库里放测试条目'});"}
-await unread('keychain-user', () => readdir(${j(keychainDirs(true)[0])}));
-await unread('keychain-system', () => readdir(${j(keychainDirs(true)[1])}));
-// 试写：现有的文件用“只写、不截断、不新建”方式打开，不改内容；现有的文件夹里建一个随机名的空文件再删掉。写成了就是放行。
-// 随机名文件万一删不掉，外面会按名字再清一遍。
-for (const t of ${j(spec.writes)}) await test(t.name, async () => {
-  if (t.dir) { const inside = join(t.path, ${j(spec.token)}); const fd = await open(inside, 'wx'); await fd.close().catch(() => {}); await rm(inside).catch(() => {}); }
-  else { const fd = await open(t.path, constants.O_WRONLY); await fd.close().catch(() => {}); }
-});
-console.log(${j(spec.marker)} + JSON.stringify(probes));
+Unread 'keychain-user' { ListDir $spec.keychainUser }
+Unread 'keychain-system' { ListDir $spec.keychainSystem }
+# 试写：现有的文件用“只写、不截断、不新建”方式打开，不改内容；现有的文件夹里建一个随机名的空文件再删掉。写成了就是放行。
+# 随机名文件万一删不掉，外面会按名字再清一遍。
+foreach ($t in $spec.writes) {
+  Test $t.name { if ($t.dir) { $inside = Under $t.path $spec.token; NewFile $inside; try { [System.IO.File]::Delete($inside) } catch { } } else { OpenWrite $t.path } }
+}
+[Console]::Out.WriteLine($spec.marker + (ConvertTo-Json -Compress -InputObject @($probes)))
 `;
 }
 
+// 系统自带的 PowerShell：隔离里跑探针、隔离外调起安装脚本都用它。
+export const windowsPowershell = (env: NodeJS.ProcessEnv = process.env) => join(env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 // 凭据库里的测试条目：名字固定前缀加随机数，值是随机数，不是任何真密码。自检前后各清一遍上次留下的。
 const CREDENTIAL_PREFIX = 'xagents-selfcheck-';
 const quiet = (r: Awaited<ReturnType<Executor>>) => r.exit === 0 && !r.timedOut && !r.error && !r.signal;
@@ -219,7 +266,7 @@ export async function windowsCodexSelfcheck(run: Executor): Promise<IsolationRes
   await mkdir(worktree); await mkdir(tmp);
   const homeFile = join(home, `.xagents-selfcheck-${randomUUID()}`);
   const linkTarget = join(temp, 'link-target'); await writeFile(linkTarget, 'xagents selfcheck');
-  const marker = `XAGENTS_PROBE_${randomUUID()}:`, token = `.xagents-selfcheck-${randomUUID()}`, script = join(worktree, 'probe.mjs');
+  const marker = `XAGENTS_PROBE_${randomUUID()}:`, token = `.xagents-selfcheck-${randomUUID()}`, script = join(worktree, 'probe.ps1');
   const outer = 'XAGENTS_SELFCHECK_API_KEY', inner = 'XAGENTS_SELFCHECK_INNER_TOKEN';
   const shared = windowsTempPaths(home, process.env, ownerTmp);
   const listener = net.createServer(socket => socket.destroy()), pipeServer = net.createServer(socket => socket.destroy());
@@ -238,16 +285,15 @@ export async function windowsCodexSelfcheck(run: Executor): Promise<IsolationRes
     // 探针前不在的位置：探针后也不该出现（出现了说明有东西被建了出来）。
     const absent: string[] = [];
     for (const t of wanted) { writes.push(await resolveWriteProbe(t.name, t.path, t.dir)); if (!await lstat(t.path).catch(() => null)) absent.push(t.path); }
-    await writeFile(script, windowsProbeSource({ worktree, tmp, homeFile, linkTarget, marker, token, port: (listener.address() as net.AddressInfo).port, pipe, owner, credential, fakes: [outer, inner], writes }));
+    await writeFile(script, windowsProbeScript({ worktree, tmp, home, homeFile, linkTarget, marker, token, port: (listener.address() as net.AddressInfo).port, pipe, owner, credential, fakes: [outer, inner], writes }));
     let probes: Probe[] | null = null;
     try {
       const job = { who: whos.find(w => isolationOf(w) === isolation)!, mode: 'workspace-write', worktree, repo: temp, id: '' } as Job;
       const project = { denyReadExtra: [], denyReadHome: await extraDenyRead() };
       // 和派活时一样两层：继承的环境先按 env.ts 去掉带密钥字样的；inner 绕过这一层直接塞给 Codex，只靠它自己那条规则挡。
-      const node = nodeCommand([script], {});
       const inherited = { ...process.env, [outer]: randomUUID() };
-      const env = exactEnv(externalEnvironment({ ...workerEnv(inherited, { CODEX_HOME: probeHome(), TMPDIR: tmp, TEMP: tmp, TMP: tmp }), [inner]: randomUUID(), ...node.env }), { ...process.env, ...inherited });
-      const r = await run(codex, [...WINDOWS_SANDBOX, 'sandbox', '-P', 'xa', '-C', worktree, '-c', codexPermissions(job, project, tmp), '-c', codexEnvPolicy(), '--', node.file, ...node.args], worktree, 60_000, undefined, env);
+      const env = exactEnv(externalEnvironment({ ...workerEnv(inherited, { CODEX_HOME: probeHome(), TMPDIR: tmp, TEMP: tmp, TMP: tmp }), [inner]: randomUUID() }), { ...process.env, ...inherited });
+      const r = await run(codex, [...WINDOWS_SANDBOX, 'sandbox', '-P', 'xa', '-C', worktree, '-c', codexPermissions(job, project, tmp), '-c', codexEnvPolicy(), '--', windowsPowershell(), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], worktree, 90_000, undefined, env);
       const lines = r.output.split(/\r?\n/).filter(line => line.startsWith(marker));
       if (/requires the elevated Windows sandbox backend/i.test(r.output)) throw new Error(NOT_INSTALLED);
       if (r.exit !== 0 || r.timedOut || r.signal || r.error || lines.length !== 1) throw new Error(r.error || (r.timedOut ? '探针超时' : `探针没有完整结果（退出码 ${r.exit}）：${r.output.trim().split(/\r?\n/).slice(-2).join(' ').slice(0, 300)}`));
@@ -294,7 +340,7 @@ export async function windowsSetup(run: Executor, remove = false): Promise<{ ok:
   for (const value of [script, resultFile, codex, user, ...homes]) if (/["|\r\n]/.test(value)) throw new Error(`路径或账户名里有不能用的字符：${value}`);
   const inner = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `"${script}"`, '-Result', `"${resultFile}"`,
     ...(remove ? ['-Remove'] : ['-Codex', `"${codex}"`, '-User', `"${user}"`, '-CodexHomes', `"${homes.join('|')}"`])];
-  const powershell = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const powershell = windowsPowershell();
   // 以管理员身份运行：系统在这里弹确认框，主人点“是”才继续。
   const command = `$p = Start-Process -FilePath ${psQuote(powershell)} -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @(${inner.map(psQuote).join(',')}); exit $p.ExitCode`;
   try {

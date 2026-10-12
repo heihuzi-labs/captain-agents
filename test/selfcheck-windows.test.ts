@@ -5,7 +5,7 @@ import { tmpdir, homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { evaluate, expectedProbes, platformIsolations, platformRefusal, ensurePlatform } from '../src/core/selfcheck.ts';
 import type { IsolationResult, Probe } from '../src/core/selfcheck.ts';
-import { windowsExpectedProbes, windowsGlobalTargets, windowsLabels, windowsProbeSource, windowsTempPaths, windowsTempTargets, resolveWriteProbe, sweepCredentials, windowsSetup, codexHomes, probeHome } from '../src/core/selfcheck-windows.ts';
+import { windowsExpectedProbes, windowsGlobalTargets, windowsLabels, windowsProbeScript, windowsTempPaths, windowsTempTargets, resolveWriteProbe, sweepCredentials, windowsSetup, codexHomes, probeHome } from '../src/core/selfcheck-windows.ts';
 import { codexPermissions, keychainDirs, homeDeny, SHELL_FILES, CREDENTIAL_FILES, WINDOWS_SHELL_FILES, WINDOWS_CREDENTIAL_FILES } from '../src/core/sandbox.ts';
 import { globalTargets } from '../src/core/selfcheck.ts';
 import { isWindows } from '../src/core/platform.ts';
@@ -57,16 +57,28 @@ test('Windows 的判定：只看 Codex；两项必须通、其余必须挡；拿
 test('Windows 的探针脚本：能被 Node 解析，查的是给定的位置，不含新建固定名字的操作', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'xa-winprobe-'));
   try {
-    const source = windowsProbeSource({ worktree: 'C:\\w t\\repo', tmp: 'C:\\w t\\tmp', homeFile: 'C:\\Users\\me\\.x', linkTarget: 'C:\\w t\\link', marker: 'MARK:', token: '.tok',
-      port: 4321, pipe: '\\\\.\\pipe\\xa-test', owner: 'Me', credential: 'xagents-selfcheck-1', fakes: ['XA_FAKE_KEY'], writes: [{ name: 'startup-folder', path: 'C:\\Users\\me\\Startup', dir: true }, { name: 'cursor-hooks', path: 'C:\\Users\\me\\.cursor\\hooks.json', dir: false }] });
-    const file = join(dir, 'probe.mjs'); await writeFile(file, source);
-    const { spawnSync } = await import('node:child_process');
-    const checked = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
-    assert.equal(checked.status, 0, checked.stderr);
-    for (const piece of ['"C:\\\\w t\\\\repo"', 'port:4321', '"\\\\\\\\.\\\\pipe\\\\xa-test"', '"me"', '"xagents-selfcheck-1"', '"XA_FAKE_KEY"', 'whoami.exe', 'cmdkey.exe', "'TEMP', 'TMP'"]) assert.ok(source.includes(piece), piece);
-    assert.doesNotMatch(source, /mkdir|rmdir/, '探针不建、不删文件夹');
-    for (const name of [...SHELL_FILES, ...WINDOWS_SHELL_FILES, ...CREDENTIAL_FILES, ...WINDOWS_CREDENTIAL_FILES]) assert.ok(source.includes(JSON.stringify(name)), name);
-    assert.match(windowsProbeSource({ worktree: 'a', tmp: 'b', homeFile: 'c', linkTarget: 'd', marker: 'm', token: 't', port: 1, pipe: 'p', owner: 'o', credential: null, fakes: [], writes: [] }), /没能在凭据库里放测试条目/);
+    const spec = { worktree: 'C:\\w t\\repo', tmp: 'C:\\w t\\tmp', home: "C:\\Users\\o'brien 张", homeFile: 'C:\\Users\\me\\.x', linkTarget: 'C:\\w t\\link', marker: 'MARK:', token: '.tok',
+      port: 4321, pipe: '\\\\.\\pipe\\xa-test', owner: 'Me', credential: 'xagents-selfcheck-1', fakes: ['XA_FAKE_KEY'], writes: [{ name: 'startup-folder', path: 'C:\\Users\\me\\Startup', dir: true }, { name: 'cursor-hooks', path: 'C:\\Users\\me\\.cursor\\hooks.json', dir: false }] };
+    const source = windowsProbeScript(spec);
+    assert.ok(source.startsWith('\uFEFF'), '带 BOM：系统自带的 PowerShell 才会按 UTF-8 读，中文不坏');
+    // 说明放在一段原样字符串里：一行 JSON，路径里的引号、空格、中文都原样在里面；小写的账户名、去掉前缀的管道名。
+    const json = /^\$spec = @'\n(.*)\n'@ \| ConvertFrom-Json$/m.exec(source)![1], data = JSON.parse(json);
+    assert.equal(data.home, spec.home); assert.equal(data.owner, 'me'); assert.equal(data.pipe, 'xa-test'); assert.equal(data.port, 4321);
+    assert.deepEqual(data.writes, spec.writes); assert.deepEqual(data.fakes, ['XA_FAKE_KEY']); assert.equal(data.credential, 'xagents-selfcheck-1');
+    for (const name of [...SHELL_FILES, ...WINDOWS_SHELL_FILES]) assert.ok(data.shellFiles.includes(name), name);
+    for (const name of [...CREDENTIAL_FILES, ...WINDOWS_CREDENTIAL_FILES]) assert.ok(data.credentialFiles.includes(name), name);
+    for (const piece of ['whoami.exe', 'cmdkey.exe', "'TEMP', 'TMP'", "Test 'worktree'", "Test 'internet'", "Unread 'keychain-system'", '$spec.marker']) assert.ok(source.includes(piece), piece);
+    assert.doesNotMatch(source, /New-Item -ItemType Directory|mkdir|Remove-Item|rmdir/i, '探针不建、不删文件夹');
+    assert.doesNotMatch(source, /node|ELECTRON/i, '探针不依赖 Node，也不依赖应用自己的程序');
+    assert.match(windowsProbeScript({ ...spec, credential: null }), /"credential":null/);
+    // 在真的 Windows 上让系统自带的 PowerShell 解析一遍：语法错了当场报出来。
+    if (isWindows) {
+      const file = join(dir, 'probe.ps1'); await writeFile(file, source);
+      const { spawnSync } = await import('node:child_process');
+      const parsed = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+        `$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('${file.replaceAll("'", "''")}', [ref]$null, [ref]$e); if ($e.Count) { $e | ForEach-Object { $_.Message }; exit 1 }`], { encoding: 'utf8' });
+      assert.equal(parsed.status, 0, parsed.stdout + parsed.stderr);
+    }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
