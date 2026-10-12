@@ -82,6 +82,8 @@ const help = () => `派活工作台：登记、派发和收集本机助手的任
     到期的旧日志移到废纸篓；--dry-run 只预览；--force 忽略自动清理开关，天数和条件仍按设置
   xagents selfcheck
     检查关网时的隔离，需负责人在隔离外运行
+  xagents windows-setup [--remove]
+    只在 Windows 上用：一次装齐派活要用的隔离（系统会弹一次管理员确认框，由主人点）；--remove 撤掉平台自己加的那几条规则
   xagents verify <任务号>
   xagents verify <任务号> --skip "为什么不用验收"
     能改文件的活，采用前要有通过的验收记录，或用 --skip 写明理由；只读的活不用
@@ -186,6 +188,17 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       arity(rest, 0);
       const result = await selfcheck(); await reconcileSafely();
       console.log(`${result.ok ? '自检通过' : '自检没过'}：${result.note}`); return result.ok ? 0 : 1;
+    }
+    if (cmd === 'windows-setup') {
+      const remove = rest.length === 1 && rest[0] === '--remove';
+      if (!remove) arity(rest, 0);
+      if (process.platform !== 'win32') throw new Error('这条命令只在 Windows 上用；macOS 上的隔离不需要另外安装。');
+      const { windowsSetup } = await import('../core/selfcheck-windows.ts');
+      const { execute } = await import('../core/verify.ts');
+      const result = await windowsSetup(execute, remove);
+      for (const line of result.lines) console.log(line);
+      console.log(result.ok ? (remove ? '已撤掉。' : '装好了。接着运行 xagents selfcheck 看每一项。') : '没有全部完成，见上面各行。');
+      return result.ok ? 0 : 1;
     }
     if (cmd === 'verify') {
       const p = parse(rest, ['skip']); arity(p.positional, 1);

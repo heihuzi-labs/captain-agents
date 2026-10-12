@@ -16,7 +16,7 @@ import { selection, srtPath, refreshGrokLogin, checkDeepseekLogin, checkCursorLo
 import { prepareRun, usePreparedRun } from './run-package.ts';
 import { reconcileSafely } from './runner.ts';
 import { installIcons } from './icons.ts';
-import { ensureSelfcheck } from './selfcheck.ts';
+import { ensurePlatform, ensureSelfcheck } from './selfcheck.ts';
 import { ensureQuota, checkQuota } from './quota.ts';
 import { readSettings, extraDenyRead } from './settings.ts';
 import { checkChoice } from './policy.ts';
@@ -89,7 +89,7 @@ export async function dispatch(file: string, options: RunOptions, start: typeof 
   checkQuota(quota, chosen, options.force, limits.quotaStop);
   if (chosen.some(s => isolationOf(s.who) !== 'codex') && !process.env.XAGENTS_FAKE_WORKER) await srtPath();
   // 替身不会启动任何真实选手，不把测试结果写成隔离通过。
-  if (!process.env.XAGENTS_FAKE_WORKER) await ensureSelfcheck();
+  if (!process.env.XAGENTS_FAKE_WORKER) { ensurePlatform(chosen.map(s => isolationOf(s.who))); await ensureSelfcheck(); }
   await installIcons();
   const jobs: Job[] = [];
   await withLock(join(paths().cache, 'dispatch'), async () => {

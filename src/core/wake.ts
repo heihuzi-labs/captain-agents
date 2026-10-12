@@ -12,7 +12,7 @@ import { prepareRun, prunePackages, usePreparedRun } from './run-package.ts';
 import { checkChoice } from './policy.ts';
 import { checkQuota, ensureQuota } from './quota.ts';
 import { isolationOf, vendorOf } from './roster.ts';
-import { ensureSelfcheck } from './selfcheck.ts';
+import { ensurePlatform, ensureSelfcheck } from './selfcheck.ts';
 import { extraDenyRead, readSettings } from './settings.ts';
 import { checkDeepseekLogin, refreshGrokLogin, result, selection, SESSION_RE } from './workers.ts';
 
@@ -178,6 +178,7 @@ export async function wakeGate(choice: ReturnType<typeof selection>, project?: s
     if (project && settings.archivedProjects.includes(project)) throw new Error(`项目 ${project} 已归档，请先取消归档。`);
     checkQuota(await ensureQuota(), [choice], false, settings.limits.quotaStop);
     if (!process.env.XAGENTS_FAKE_WORKER) {
+      ensurePlatform([isolationOf(choice.who)]);
       await ensureSelfcheck();
       if (isolationOf(choice.who) === 'grok') await refreshGrokLogin();
       if (vendorOf(choice.who) === 'deepseek') await checkDeepseekLogin();

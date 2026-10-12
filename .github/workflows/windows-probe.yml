@@ -56,6 +56,29 @@ jobs:
           New-Item -ItemType Directory -Force probe-results | Out-Null
           node scripts/probe/windows-codex.mjs "$env:CODEX_EXE" "probe-results/codex-${{ matrix.os }}.json"
 
+      # The real thing: the platform's own setup command and its own self-check, with a throwaway registry.
+      - name: Install the isolation and run the self-check
+        if: always()
+        shell: pwsh
+        env:
+          XAGENTS_HOME: ${{ runner.temp }}\xagents-home
+        run: |
+          $env:XAGENTS_CODEX = $env:CODEX_EXE
+          New-Item -ItemType Directory -Force $env:XAGENTS_HOME | Out-Null
+          node src/cli/cli.ts selfcheck
+          "exit code before setup: $LASTEXITCODE"
+          node src/cli/cli.ts windows-setup
+          "setup exit code: $LASTEXITCODE"
+          node src/cli/cli.ts selfcheck
+          $code = $LASTEXITCODE
+          "self-check exit code: $code"
+          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
+          node src/cli/cli.ts windows-setup --remove
+          node src/cli/cli.ts selfcheck
+          "self-check exit code without the fence: $LASTEXITCODE"
+          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-nofence-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
+          exit 0
+
       - name: Print the result
         if: always()
         shell: pwsh

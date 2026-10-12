@@ -18,7 +18,7 @@ import { findProject, worktreePath } from './project.ts';
 import { uncommitted } from './project-check.ts';
 import { checkQuota, ensureQuota } from './quota.ts';
 import { isolationOf, spec } from './roster.ts';
-import { ensureSelfcheck } from './selfcheck.ts';
+import { ensurePlatform, ensureSelfcheck } from './selfcheck.ts';
 import { extraDenyRead, readSettings } from './settings.ts';
 import {
   appendMessage, clipText, createTeam, editChannel, parseReplies, parseReview, readChannel, readTeam,
@@ -375,7 +375,7 @@ export async function startTeam(file: string, options: TeamStartOptions): Promis
   if (!task) throw new Error('题目是空的。请写上要做的事再开队。');
   checkQuota(await ensureQuota(), [writer, reviewer], options.force, limits.quotaStop);
   if ([writer, reviewer].some(choice => isolationOf(choice.who) !== 'codex') && !process.env.XAGENTS_FAKE_WORKER) await srtPath();
-  if (!process.env.XAGENTS_FAKE_WORKER) await ensureSelfcheck();
+  if (!process.env.XAGENTS_FAKE_WORKER) { ensurePlatform([writer, reviewer].map(choice => isolationOf(choice.who))); await ensureSelfcheck(); }
   const id = await reserveTeam();
   const title = options.title || basename(file, extname(file));
   const team: Team = {

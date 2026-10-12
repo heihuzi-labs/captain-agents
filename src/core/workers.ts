@@ -17,6 +17,7 @@ import { codexEnvPolicy } from './env.ts';
 import type { Isolated } from './sandbox.ts';
 import { allowedEfforts, fastWhos, isWho, isolationOf, launchModel, spec, supportsFast, vendorOf, whos } from './roster.ts';
 import type { Effort } from './roster.ts';
+import { isWindows } from './platform.ts';
 
 const effortNames: Record<Effort, string> = { medium: '中档', high: '高档', xhigh: '超高档' };
 // --who 写法：选手:强度[:fast]。强度只开中档、高档、超高档，永远不拉满，也不开最低档；允许哪些由 roster 决定。
@@ -102,7 +103,13 @@ export async function checkCursorLogin(run: Executor = execute) {
   catch (e) { throw new Error(`这件没有派出：${(e as Error).message}`); }
 }
 // 本机 Codex 不在 PATH 上，派活和查模型用同一个取路径的地方；XAGENTS_CODEX 可覆盖。
-export const codexPath = () => process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
+// Windows 上是官方安装脚本装的位置（实测，docs/research/windows-codex-sandbox-2026-10-12.md）；只认 .exe。
+export const codexPath = () => process.env.XAGENTS_CODEX || (isWindows
+  ? join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe')
+  : '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex');
+// Windows 上 Codex 有三种隔离做法，只有“管理员装一次、换专用账户来跑”的那种够得着底线（design-windows.md 4.1），启动时明写用它。
+// 不写的话，可写副本会被悄悄降成只读。
+export const WINDOWS_SANDBOX = ['-c', 'windows.sandbox="elevated"'];
 // runtime：这一轮运行包的目录（run-package.ts）；srt 的设置文件和联网小程序都从包里取。
 export async function command(job: Job, text: string, project: Isolated, runtime?: string): Promise<Command> {
   const dir = jobDir(job.id), env: Record<string, string> = {}, tmp = jobTmpDir(job);
@@ -114,12 +121,13 @@ export async function command(job: Job, text: string, project: Isolated, runtime
   // 每件活一个专用临时目录，选手只能写它（见 sandbox.ts 的 jobTmpDir）。
   await mkdir(tmp, { recursive: true });
   if (isolationOf(job.who) === 'codex') {
-    // Codex 的 :workspace 放开的是 $TMPDIR，所以把它指到任务的 tmp。
+    // Codex 的 :workspace 放开的是 $TMPDIR，所以把它指到任务的 tmp。Windows 上临时目录按 TEMP、TMP 算，一并指过去。
     env.TMPDIR = tmp;
+    if (isWindows) { env.TEMP = tmp; env.TMP = tmp; }
     file = codexPath();
     const deepseek = vendorOf(job.who) === 'deepseek';
     const disable = ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories'];
-    args = ['exec', '--ignore-user-config', ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : []), '-c', codexEnvPolicy(deepseek ? KEY_VARS : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
+    args = ['exec', '--ignore-user-config', ...(isWindows ? WINDOWS_SANDBOX : []), ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : []), '-c', codexEnvPolicy(deepseek ? KEY_VARS : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
   } else {
     file = nodeRunner().file;
     // 替身模式仍传入完整参数；无需安装或执行真正的 srt。

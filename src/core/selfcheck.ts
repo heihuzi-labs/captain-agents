@@ -15,6 +15,8 @@ import { execute } from './verify.ts';
 import type { Executor } from './verify.ts';
 import type { Job } from './job.ts';
 import type { Project } from './project.ts';
+import { isWindows } from './platform.ts';
+import { windowsCodexSelfcheck, windowsExpectedProbes, windowsLabels } from './selfcheck-windows.ts';
 
 // 联网专项与原有的关档/文件自检分别缓存、分别判定；原有探针和版本不变。
 
@@ -31,9 +33,16 @@ export type IsolationResult = { isolation: Isolation; probes: Probe[]; error?: s
 // 7：2026-10-03 加常见登录凭据文件（~/.netrc、~/.git-credentials、~/.docker、~/.kube 等）的禁读探针；
 //    钥匙串和环境变量两条并行的修复合并，统一升到这一版（两边各自升过的 5、6 都作废重检）。
 const cacheVersion = 7;
-export type Selfcheck = { version: typeof cacheVersion; ok: boolean; at: string; note: string; results: IsolationResult[] };
+// platform：在哪种系统上做的自检。旧的缓存没有这一项，都是 macOS 上做的。
+export type Selfcheck = { version: typeof cacheVersion; platform?: string; ok: boolean; at: string; note: string; results: IsolationResult[] };
 // 自检覆盖选手清单里出现的每一种隔离；新选手沿用已有隔离就自动被覆盖。
 const modes: Isolation[] = isolations;
+// 这种系统上平台开放哪几种隔离：没在这种系统上实测过的不开。Windows 现在只有 Codex 这一路（docs/design-windows.md 第 3 节）。
+// 派活时不在这张表里的选手直接拒绝；自检只查表里的。全仓库只有这一处写。
+export const platformIsolations = (windows = isWindows): Isolation[] => windows ? modes.filter(m => m === 'codex') : modes;
+export function platformRefusal(isolation: Isolation, windows = isWindows): string | null {
+  return platformIsolations(windows).includes(isolation) ? null : `这一路（${isolation}）的隔离还没有在 Windows 上实测过，Windows 上暂时不能派。现在能派的是走 Codex 隔离的选手`;
+}
 // 各家在隔离外会自动加载、甚至以主人身份执行的全局位置：选手写得进去，主人之后打开这些程序就会中招。
 // 三种隔离都要写不进去（别家的也不行）。依据 docs/research/global-config-writes-2026-09-30.md。
 export const globalTargets: { name: string; path: string; dir: boolean; label: string }[] = [
@@ -89,7 +98,8 @@ export async function tempPaths(run: Executor, cwd: string, home = homedir()): P
 const keychainProbes = ['keychain', 'keychain-user', 'keychain-system'];
 // 测试条目：随机名、随机值，不是任何真密码；自检前在外面建好并读回核对，结束后删掉。
 export type KeychainItem = { account: string; service: string; value: string };
-export function expectedProbes(mode: Isolation) {
+export function expectedProbes(mode: Isolation, windows = isWindows) {
+  if (windows) return windowsExpectedProbes();
   // Codex 的登录文件由它在隔离外的主进程读取，所以它的隔离里三家都必须读不到；
   // Grok、Cursor 整个跑在外层隔离里，必须能读自己的登录文件，只要求读不到别家的。
   // DeepSeek 的登录（API 钥匙）放在派活工作台单独的文件夹里，由 Codex 主进程在隔离外读，三种隔离都必须读不到。
@@ -98,22 +108,24 @@ export function expectedProbes(mode: Isolation) {
 }
 // 这两项必须写得进去，其余一律要挡住。
 const mustAllow = ['worktree', 'tmpdir'];
-const labels: Record<string, string> = { ...Object.fromEntries([...globalTargets, ...tempTargets].map(t => [t.name, t.label])), worktree: '副本内写文件', tmpdir: '任务专用临时目录可写（TMPDIR 指向它）', hardlink: '借硬链接改外面的文件', home: '目录外写文件', chrome: 'Chrome 调试口', listener: '本机监听端口', internet: '外网', ssh: '读 SSH 文件名', npmrc: '读 npm 登录配置', 'login-codex': '读 Codex 登录文件', 'login-grok': '读 Grok 登录文件', 'login-cursor': '读 Cursor 登录文件', 'login-deepseek': '读 DeepSeek 登录文件夹', keychain: '读钥匙串里的密码', 'keychain-user': '读本用户的钥匙串文件夹', 'keychain-system': '读系统的钥匙串文件夹', 'env-secret': '看到带密钥字样的环境变量', 'shell-files': '读终端配置文件和命令历史', 'credential-files': '读常见的登录凭据文件' };
-export function evaluate(results: IsolationResult[], at = new Date().toISOString()): Selfcheck {
-  const failures: string[] = [];
-  for (const isolation of modes) {
+const macLabels: Record<string, string> = { ...Object.fromEntries([...globalTargets, ...tempTargets].map(t => [t.name, t.label])), worktree: '副本内写文件', tmpdir: '任务专用临时目录可写（TMPDIR 指向它）', hardlink: '借硬链接改外面的文件', home: '目录外写文件', chrome: 'Chrome 调试口', listener: '本机监听端口', internet: '外网', ssh: '读 SSH 文件名', npmrc: '读 npm 登录配置', 'login-codex': '读 Codex 登录文件', 'login-grok': '读 Grok 登录文件', 'login-cursor': '读 Cursor 登录文件', 'login-deepseek': '读 DeepSeek 登录文件夹', keychain: '读钥匙串里的密码', 'keychain-user': '读本用户的钥匙串文件夹', 'keychain-system': '读系统的钥匙串文件夹', 'env-secret': '看到带密钥字样的环境变量', 'shell-files': '读终端配置文件和命令历史', 'credential-files': '读常见的登录凭据文件' };
+export function evaluate(results: IsolationResult[], at = new Date().toISOString(), windows = isWindows): Selfcheck {
+  const failures: string[] = [], labels = windows ? { ...macLabels, ...windowsLabels() } : macLabels;
+  for (const isolation of platformIsolations(windows)) {
     const matches = results.filter(r => r?.isolation === isolation);
     if (matches.length !== 1) { failures.push(`${isolation} 未能自检（结果缺失或重复）`); continue; }
     const r = matches[0];
     if (r.error) { failures.push(`${isolation} 未能自检：${r.error}`); continue; }
-    for (const name of expectedProbes(isolation)) {
+    for (const name of expectedProbes(isolation, windows)) {
       const found = Array.isArray(r.probes) ? r.probes.filter(p => p?.name === name) : [];
       const p = found[0];
       if (found.length !== 1 || !p || !['allowed', 'denied', 'unknown'].includes(p.outcome)) { failures.push(`${isolation} ${labels[name]} 缺少有效结果`); continue; }
       if (p.outcome !== (mustAllow.includes(name) ? 'allowed' : 'denied')) failures.push(`${isolation} ${labels[name]} ${p.outcome === 'unknown' ? '拿不准' : '未达到要求'}：${p.reason || '没有原因'}`);
     }
   }
-  return { version: cacheVersion, ok: failures.length === 0, at, note: failures.join('；') || '目录外写、公用临时目录、硬链接、各家全局配置、Chrome 调试口、本机端口、外网、读密钥和登录文件、钥匙串、终端配置文件、常见凭据文件、带密钥字样的环境变量都被挡住，副本内可写', results };
+  return { version: cacheVersion, platform: windows ? 'win32' : 'darwin', ok: failures.length === 0, at, note: failures.join('；') || (windows
+    ? '目录外写、公用目录、硬链接、各家全局配置和开机启动位置、本机端口和命名管道、外网、读密钥和登录文件、凭据库、终端配置文件、常见凭据文件、带密钥字样的环境变量都被挡住，隔离里用的是专用账户，副本内可写'
+    : '目录外写、公用临时目录、硬链接、各家全局配置、Chrome 调试口、本机端口、外网、读密钥和登录文件、钥匙串、终端配置文件、常见凭据文件、带密钥字样的环境变量都被挡住，副本内可写'), results };
 }
 export function networkOutcome(outcomes: Probe['outcome'][]): Probe['outcome'] {
   if (outcomes.includes('allowed')) return 'allowed';
@@ -313,21 +325,22 @@ console.log(${JSON.stringify(marker)} + JSON.stringify(probes));
 // 探针若意外写成功，外面再清一遍，但只删能证明是探针建的：各目录里的随机名文件（名字独一无二），
 // 以及探针报告建过、文件编号对得上的目标。探针前还不存在、后来出现、却没被探针报告的，不删，报错让负责人查。
 type Before = Map<string, boolean>;
-const writeTargets = (home: string, temp: Partial<TempPaths>) => [
-  ...globalTargets.map(t => ({ path: join(home, t.path), dir: t.dir, shared: false })),
+type WriteTarget = { path: string; dir: boolean };
+const writeTargets = (home: string, temp: Record<string, string | null | undefined>, targets: WriteTarget[] = globalTargets) => [
+  ...targets.map(t => ({ path: join(home, t.path), dir: t.dir, shared: false })),
   ...Object.values(temp).filter((path): path is string => Boolean(path)).map(path => ({ path, dir: true, shared: true })),
 ];
-export async function globalBefore(home = homedir(), temp: Partial<TempPaths> = {}): Promise<Before> {
+export async function globalBefore(home = homedir(), temp: Record<string, string | null | undefined> = {}, targets?: WriteTarget[]): Promise<Before> {
   const before: Before = new Map();
   // 只有“确实不存在”才算原来没有；其他错误一律按原来就有处理，不动它。
-  for (const t of writeTargets(home, temp)) before.set(t.path, await lstat(t.path).then(() => true, e => !hasCode(e, 'ENOENT')));
+  for (const t of writeTargets(home, temp, targets)) before.set(t.path, await lstat(t.path).then(() => true, e => !hasCode(e, 'ENOENT')));
   return before;
 }
 type Created = { path: string; dir: boolean; ino: number | null };
-export async function cleanGlobal(token: string, before: Before, probes: { created?: Created[] }[] | null, home = homedir(), temp: Partial<TempPaths> = {}): Promise<string[]> {
+export async function cleanGlobal(token: string, before: Before, probes: { created?: Created[] }[] | null, home = homedir(), temp: Record<string, string | null | undefined> = {}, targets?: WriteTarget[]): Promise<string[]> {
   const problems: string[] = [], reported = new Map<string, Created>();
   for (const p of probes ?? []) for (const c of Array.isArray(p?.created) ? p.created : []) if (typeof c?.path === 'string') reported.set(c.path, c);
-  for (const t of writeTargets(home, temp)) {
+  for (const t of writeTargets(home, temp, targets)) {
     const path = t.path;
     if (t.dir) {
       const inside = join(path, token);
@@ -351,6 +364,7 @@ export async function readSelfcheck(now = Date.now()): Promise<{ ok: boolean | n
   try { raw = await readJson(join(paths().cache, 'selfcheck.json')); }
   catch (e) { return { ok: hasCode(e, 'ENOENT') ? null : false, at: null, note: hasCode(e, 'ENOENT') ? '还没做过自检' : '自检缓存损坏，请重新自检' }; }
   if (raw && typeof raw.version === 'number' && raw.version < cacheVersion) return { ok: null, at: null, note: '自检的做法更新了，需要重新自检' };
+  if (raw && (raw.platform ?? 'darwin') !== process.platform) return { ok: null, at: null, note: '这份自检结果是在另一种系统上做的，需要重新自检' };
   if (!raw || raw.version !== cacheVersion || !Array.isArray(raw.results) || typeof raw.at !== 'string' || !Number.isFinite(Date.parse(raw.at))) return { ok: false, at: null, note: '自检缓存格式无效，请重新自检' };
   const age = now - Date.parse(raw.at);
   if (age < 0 || age >= 86400000) return { ok: null, at: raw.at, note: '自检已过期，请重新自检' };
@@ -399,8 +413,10 @@ export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
     // 嵌套隔离会令探针产生假阳性；这里不启动任何探针，更不尝试解除外层限制。
     if (process.env.CODEX_SANDBOX || process.env.SANDBOX_RUNTIME || process.env.XAGENTS_FAKE_WORKER) {
       for (const isolation of modes) results.push({ isolation, probes: [], error: '当前在选手隔离或测试替身环境内，需要负责人在外面跑' });
+    } else if (isWindows) {
+      results.push(await windowsCodexSelfcheck(run));
     } else if (process.platform !== 'darwin') {
-      for (const isolation of modes) results.push({ isolation, probes: [], error: '当前只支持 macOS 的实测隔离方式' });
+      for (const isolation of modes) results.push({ isolation, probes: [], error: '这种系统上还没有实测过的隔离方式，不能派活' });
     } else {
       const temp = await realpath(await mkdtemp(join(paths().cache, 'selfcheck-')));
       await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
@@ -467,6 +483,10 @@ export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
     await writeJson(join(paths().cache, 'selfcheck.json'), result);
     return result;
   });
+}
+// 派活前：这几位选手用的隔离在本系统上都开放才往下走。--force 跳不过。
+export function ensurePlatform(used: Isolation[], windows = isWindows) {
+  for (const isolation of new Set(used)) { const why = platformRefusal(isolation, windows); if (why) throw new Error(`${why}，这件没有派出。`); }
 }
 export async function ensureSelfcheck(check = selfcheck) {
   let result = await readSelfcheck();
