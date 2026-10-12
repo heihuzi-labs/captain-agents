@@ -65,6 +65,7 @@ jobs:
         run: |
           $env:XAGENTS_CODEX = $env:CODEX_EXE
           New-Item -ItemType Directory -Force $env:XAGENTS_HOME | Out-Null
+          $before = Get-ChildItem -Force $env:USERPROFILE | Select-Object -ExpandProperty Name
           node src/cli/cli.ts selfcheck
           "exit code before setup: $LASTEXITCODE"
           node src/cli/cli.ts windows-setup
@@ -72,6 +73,8 @@ jobs:
           node src/cli/cli.ts selfcheck
           $code = $LASTEXITCODE
           "self-check exit code: $code"
+          "new entries in the home directory after the self-check (there should be none):"
+          Get-ChildItem -Force $env:USERPROFILE | Where-Object { $before -notcontains $_.Name } | Select-Object -ExpandProperty Name
           Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
           node src/cli/cli.ts windows-setup --remove
           node src/cli/cli.ts selfcheck

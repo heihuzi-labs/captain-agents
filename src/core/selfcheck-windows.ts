@@ -3,7 +3,7 @@
 // 判定规则不变（selfcheck.ts 的 evaluate）：副本内写、任务临时目录必须通，其余必须被挡，拿不准也算不过。
 import { mkdtemp, mkdir, rm, writeFile, realpath, lstat, access } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join, parse } from 'node:path';
+import { dirname, join, parse } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import net from 'node:net';
 import { nodeCommand, externalEnvironment } from './node-runtime.ts';
@@ -16,7 +16,7 @@ import { whos, isolationOf } from './roster.ts';
 import type { Executor } from './verify.ts';
 import type { Job } from './job.ts';
 import type { IsolationResult, Probe } from './selfcheck.ts';
-import { cleanGlobal, globalBefore, globalTargets, permissionOutcome } from './selfcheck.ts';
+import { globalTargets, permissionOutcome } from './selfcheck.ts';
 
 // 自检用的 Codex 文件夹。Windows 上每个 Codex 文件夹要各装一次隔离，所以不能像 macOS 那样每次现建一个空的：
 // 固定用这一个，由 xagents windows-setup 和主人的、DeepSeek 的一起装好。里面不放登录和主人的配置。
@@ -65,14 +65,27 @@ export const windowsLabels = (): Record<string, string> => ({
 // 这几项没过，多半是回环补丁没装或失效了（Codex 自己拦不住本机回环）。
 const fenceProbes = ['chrome', 'listener', 'listen'];
 
+// 探针要去试写的一处：path 一定是本机现有的文件或文件夹（由外面定好），探针不新建任何固定名字的东西。
+export type WriteProbe = { name: string; path: string; dir: boolean };
+// 目标本身不在时，改试离它最近的那一层现有的上级文件夹：上级写不进，这个位置也就建不出来。
+// （不直接去建目标：Windows 上隔离里建不存在的文件夹，报的错分不清是“不许建”还是“上级不在”。）
+export async function resolveWriteProbe(name: string, path: string, dir: boolean): Promise<WriteProbe> {
+  for (let current = path, wantDir = dir; ; wantDir = true) {
+    const info = await lstat(current).catch(() => null);
+    if (info) return { name, path: current, dir: wantDir ? info.isDirectory() : !info.isFile() };
+    const parent = dirname(current);
+    if (parent === current) return { name, path: current, dir: true };
+    current = parent;
+  }
+}
 export type WindowsProbeSpec = {
   worktree: string; tmp: string; homeFile: string; linkTarget: string; marker: string; token: string;
-  port: number; pipe: string; owner: string; credential: string | null; fakes: string[]; temp: Record<string, string | null>;
+  port: number; pipe: string; owner: string; credential: string | null; fakes: string[]; writes: WriteProbe[];
 };
 // 只输出结果和错误码；不输出文件名、凭据内容，也不向本机端口发送数据。
 export function windowsProbeSource(spec: WindowsProbeSpec) {
   const j = JSON.stringify;
-  return `import { writeFile, rm, readdir, open, mkdir, rmdir, stat, link } from 'node:fs/promises';
+  return `import { writeFile, rm, readdir, open, link } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -83,6 +96,11 @@ const outcome = ${permissionOutcome.toString()};
 async function test(name, fn) {
   try { await fn(); probes.push({name, outcome:'allowed', reason:'操作成功'}); }
   catch(e) { probes.push({name, outcome:outcome(e.code), reason:e.code || '未知错误'}); }
+}
+// 读类的探针：Windows 上权限表只写本机存在的路径，所以“本机没有”就是没有可读的东西，和挡住同等对待。
+async function unread(name, fn) {
+  try { await fn(); probes.push({name, outcome:'allowed', reason:'读得到'}); }
+  catch(e) { probes.push(e && e.code === 'ENOENT' ? {name, outcome:'denied', reason:'本机没有'} : {name, outcome:outcome(e.code), reason:e.code || '未知错误'}); }
 }
 const command = (file, args) => new Promise(resolve => execFile(file, args, {timeout:10000, windowsHide:true}, (e, stdout) => resolve({e, stdout:String(stdout)})));
 await test('worktree', async () => { const p = join(${j(spec.worktree)}, 'write-probe'); await writeFile(p, 'probe', {flag:'wx'}); await rm(p); });
@@ -113,8 +131,8 @@ await test('listen', () => new Promise((resolve, reject) => { const s = net.crea
 await test('pipe', () => connect({path:${j(spec.pipe)}}));
 // 外网：直接连一个公共 IP 的 443 端口，只看能否建立连接。
 await test('internet', () => connect({host:'1.1.1.1', port:443}, 4000));
-await test('ssh', () => readdir(join(homedir(), '.ssh')));
-await test('npmrc', async () => { const fd = await open(join(homedir(), '.npmrc'), 'r'); await fd.close(); });
+await unread('ssh', () => readdir(join(homedir(), '.ssh')));
+await unread('npmrc', async () => { const fd = await open(join(homedir(), '.npmrc'), 'r'); await fd.close(); });
 // 本机有的必须读不到，本机没有的不算数；读得到任何一个就是放行。只看能不能打开（目录看能不能列出），不读内容，也不报文件名。
 async function unreadable(name, files) {
   const results = [];
@@ -139,52 +157,23 @@ await unreadable('credential-files', ${j([...CREDENTIAL_FILES, ...WINDOWS_CREDEN
 }
 // 登录文件：不存在（没登录）时改查它所在的文件夹能不能列出，被挡住说明将来登录生成的文件同样读不到。
 for (const [name, dir, file] of ${j([['login-codex', '.codex', 'auth.json'], ['login-grok', '.grok', 'auth.json'], ['login-cursor', '.cursor', 'cli-config.json']])}) {
-  await test(name, async () => { try { const fd = await open(join(homedir(), dir, file), 'r'); await fd.close(); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; await readdir(join(homedir(), dir)); } });
+  await unread(name, async () => { try { const fd = await open(join(homedir(), dir, file), 'r'); await fd.close(); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; await readdir(join(homedir(), dir)); } });
 }
-await test('login-deepseek', () => readdir(${j(deepseekHome())}));
+await unread('login-deepseek', () => readdir(${j(deepseekHome())}));
 // 凭据库：外面放了一个随机名的测试条目，这里看列不列得出它的名字。只比名字，不读内容。
 ${spec.credential ? `{
   const r = await command('cmdkey.exe', ['/list']);
   if (r.e) probes.push({name:'keychain', outcome:'unknown', reason:'列不了凭据库'});
   else probes.push(r.stdout.includes(${j(spec.credential)}) ? {name:'keychain', outcome:'allowed', reason:'看得到测试条目'} : {name:'keychain', outcome:'denied', reason:'看不到测试条目'});
 }` : "probes.push({name:'keychain', outcome:'unknown', reason:'没能在凭据库里放测试条目'});"}
-await test('keychain-user', () => readdir(${j(keychainDirs(true)[0])}));
-await test('keychain-system', () => readdir(${j(keychainDirs(true)[1])}));
-// 已有的文件用“只写、不截断、不新建”方式打开，不改内容；已有的目录里建一个随机名空文件；还没有的按真实路径建出来。
-// 判定只看写这一步：写成了就是放行。建出来的东西连同文件编号报给外面，外面只删编号对得上的。
-// keep：公用位置。探针万一在里面建出了固定名的目录，不删，只报出来。
-async function writable(name, target, dir, keep = false) {
-  const created = [];
-  const made = async (path, isDir, fd) => { let ino = null; try { ino = (await (fd ? fd.stat() : stat(path))).ino; } catch {} created.push({path, dir:isDir, ino}); };
-  try {
-    if (dir) {
-      const inside = join(target, ${j(spec.token)});
-      let fd;
-      try { fd = await open(inside, 'wx'); }
-      catch(e) { if (e.code !== 'ENOENT') throw e; await mkdir(target); await made(target, true); }
-      if (fd) { await made(inside, false, fd); await fd.close().catch(() => {}); }
-    } else {
-      let fd;
-      try { fd = await open(target, constants.O_WRONLY); await fd.close().catch(() => {}); }
-      catch(e) {
-        if (e.code !== 'ENOENT') throw e;
-        fd = await open(target, 'wx'); await made(target, false, fd); await fd.close().catch(() => {});
-      }
-    }
-  } catch(e) {
-    if (!created.length) { probes.push({name, outcome:outcome(e.code), reason:e.code || '未知错误'}); return; }
-  }
-  let reason = '操作成功';
-  for (const c of [...created].reverse()) {
-    if (keep && c.path === target) { reason += '，建出的公用目录没有删'; continue; }
-    try { c.dir ? await rmdir(c.path) : await rm(c.path); } catch(e) { reason += '，清理失败：' + (e.code || '未知错误'); }
-  }
-  probes.push({name, outcome:'allowed', reason, created});
-}
-for (const t of ${j(windowsGlobalTargets().map(({ name, path, dir }) => ({ name, path, dir })))}) await writable(t.name, join(homedir(), t.path), t.dir);
-for (const [name, path] of Object.entries(${j(spec.temp)})) {
-  if (path) await writable(name, path, true, true); else probes.push({name, outcome:'unknown', reason:'查不到这个位置'});
-}
+await unread('keychain-user', () => readdir(${j(keychainDirs(true)[0])}));
+await unread('keychain-system', () => readdir(${j(keychainDirs(true)[1])}));
+// 试写：现有的文件用“只写、不截断、不新建”方式打开，不改内容；现有的文件夹里建一个随机名的空文件再删掉。写成了就是放行。
+// 随机名文件万一删不掉，外面会按名字再清一遍。
+for (const t of ${j(spec.writes)}) await test(t.name, async () => {
+  if (t.dir) { const inside = join(t.path, ${j(spec.token)}); const fd = await open(inside, 'wx'); await fd.close().catch(() => {}); await rm(inside).catch(() => {}); }
+  else { const fd = await open(t.path, constants.O_WRONLY); await fd.close().catch(() => {}); }
+});
 console.log(${j(spec.marker)} + JSON.stringify(probes));
 `;
 }
@@ -229,7 +218,7 @@ export async function windowsCodexSelfcheck(run: Executor): Promise<IsolationRes
   const shared = windowsTempPaths(home, process.env, ownerTmp);
   const listener = net.createServer(socket => socket.destroy()), pipeServer = net.createServer(socket => socket.destroy());
   const pipe = `\\\\.\\pipe\\xagents-selfcheck-${randomUUID()}`;
-  const problems: string[] = [];
+  const problems: string[] = [], writes: WriteProbe[] = [];
   let result: IsolationResult = fail('自检没有跑完');
   try {
     await new Promise<void>((resolve, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolve); });
@@ -238,8 +227,12 @@ export async function windowsCodexSelfcheck(run: Executor): Promise<IsolationRes
     const credential = await addCredential(run);
     const owner = (process.env.USERNAME || '').trim();
     if (!owner) return fail('查不到主人的账户名');
-    await writeFile(script, windowsProbeSource({ worktree, tmp, homeFile, linkTarget, marker, token, port: (listener.address() as net.AddressInfo).port, pipe, owner, credential, fakes: [outer, inner], temp: shared }));
-    const before = await globalBefore(home, shared, windowsGlobalTargets());
+    const wanted = [...windowsGlobalTargets().map(t => ({ name: t.name, path: join(home, t.path), dir: t.dir })),
+      ...windowsTempTargets.map(t => ({ name: t.name, path: shared[t.name]!, dir: true }))];
+    // 探针前不在的位置：探针后也不该出现（出现了说明有东西被建了出来）。
+    const absent: string[] = [];
+    for (const t of wanted) { writes.push(await resolveWriteProbe(t.name, t.path, t.dir)); if (!await lstat(t.path).catch(() => null)) absent.push(t.path); }
+    await writeFile(script, windowsProbeSource({ worktree, tmp, homeFile, linkTarget, marker, token, port: (listener.address() as net.AddressInfo).port, pipe, owner, credential, fakes: [outer, inner], writes }));
     let probes: Probe[] | null = null;
     try {
       const job = { who: whos.find(w => isolationOf(w) === isolation)!, mode: 'workspace-write', worktree, repo: temp, id: '' } as Job;
@@ -258,9 +251,11 @@ export async function windowsCodexSelfcheck(run: Executor): Promise<IsolationRes
       for (const p of probes) if (fenceProbes.includes(p.name) && p.outcome !== 'denied') p.reason += '；本机端口没拦住，多半是回环补丁没装或失效了，请主人运行 xagents windows-setup';
       result = { isolation, probes };
     } catch (e) { result = fail((e as Error).message); }
-    problems.push(...await cleanGlobal(token, before, probes, home, shared, windowsGlobalTargets()));
+    for (const path of absent) if (await lstat(path).catch(() => null)) problems.push(`自检期间出现了 ${path}，没有删，请负责人查看`);
   } finally {
     listener.close(); pipeServer.close();
+    // 探针在现有文件夹里建的随机名文件，万一没删掉，这里按名字再清一遍。
+    for (const t of writes) if (t.dir) await rm(join(t.path, token), { force: true }).catch(e => problems.push(`未能删除自检随机文件 ${join(t.path, token)}：${e.code || '未知错误'}`));
     const left = await sweepCredentials(run).catch(e => `未能清理凭据库里的自检测试条目：${(e as Error).message}`);
     if (left) problems.push(left);
     await rm(homeFile, { force: true }).catch(e => problems.push(`未能清理自检随机文件 ${homeFile}：${e.code || '未知错误'}`));

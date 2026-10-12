@@ -325,22 +325,21 @@ console.log(${JSON.stringify(marker)} + JSON.stringify(probes));
 // 探针若意外写成功，外面再清一遍，但只删能证明是探针建的：各目录里的随机名文件（名字独一无二），
 // 以及探针报告建过、文件编号对得上的目标。探针前还不存在、后来出现、却没被探针报告的，不删，报错让负责人查。
 type Before = Map<string, boolean>;
-type WriteTarget = { path: string; dir: boolean };
-const writeTargets = (home: string, temp: Record<string, string | null | undefined>, targets: WriteTarget[] = globalTargets) => [
-  ...targets.map(t => ({ path: join(home, t.path), dir: t.dir, shared: false })),
+const writeTargets = (home: string, temp: Partial<TempPaths>) => [
+  ...globalTargets.map(t => ({ path: join(home, t.path), dir: t.dir, shared: false })),
   ...Object.values(temp).filter((path): path is string => Boolean(path)).map(path => ({ path, dir: true, shared: true })),
 ];
-export async function globalBefore(home = homedir(), temp: Record<string, string | null | undefined> = {}, targets?: WriteTarget[]): Promise<Before> {
+export async function globalBefore(home = homedir(), temp: Partial<TempPaths> = {}): Promise<Before> {
   const before: Before = new Map();
   // 只有“确实不存在”才算原来没有；其他错误一律按原来就有处理，不动它。
-  for (const t of writeTargets(home, temp, targets)) before.set(t.path, await lstat(t.path).then(() => true, e => !hasCode(e, 'ENOENT')));
+  for (const t of writeTargets(home, temp)) before.set(t.path, await lstat(t.path).then(() => true, e => !hasCode(e, 'ENOENT')));
   return before;
 }
 type Created = { path: string; dir: boolean; ino: number | null };
-export async function cleanGlobal(token: string, before: Before, probes: { created?: Created[] }[] | null, home = homedir(), temp: Record<string, string | null | undefined> = {}, targets?: WriteTarget[]): Promise<string[]> {
+export async function cleanGlobal(token: string, before: Before, probes: { created?: Created[] }[] | null, home = homedir(), temp: Partial<TempPaths> = {}): Promise<string[]> {
   const problems: string[] = [], reported = new Map<string, Created>();
   for (const p of probes ?? []) for (const c of Array.isArray(p?.created) ? p.created : []) if (typeof c?.path === 'string') reported.set(c.path, c);
-  for (const t of writeTargets(home, temp, targets)) {
+  for (const t of writeTargets(home, temp)) {
     const path = t.path;
     if (t.dir) {
       const inside = join(path, token);

@@ -1,6 +1,7 @@
 import { isAbsolute, join, normalize, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { readJson } from './fsx.ts';
 import { jobDir, paths, toolRoot } from './paths.ts';
 import { createHash } from 'node:crypto';
@@ -66,13 +67,17 @@ export type Isolated = Pick<Project, 'denyReadExtra'> & { denyReadHome?: string[
 // :workspace 自带 /tmp 和 $TMPDIR 可写：两者都改成只读，只有任务的 tmp 写明可写（启动方另把 TMPDIR 指向它）。
 // 实测不设 TMPDIR 时 :tmpdir 就是系统给本用户的临时目录，所以不能只靠环境变量把它指走。
 // 2026-10-09 主人决定网络完全不限：只加 enabled，不启用 network_proxy（实测报告 3.1）。
-export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job), network = false) {
+export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job), network = false, exists: (path: string) => boolean = existsSync) {
   tomlString(job.repo); tomlString(job.worktree); tomlString(tmp); checkRoot(tmp, '临时目录');
   const rules = new Map<string, 'read' | 'write' | 'deny'>();
-  for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...homeDeny(), ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); rules.set(join(homedir(), path), 'deny'); }
-  rules.set(join(homedir(), '.codex/tmp'), 'read');
-  tomlString(deepseekHome()); rules.set(deepseekHome(), 'deny');
-  for (const dir of keychainDirs()) { tomlString(dir); rules.set(dir, 'deny'); }
+  // Windows：禁读名单里本机不存在的路径，Codex 会先把它建成文件夹再加权限（源码 deny_read_acl.rs，流水线上也实测到了）。
+  // 那样主人家里会凭空多出 .npmrc、.netrc 这类名字的文件夹，把别的工具弄坏。所以 Windows 上只写本机真实存在的；
+  // 代价是活跑着的时候才新出现的文件，这件活挡不住，下一件才挡得住。macOS 上不存在的也照写（规则对将来出现的同样有效）。
+  const set = (path: string, permission: 'read' | 'deny') => { if (!isWindows || exists(path)) rules.set(path, permission); };
+  for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...homeDeny(), ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); set(join(homedir(), path), 'deny'); }
+  set(join(homedir(), '.codex/tmp'), 'read');
+  tomlString(deepseekHome()); set(deepseekHome(), 'deny');
+  for (const dir of keychainDirs()) { tomlString(dir); set(dir, 'deny'); }
   // Windows 没有 /tmp 这一条（Codex 在 Windows 上会丢掉它），系统给用户的临时目录按 TEMP、TMP 算，同样设只读。
   if (!isWindows) rules.set(':slash_tmp', 'read');
   rules.set(':tmpdir', 'read');
@@ -80,8 +85,8 @@ export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | '
   for (const extra of project.denyReadExtra) {
     // 在 resolve 前检查，避免换行等字符在规范化时消失。
     tomlString(extra); relativePath(extra);
-    rules.set(resolve(job.repo, extra), 'deny');
-    rules.set(resolve(job.worktree, extra), 'deny');
+    set(resolve(job.repo, extra), 'deny');
+    set(resolve(job.worktree, extra), 'deny');
   }
   const filesystem = [...rules].map(([path, permission]) => `${tomlString(path)}="${permission}"`).join(',');
   return `permissions.xa={extends="${job.mode === 'read-only' ? ':read-only' : ':workspace'}",filesystem={${filesystem}}${network === true ? ",network={enabled=true}" : ""}}`;
