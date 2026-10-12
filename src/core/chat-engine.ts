@@ -1,5 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
-import { backgroundSpawn } from './platform.ts';
+import { backgroundSpawn, samePath } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -170,7 +170,7 @@ async function startNext(chat: Chat) {
     const body = promptBody(chat, member, source, messages);
     if (member.job) {
       const job = await rememberSession(await reconcile(await readJob(member.job)));
-      if (job.chat?.id !== chat.id || job.worktree !== chat.worktree || job.branch !== chat.branch
+      if (job.chat?.id !== chat.id || !samePath(job.worktree, chat.worktree) || job.branch !== chat.branch
         || member.readOnly && job.mode !== 'read-only') throw new Error('成员任务与群登记不符。');
       if (!job.session) throw new Error('没有找到会话号，不能续接，请负责人检查 run.log。');
       // 与首次派活共用并发额度锁，检查和预留队列席位之间不能被其他群抢走名额。

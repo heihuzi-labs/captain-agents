@@ -248,7 +248,15 @@ test('独立推进进程：小队和群聊能启动新选手，群聊续接前�
   const readChat = async () => JSON.parse(await readFile(join(c.home, 'chats', chatId, 'chat.json'), 'utf8'));
   t.after(async () => { const chat = await readChat().catch(() => null); if (chat?.pid) { try { process.kill(chat.pid, 'SIGKILL'); } catch {} } });
   const said = await c.cli(['chat', 'say', chatId, '@GPT61Sol 做一遍']); assert.equal(said.code, 0, said.stderr);
-  const first = await until(readChat, v => v.members[0].job && !v.pid && !v.busy && !v.queue.length, 30_000);
+  const first = await until(async () => {
+    const chat = await readChat();
+    // 推进已经退出却没派出任务时直接显示平台原因，不让路径错误伪装成等待超时。
+    if (!chat.members[0].job && !chat.pid && !chat.busy && !chat.queue.length) {
+      const messages = await readFile(join(c.home, 'chats', chatId, 'messages.jsonl'), 'utf8');
+      assert.fail(`群聊没有派出成员任务：${messages}`);
+    }
+    return chat;
+  }, v => v.members[0].job && !v.pid && !v.busy && !v.queue.length, 30_000);
   const jobId = first.members[0].job;
   const firstJob = (await c.jobs()).find(j => j.id === jobId)!; assert.equal(firstJob.state, 'done', firstJob.error);
   const saidAgain = await c.cli(['chat', 'say', chatId, '@GPT61Sol 再做一遍']); assert.equal(saidAgain.code, 0, saidAgain.stderr);

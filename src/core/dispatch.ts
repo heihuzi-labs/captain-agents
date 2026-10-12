@@ -1,5 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
-import { backgroundSpawn } from './platform.ts';
+import { backgroundSpawn, samePath } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { open, realpath } from 'node:fs/promises';
 import { join, resolve, basename, extname } from 'node:path';
@@ -71,10 +71,11 @@ export async function dispatch(file: string, options: RunOptions, start: typeof 
   if (chat) {
     if (chosen.length !== 1) throw new Error('群共用副本一次只能派一位成员。');
     const expected = await worktreePath(project, `chat-${chat.id}`);
-    if (chat.state !== 'open' || chat.project !== project.name || chat.repo !== project.repo || chat.base !== base
-      || chat.branch !== `xa/chat-${chat.id}` || chat.worktree !== expected || options.worktree !== expected
-      || await realpath(expected) !== expected
-      || (await git(expected, ['rev-parse', '--show-toplevel'])).trim() !== expected
+    // 路径一律用 samePath 比：Windows 上 git 报的是正斜杠，登记里是反斜杠，盘符大小写也可能不同。
+    if (chat.state !== 'open' || chat.project !== project.name || !samePath(chat.repo, project.repo) || chat.base !== base
+      || chat.branch !== `xa/chat-${chat.id}` || !samePath(chat.worktree, expected) || !samePath(options.worktree!, expected)
+      || !samePath(await realpath(expected), expected)
+      || !samePath((await git(expected, ['rev-parse', '--show-toplevel'])).trim(), expected)
       || (await git(expected, ['symbolic-ref', '--short', 'HEAD'])).trim() !== chat.branch) {
       throw new Error('群副本与登记不符或群已收起，不能派活。');
     }

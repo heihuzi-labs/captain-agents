@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { createCliLauncher, cliLauncherStatus, installCliLauncher } from '../app/main/cli-launcher.ts';
 import { context, exec } from './helpers.ts';
 
-test('命令行安装：三种状态、拒绝覆盖、显式替换、旧应用与悬空链接', async t => {
+test('命令行安装：三种状态、拒绝覆盖、显式替换、旧应用与悬空链接', { skip: process.platform === 'win32' ? '只属于 macOS：.app 内置命令行的 sh 启动脚本及执行权限' : false }, async t => {
   const c = await context(t, false), home = join(c.temp, '用户'), target = join(home, '.local/bin/xagents');
   const options = { home, executable: '/Applications/派活 工作台.app/Contents/MacOS/派活工作台', platform: '/Applications/派活 工作台.app/Contents/Resources/platform' };
   const cli = createCliLauncher(options);
@@ -41,7 +41,7 @@ test('命令行安装：三种状态、拒绝覆盖、显式替换、旧应用�
   await assert.rejects(cli.installCliLauncher(), /已存在/);
 });
 
-test('命令行启动脚本：空格、中文、引号与 shell 字符均原样传递，不依赖 PATH 中的 Node', async t => {
+test('命令行启动脚本：空格、中文、引号与 shell 字符均原样传递，不依赖 PATH 中的 Node', { skip: process.platform === 'win32' ? '只属于 macOS：.app 内置命令行的 sh 启动脚本及执行权限' : false }, async t => {
   const c = await context(t, false), home = join(c.temp, '家目录');
   const app = join(c.temp, "派活 ' $工作台.app"), executable = join(app, 'Contents/MacOS/派活工作台');
   const platform = join(app, "Contents/Resources/平台 '目录"), capture = join(c.temp, 'capture.json');

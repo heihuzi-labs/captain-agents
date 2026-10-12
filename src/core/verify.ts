@@ -26,8 +26,10 @@ export const execute: Executor = async (file, args, cwd, timeoutMs, onData, env)
     const since = Date.now();
     const child = spawn(file, args, { cwd, env: { ...externalEnvironment(), ...env }, ...treeSpawn(), stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', timedOut = false, error: string | undefined, interrupted: string | undefined;
+    // exited：命令自己已经退出、只是清它留下的子孙时为真（Windows 上这时绝不能再按进程号去结束“它”，号可能已经被别人重用）。
+    let exitedAt: number | undefined;
     const kill = () => {
-      try { killTree(child.pid, 'SIGKILL', since); }
+      try { killTree(child.pid, 'SIGKILL', since, exitedAt); }
       catch (e) { error = `无法停止进程组：${(e as Error).message}`; }
     };
     const onInt = () => { interrupted = 'SIGINT'; kill(); };
@@ -39,7 +41,7 @@ export const execute: Executor = async (file, args, cwd, timeoutMs, onData, env)
     child.once('error', e => { error = e.message; });
     // 命令退出后清掉它遗留的后台子进程。它们若还握着输出管道，close 会一直不来：清完再等 5 秒，还不来就主动关掉管道，不永远等。
     let swept = false, giveUp: ReturnType<typeof setTimeout> | undefined;
-    child.once('exit', () => { kill(); swept = true; giveUp = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 5000); });
+    child.once('exit', () => { exitedAt = Date.now(); kill(); swept = true; giveUp = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 5000); });
     child.once('close', (exit, signal) => {
       clearTimeout(timer); clearTimeout(giveUp); process.removeListener('SIGINT', onInt); process.removeListener('SIGTERM', onTerm);
       // Windows 上清一次要读一遍进程列表（约一秒），退出时清过就不再重复。

@@ -20,8 +20,8 @@ import { workerEnv } from './env.ts';
 import { killTree, treeSpawn } from './platform.ts';
 
 // 停掉选手（或准备命令）带出来的所有进程。since 是起它的时间，只有 Windows 用得上（见 platform.ts）。
-export function killGroup(pid: number | undefined, signal: 'SIGTERM' | 'SIGKILL', since?: number) {
-  killTree(pid, signal, since);
+export function killGroup(pid: number | undefined, signal: 'SIGTERM' | 'SIGKILL', since?: number, exitedAt?: number) {
+  killTree(pid, signal, since, exitedAt);
 }
 export async function reconcileSafely() {
   try { await listJobs(true); }
@@ -43,7 +43,7 @@ async function watch(id: string, progress: LiveProgress, signal: AbortSignal, on
   }
 }
 export async function runWorker(id: string) {
-  let stopping = false, workerPid: number | undefined, workerSince: number | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+  let stopping = false, workerPid: number | undefined, workerSince: number | undefined, workerExitedAt: number | undefined, timer: ReturnType<typeof setTimeout> | undefined;
   let job: Job | undefined, progress: LiveProgress | undefined, code: number | null = null, failure: string | undefined;
   let fatalFailure: string | undefined;
   const message = (error: unknown) => {
@@ -52,7 +52,7 @@ export async function runWorker(id: string) {
   };
   const addFailure = (text: string) => { failure = failure ? `${failure} ${text}` : text; };
   const killWorker = () => {
-    try { killGroup(workerPid, 'SIGKILL', workerSince); }
+    try { killGroup(workerPid, 'SIGKILL', workerSince, workerExitedAt); }
     catch (error) { addFailure(`停止选手进程组失败：${message(error)}`); }
   };
   let wakeFatal!: () => void;
@@ -71,7 +71,7 @@ export async function runWorker(id: string) {
     if (fatalFailure) { killWorker(); return; }
     // 已经在收尾就不重复（Windows 上每次都要读一遍进程列表）。
     if (timer) return;
-    try { killGroup(workerPid, 'SIGTERM', workerSince); }
+    try { killGroup(workerPid, 'SIGTERM', workerSince, workerExitedAt); }
     catch (error) { addFailure(`停止选手进程组失败：${message(error)}`); }
     // 某些选手不响应 SIGTERM，宽限后仍必须收尾整个组。
     timer = setTimeout(killWorker, 1000);
@@ -118,6 +118,7 @@ export async function runWorker(id: string) {
         workerPid = child.pid;
         const finished = new Promise<number | null>((resolve, reject) => {
           child.on('error', reject);
+          child.once('exit', () => { workerExitedAt = Date.now(); });
           child.on('close', resolve);
         });
         // 马上接上拒绝处理，避免登记过程中 spawn 失败产生未处理拒绝。

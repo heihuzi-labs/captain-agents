@@ -35,7 +35,7 @@ export async function setupCommands(commands: string[], logfile: string, step: (
 // 开群准备副本时还没有成员任务，省略 id；原任务入口仍在任务锁里登记 setupPid。
 export async function setup(job: Pick<Job, 'worktree'> & { id?: string }, commands: string[], logfile: string) {
   await setupCommands(commands, logfile, async (command, fd) => {
-    let finished: Promise<void> | undefined, pid: number | undefined, since: number | undefined;
+    let finished: Promise<void> | undefined, pid: number | undefined, since: number | undefined, exitedAt: number | undefined;
     try {
       const start = (j?: Job) => {
         if (j && j.state !== 'queued') return;
@@ -46,6 +46,7 @@ export async function setup(job: Pick<Job, 'worktree'> & { id?: string }, comman
         if (j) { j.setupPid = pid; j.setupSince = since; }
         finished = new Promise<void>((resolve, reject) => {
           child.on('error', reject);
+          child.once('exit', () => { exitedAt = Date.now(); });
           child.on('close', (code, signal) => code === 0 ? resolve() : reject(new Error(`准备副本失败（${signal || code}），请查看 ${logfile}，修正项目 setup 后重新派发。`)));
         });
         finished.catch(() => {});
@@ -54,7 +55,7 @@ export async function setup(job: Pick<Job, 'worktree'> & { id?: string }, comman
       if (!finished) return false;
       await finished;
     } finally {
-      killTree(pid, 'SIGKILL', since);
+      killTree(pid, 'SIGKILL', since, exitedAt);
       if (job.id) await updateJob(job.id, j => { delete j.setupPid; delete j.setupSince; });
     }
   });

@@ -38,13 +38,14 @@ export const executeQuery: QueryExecutor = command => new Promise((resolve, reje
   const env = externalEnvironment({ ...process.env, ...command.env });
   const launch = replacement ? nodeCommand([replacement, command.file, ...command.args], env) : { ...command, env };
   const since = Date.now();
+  let exitedAt: number | undefined;
   const child = spawn(launch.file, launch.args,
     { cwd: command.cwd, env: launch.env, ...treeSpawn(), stdio: ['pipe', 'pipe', 'pipe'] });
   let output = '', settled = false, completed = false, failure: Error | undefined;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const kill = (signal: NodeJS.Signals = 'SIGKILL') => {
     if (!child.pid) return;
-    try { killTree(child.pid, signal === 'SIGTERM' ? 'SIGTERM' : 'SIGKILL', since); }
+    try { killTree(child.pid, signal === 'SIGTERM' ? 'SIGTERM' : 'SIGKILL', since, exitedAt); }
     // 已拿到完整结果后只是收尾：程序刚好退出、还没被收走时，macOS 对整组发信号会报 EPERM，这时当它已经退出。
     // 2026-09-30 查到的偶发失败（测试里 Cursor 替身“kill EPERM”）就是这个；没拿到结果时照旧当失败。
     catch (e) { if (!hasCode(e, 'ESRCH') && !(completed && hasCode(e, 'EPERM'))) failure ??= e as Error; }
@@ -59,6 +60,7 @@ export const executeQuery: QueryExecutor = command => new Promise((resolve, reje
     else if (completed || (!command.complete && code === 0)) resolve(output);
     else reject(new Error(command.complete ? '未读到完整查询结果' : `查询程序退出码 ${code}`));
   };
+  child.once('exit', () => { exitedAt = Date.now(); });
   child.on('error', e => { failure = e; finish(null); });
   child.on('close', finish);
   child.stdin.on('error', e => { if (!completed) stop(e); });

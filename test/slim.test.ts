@@ -179,13 +179,14 @@ test('跨磁盘复制文件、目录及符号链接后才移除原件', async t 
   const c = await registry(t), source = join(c.temp, 'runtime');
   await fs.mkdir(join(source, 'src'), { recursive: true });
   await fs.writeFile(join(source, 'src', 'test.ts'), '完整内容');
-  await fs.symlink('src/test.ts', join(source, 'link'));
+  await fs.symlink(join('src', 'test.ts'), join(source, 'link'));
+  const originalLink = await fs.readlink(join(source, 'link'));
   const log = join(c.temp, 'run.log'); await fs.writeFile(log, '原始日志');
   t.mock.method(fs, 'rename', async () => { throw Object.assign(new Error('跨磁盘'), { code: 'EXDEV' }); });
   const folder = await moveToTrash([source, log], '跨盘');
   await absent(source); await absent(log);
   assert.equal(await fs.readFile(join(folder, 'runtime/src/test.ts'), 'utf8'), '完整内容');
-  assert.equal(await fs.readlink(join(folder, 'runtime/link')), 'src/test.ts');
+  assert.equal(await fs.readlink(join(folder, 'runtime/link')), originalLink);
   assert.equal(await fs.readFile(join(folder, 'run.log'), 'utf8'), '原始日志');
 });
 

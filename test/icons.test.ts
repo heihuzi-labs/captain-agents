@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { context } from './helpers.ts';
 import { iconSources, installIcons, migrateIcons } from '../src/core/icons.ts';
 
-test('图标用替身应用和 sips 按需导出；缺失跳过，失败不留半份，下次能重试', async t => {
+test('图标用替身应用和 sips 按需导出；缺失跳过，失败不留半份，下次能重试', { skip: process.platform === 'win32' ? '只属于 macOS：从 .app 用 sips 导出图标' : false }, async t => {
   const c = await context(t), apps = join(c.temp, 'Applications'), icons = join(c.home, 'icons');
   for (const key of ['codex', 'grok', 'cursor'] as const) {
     const source = join(apps, iconSources[key]); await mkdir(dirname(source), { recursive: true }); await writeFile(source, key);

@@ -47,7 +47,7 @@ test('超时记录没过并杀掉整组孙进程，不留下心跳', async t => 
   const c = await context(t); await c.add(); const dir = await seed(c);
   const heartbeat = join(c.temp, 'heartbeat');
   const grandchild = `require('node:fs').writeFileSync(${JSON.stringify(heartbeat)},'started');setInterval(()=>require('node:fs').appendFileSync(${JSON.stringify(heartbeat)},'x'),20)`;
-  await config(c, [cmd(`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'inherit'});setInterval(()=>{},1000)`) ], 0.01);
+  await config(c, [cmd(`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'inherit'});setInterval(()=>{},1000)`) ], process.platform === 'win32' ? 0.1 : 0.01); // Windows 上起三层进程要好几秒，超时给宽一些，否则孙进程还没来得及写心跳
   const r = await c.cli(['verify', 'verify-test']); assert.equal(r.code, 1); assert.match(r.stdout, /超时/);
   const j = JSON.parse(await readFile(join(dir, 'job.json'), 'utf8')); assert.equal(j.verify.ok, false);
   // 被强行结束的进程：macOS 上没有退出码（记的是信号），Windows 上退出码是 1。

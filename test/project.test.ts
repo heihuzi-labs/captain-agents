@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { worktreePath } from '../src/core/project.ts';
 import { context, exec, root } from './helpers.ts';
 
@@ -30,7 +31,7 @@ for (const missing of [true, false]) {
     assert.equal(added.code, 0, added.stderr);
     await rm(missing ? stale : join(stale, '.git'), { recursive: true });
     const found = await exec(process.execPath, ['--input-type=module', '-e', `
-      import { findProject } from ${JSON.stringify(join(root, 'src/core/project.ts'))};
+      import { findProject } from ${JSON.stringify(pathToFileURL(join(root, 'src/core/project.ts')).href)};
       console.log((await findProject()).name);
     `], c.repo, c.env);
     assert.equal(found.code, 0, found.stderr);

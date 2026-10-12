@@ -58,19 +58,31 @@ test('进程树：比父进程早出生的“孩子”是进程号被重用后�
   assert.deepEqual(treeOf(rows, 10, 5000), [10, 12]);
 });
 
-test('进程树：root 已经退了，只收它生前留下的子孙', () => {
+test('进程树：root 已经退了、号还没人用，只收它生前留下的子孙', () => {
   const rows = [{ pid: 11, parent: 10, created: 10_500 }, { pid: 12, parent: 11, created: 10_600 }, { pid: 13, parent: 10, created: 5000 }];
   assert.deepEqual(treeOf(rows, 10, 10_000), [11, 12], '比起始时间早出生好几秒的不是它的孩子');
+  assert.deepEqual(treeOf(rows, 10, 10_000, 20_000), [11, 12]);
   assert.deepEqual(treeOf(rows, 10), [], '不知道起始时间就没法认，什么都不碰');
 });
 
 test('进程树：root 退了以后进程号被无关进程重用，不碰那个进程和它后来生的孩子', () => {
   const rows = [
-    { pid: 10, parent: 1, created: 90_000 },   // 重用者：比我们起 root 的时间晚了 30 秒以上
+    { pid: 10, parent: 1, created: 90_000 },   // 重用者：比我们起 root 的时间晚了 5 秒以上
     { pid: 11, parent: 10, created: 2000 },    // 我们的 root 生前留下的
     { pid: 12, parent: 10, created: 95_000 },  // 重用者的孩子
   ];
   assert.deepEqual(treeOf(rows, 10, 1000), [11]);
+});
+
+test('进程树：已经看到 root 退出时，哪怕重用者紧跟着出生，也绝不碰它，只收 root 退出之前生的孩子', () => {
+  const rows = [
+    { pid: 10, parent: 1, created: 2500 },   // 重用者：我们的 root 退出后不到一秒就拿走了这个号（在“起 root 后 5 秒内”）
+    { pid: 11, parent: 10, created: 1500 },  // 我们的 root 生前留下的
+    { pid: 12, parent: 10, created: 2600 },  // 重用者的孩子
+  ];
+  assert.deepEqual(treeOf(rows, 10, 1000, 2000), [11]);
+  // 没说它退出了：这个时间范围内只能认它是我们的 root（所以调用方看到退出后一定要说）。
+  assert.deepEqual(treeOf(rows, 10, 1000), [10, 12]);
 });
 
 test('进程树：叫这个号的进程比起始时间早得多，说明时间给错了，什么都不碰', () => {
@@ -126,10 +138,11 @@ test('killTree：父进程先退了，留下的子孙照样收走', async () => 
   try {
     process.kill(child.pid!, 'SIGKILL');
     await until(async () => alive(child.pid), gone => !gone);
+    const exitedAt = Date.now();
     await sleep(100);
     // Windows 上没脱离父进程的子进程会被系统跟着父进程一起收走（实测），所以那里不要求它们还在；之后一样要求一个不剩。
     if (!isWindows) assert.ok(alive(pids[1]) && alive(pids[2]), '子孙应当还在');
-    killTree(child.pid, 'SIGKILL', since);
+    killTree(child.pid, 'SIGKILL', since, exitedAt);
     await until(async () => pids.filter(alive), left => left.length === 0);
   } finally { for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* 已经没了 */ } }
 });

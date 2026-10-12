@@ -2,11 +2,11 @@ import { describe, test } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { access, mkdir, readFile, readdir, writeFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { context, until } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
-import { createChat, appendChatMessage, readChat, readMessages, sayInChat, chatDir, pendingForLead, REPORT_MAX } from '../src/core/chat.ts';
+import { createChat, appendChatMessage, readChat, readMessages, sayInChat, chatDir, pendingForLead, REPORT_MAX, updateChat } from '../src/core/chat.ts';
 import { wakeChat, stopChat, closeChat, cleanChat, reconcileChat } from '../src/core/chat-engine.ts';
 import { readJob, updateJob } from '../src/core/job.ts';
 import { jobDir } from '../src/core/paths.ts';
@@ -123,6 +123,38 @@ describe('项目群聊推进', { concurrency: 1 }, () => {
     assert.equal((await c.jobs()).length, 1);
   });
 
+  test('续接按路径比较仓库和群副本：接受等价写法，拒绝不同目录', async t => {
+    const c = await setup(t, { grok: ['第一轮完成', '第二轮完成'] });
+    const chat = await c.open();
+    await sayInChat(chat.id, '@Grok 第一轮', 'owner');
+    const first = await settled(chat.id), id = first.members[0].job!;
+    assert.ok(id, JSON.stringify(await readMessages(chat.id)));
+    const original = await readJob(id);
+    await until(async () => !alive(original.pid));
+    // 不同目录仍要拦住，不能把路径兼容变成给成员换副本的入口。
+    await updateJob(id, j => { j.worktree = c.repo; });
+    await sayInChat(chat.id, '@Grok 不能换副本', 'owner'); await settled(chat.id);
+    assert.match((await readMessages(chat.id)).at(-1)!.text, /成员任务与群登记不符/);
+    assert.equal((await readJob(id)).resume, undefined);
+    await updateJob(id, j => { j.worktree = original.worktree; j.repo = c.temp; });
+    await sayInChat(chat.id, '@Grok 不能换仓库', 'owner'); await settled(chat.id);
+    assert.ok((await readMessages(chat.id)).some(m => /项目的仓库登记已经改变/.test(m.text)));
+    assert.equal((await readJob(id)).resume, undefined);
+    // Windows 同时覆盖 Git 的正斜杠写法；所有系统都覆盖未规范化的同一路径。
+    const equivalent = (path: string) => `${path.replaceAll('\\', '/')}/.`;
+    await updateJob(id, j => { j.worktree = original.worktree; j.repo = original.repo; });
+    await updateChat(chat.id, c => { c.worktree = equivalent(original.worktree); });
+    const projectFile = join(c.home, 'projects/测试.json');
+    const project = JSON.parse(await readFile(projectFile, 'utf8'));
+    await writeFile(projectFile, JSON.stringify({ ...project, repo: equivalent(original.repo) }));
+    await sayInChat(chat.id, '@Grok 等价路径继续', 'owner'); await settled(chat.id);
+    const resumed = await readJob(id);
+    assert.equal(resumed.state, 'done'); assert.equal(resumed.resume?.round, 2, JSON.stringify(await readMessages(chat.id)));
+    assert.equal(resumed.session, original.session);
+    assert.equal(resumed.rounds?.length, 2);
+    assert.equal((await c.jobs()).length, 1);
+  });
+
   test('续接重建两种隔离：新增禁读生效，首轮禁读删除后仍保留，只读和成员身份不变', async t => {
     const c = await setup(t, { grok: '完成', deepseek: '完成' });
     const config = join(c.home, 'config.json'), projectFile = join(c.home, 'projects/测试.json');
@@ -176,7 +208,7 @@ describe('项目群聊推进', { concurrency: 1 }, () => {
     assert.deepEqual(await readJob(id), old);
     assert.equal(await readFile(join(dir, 'observed.json'), 'utf8'), observedBefore);
     assert.deepEqual(await Promise.all(files.map(file => readFile(join(runtime, file), 'utf8'))), contents);
-    assert.deepEqual(await readdir(join(dir, 'runtime')), [old.runtime!.split('/').at(-1)]);
+    assert.deepEqual(await readdir(join(dir, 'runtime')), [basename(old.runtime!)]);
     await assert.rejects(access(join(dir, 'prompt-r2.md')));
     const events = (await readMessages(chat.id)).filter(m => m.kind === 'event' && /没能开始这一轮/.test(m.text));
     assert.equal(events.length, 1); assert.match(events[0].text, /第 2 轮运行包准备失败.*missing-worker/);

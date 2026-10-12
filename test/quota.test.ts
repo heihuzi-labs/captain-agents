@@ -267,7 +267,7 @@ test('给人看的时间是本地时间“10-04 01:00”，数据里仍是 ISO',
   assert.match(JSON.stringify(data), /\d{4}-\d\d-\d\dT/);
 });
 
-test('伪终端桥：程序拿到 60×140 的真终端，输入原样送达，收尾时交互程序一起退出', async t => {
+test('伪终端桥：程序拿到 60×140 的真终端，输入原样送达，收尾时交互程序一起退出', { skip: process.platform === 'win32' ? '只属于 macOS：Python pty 终端桥及进程组信号' : false }, async t => {
   if (spawnSync('python3', ['--version']).status !== 0) { t.skip('本机没有 python3'); return; }
   const c = await local(t), oldFake = process.env.XAGENTS_FAKE_WORKER, oldExec = process.env.XAGENTS_QUERY_EXEC;
   delete process.env.XAGENTS_FAKE_WORKER; delete process.env.XAGENTS_QUERY_EXEC;
@@ -279,7 +279,7 @@ test('伪终端桥：程序拿到 60×140 的真终端，输入原样送达，�
   await until(async () => !alive(Number(await readFile(marker, 'utf8'))));
 });
 
-test('伪终端桥收尾：先整组 SIGTERM 让程序自己删运行标记，不理的等宽限到了整组强杀', async t => {
+test('伪终端桥收尾：先整组 SIGTERM 让程序自己删运行标记，不理的等宽限到了整组强杀', { skip: process.platform === 'win32' ? '只属于 macOS：Python pty 终端桥及进程组信号' : false }, async t => {
   if (spawnSync('python3', ['--version']).status !== 0) { t.skip('本机没有 python3'); return; }
   const c = await local(t), oldFake = process.env.XAGENTS_FAKE_WORKER, oldExec = process.env.XAGENTS_QUERY_EXEC;
   delete process.env.XAGENTS_FAKE_WORKER; delete process.env.XAGENTS_QUERY_EXEC;

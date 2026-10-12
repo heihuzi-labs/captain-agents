@@ -1,6 +1,7 @@
 import type { TestContext } from 'node:test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { context, root } from './helpers.ts';
 import type { Chat, ChatMessage } from '../src/core/chat.ts';
 export async function chatContext(t: TestContext, repo = false) {
@@ -8,7 +9,7 @@ export async function chatContext(t: TestContext, repo = false) {
   const previous = process.env.XAGENTS_HOME;
   process.env.XAGENTS_HOME = c.home;
   t.after(() => { if (previous === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = previous; });
-  const cli = (args: string[]) => c.cli(args, { NODE_OPTIONS: `--import ${join(root, 'test/fixtures/chat-engine-hook.mjs')}` });
+  const cli = (args: string[]) => c.cli(args, { NODE_OPTIONS: `--import ${pathToFileURL(join(root, 'test/fixtures/chat-engine-hook.mjs')).href}` });
   return { ...c, cli };
 }
 export const sampleChat = (id = 'chat-one', extra: Partial<Chat> = {}): Chat => ({

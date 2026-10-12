@@ -45,40 +45,44 @@ function snapshot(): Row[] {
   return parseSnapshot(r.stdout);
 }
 // 从快照里找出 root 这棵树上还活着的进程（父在前、子在后）。
-// 进程号会被系统很快拿去重用，所以处处看创建时间：
+// Windows 的进程号回收得很快（实测：流水线上一条命令退出一两秒后，它的号就被别的测试的进程拿去用了），
+// 所以认进程只看号不行，处处要看创建时间：
 // - 子进程一定不比父进程早出生；早出生的只是父进程号被重用后撞上的无关进程。
-// - since 是我们起 root 的时间。快照里叫这个号的进程要在 since 前 2 秒到后 30 秒之间出生，才认它是我们的 root。
-// - 比这更晚出生的，是 root 退了以后重用这个号的无关进程：不碰它，只收 root 生前留下的子孙
-//   （父进程号是它、出生不早于 since、又早于那个无关进程）。
-// - 比这更早出生的，说明 since 给得不对：什么都不碰。
-const BEFORE = 2000, AFTER = 30_000;
-export function treeOf(rows: Row[], root: number, since?: number): number[] {
+// - since 是我们起 root 的时间。root 还在跑时，快照里叫这个号的进程要在 since 前 2 秒到后 5 秒之间出生，才认它是我们的 root；
+//   更晚出生的是重用这个号的无关进程，更早出生的说明 since 给得不对，两种都不碰它。
+// - exitedAt 是我们看到 root 退出的时间。给了它，就绝不碰叫这个号的进程（那只可能是重用者），
+//   只收 root 生前留下的子孙：父进程号是它、出生不早于 since、不晚于它退出。
+// - 不知道 since 又没给 exitedAt：只能按号认（和 macOS 上按进程组号认是同一种信任）。
+const BEFORE = 2000, AFTER = 5000;
+export function treeOf(rows: Row[], root: number, since?: number, exitedAt?: number): number[] {
   const byParent = new Map<number, Row[]>();
   for (const row of rows) byParent.set(row.parent, [...(byParent.get(row.parent) ?? []), row]);
   const self = rows.find(row => row.pid === root);
   const out: number[] = [], seen = new Set<number>([root]);
   const walk = (pid: number, born: number, until = Infinity) => {
     for (const child of byParent.get(pid) ?? []) {
-      if (seen.has(child.pid) || child.created < born || child.created >= until) continue;
+      if (seen.has(child.pid) || child.created < born || child.created > until) continue;
       seen.add(child.pid); out.push(child.pid); walk(child.pid, child.created);
     }
   };
-  if (self && (since === undefined || (self.created >= since - BEFORE && self.created <= since + AFTER))) { out.push(root); walk(root, self.created); }
-  else if (since !== undefined && (!self || self.created > since + AFTER)) walk(root, since - BEFORE, self?.created);
+  const ours = exitedAt === undefined && self && (since === undefined || (self.created >= since - BEFORE && self.created <= since + AFTER));
+  if (ours) { out.push(root); walk(root, self.created); }
+  else if (since !== undefined && (exitedAt !== undefined || !self || self.created > since + AFTER)) walk(root, since - BEFORE, Math.min(exitedAt ?? Infinity, self ? self.created : Infinity));
   return out;
 }
 
 // 停掉 pid 带出来的整棵进程树；树已经不在了不算错。
 // macOS：给进程组发信号（pid 必须是用 treeSpawn 起的组长）。
-// Windows：没有“请你退出”的信号，两种信号都是直接结束；since 填起这个进程的时间（毫秒），用来防进程号重用。
-export function killTree(pid: number | undefined, signal: TreeSignal, since?: number): void {
+// Windows：没有“请你退出”的信号，两种信号都是直接结束。since 填起这个进程的时间（毫秒）；
+// 已经看到它退出了、只是清它留下的子孙时，再填 exitedAt（看到它退出的时间）。
+export function killTree(pid: number | undefined, signal: TreeSignal, since?: number, exitedAt?: number): void {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return;
   if (!isWindows) {
     try { process.kill(-pid, signal); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e; }
     return;
   }
-  for (const target of treeOf(snapshot(), pid, since)) {
+  for (const target of treeOf(snapshot(), pid, since, exitedAt)) {
     if (target === process.pid) continue;
     try { process.kill(target, 'SIGKILL'); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e; }

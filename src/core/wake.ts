@@ -1,6 +1,7 @@
 // 小队与项目群共用的续接、运行检查和收尾；启动命令与隔离仍由 workers/runner 负责。
 import { access, rename, cp, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { samePath } from './platform.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { launch } from './dispatch.ts';
 import { alive, hasCode, readOptional, writeAtomic, writeJson } from './fsx.ts';
@@ -147,7 +148,7 @@ export async function resumeMember(job: Job, round: number, promptBody: string):
     if (current.network === true && !(await readSettings()).networkAllowed)
       throw new Error(`这位成员是联网开着时派的，主人现在已关掉联网总开关，不能照旧续接。请负责人换一位新成员（新建一个群，或重新派活）。`);
     const project = await loadProject(current.project);
-    if (project.repo !== current.repo) throw new Error('项目的仓库登记已经改变，不能给旧成员换运行包。');
+    if (!samePath(project.repo, current.repo)) throw new Error('项目的仓库登记已经改变，不能给旧成员换运行包。');
     const resume = { round, prompt: `prompt-r${round}.md` };
     const prepared = await prepareRun(current, promptBody, { ...project, denyReadHome: await extraDenyRead() }, resume);
     // 准备失败不归档日志、不动验收和任务状态，也绝不使用旧包启动。

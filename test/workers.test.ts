@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile, readdir, stat, mkdir, symlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { selection, command, refreshGrokLogin, checkDeepseekLogin, loginDeepseek, KEY_VARS, cursorToken, checkCursorLogin } from '../src/core/workers.ts';
+import { dirname, join, parse, resolve, sep } from 'node:path';
+import { selection, command, WINDOWS_SANDBOX, refreshGrokLogin, checkDeepseekLogin, loginDeepseek, KEY_VARS, cursorToken, checkCursorLogin } from '../src/core/workers.ts';
 import { codexEnvPolicy, isSecretName, PLATFORM_SWITCHES } from '../src/core/env.ts';
 import { extraDenyRead } from '../src/core/settings.ts';
 import { whos, workerDisplay, isolationOf, allowedEfforts, launchModels, vendorOf } from '../src/core/roster.ts';
@@ -14,7 +14,7 @@ import { context, root } from './helpers.ts';
 
 function job(who: Who, ro = false, spec = `${who}:high`): Job {
   const s = selection(spec);
-  return { id: '0929-1000-test', batch: 'batch', who, model: s.model, effort: s.effort, ...(s.fast ? { fast: true } : {}), repo: '/test/repo', worktree: '/test/repo/worktree', branch: 'xa/test', base: '123', project: '测试', title: '测试', kind: '实现', mode: ro ? 'read-only' : 'workspace-write', state: 'queued', created: new Date().toISOString() };
+  return { id: '0929-1000-test', batch: 'batch', who, model: s.model, effort: s.effort, ...(s.fast ? { fast: true } : {}), repo: resolve('/test/repo'), worktree: resolve('/test/repo/worktree'), branch: 'xa/test', base: '123', project: '测试', title: '测试', kind: '实现', mode: ro ? 'read-only' : 'workspace-write', state: 'queued', created: new Date().toISOString() };
 }
 test('推理强度只开中档、高档、超高档，不许 max 和 low；DeepSeek 只开高档（它的超高档会被换算成拉满）', () => {
   const native = whos.filter(w => !w.startsWith('deepseek'));
@@ -65,13 +65,13 @@ test('srt 模板保留安全设置，只读不开放副本，额外敏感路径�
   const p = { denyReadExtra: ['.data', 'secret-dir'] } as Project;
   for (const who of whos.filter(w => w !== 'codex')) {
     const writable = await sandbox(job(who), p), readonly = await sandbox(job(who, true), p);
-    assert.ok(writable.filesystem.allowWrite.includes('/test/repo/worktree'));
-    assert.ok(!readonly.filesystem.allowWrite.includes('/test/repo/worktree'));
+    assert.ok(writable.filesystem.allowWrite.includes(resolve('/test/repo/worktree')));
+    assert.ok(!readonly.filesystem.allowWrite.includes(resolve('/test/repo/worktree')));
     // 只读题也有任务自己的 tmp；公用临时目录一律不放开。
     assert.ok(readonly.filesystem.allowWrite.includes(jobTmpDir(job(who, true))));
     for (const shared of ['/private/tmp', '/private/var/folders', '/tmp']) assert.ok(!readonly.filesystem.allowWrite.includes(shared), shared);
-    assert.ok(readonly.filesystem.denyRead.includes('/test/repo/.data'));
-    assert.ok(readonly.filesystem.denyRead.includes('/test/repo/worktree/.data'));
+    assert.ok(readonly.filesystem.denyRead.includes(resolve('/test/repo/.data')));
+    assert.ok(readonly.filesystem.denyRead.includes(resolve('/test/repo/worktree/.data')));
     assert.ok(readonly.filesystem.denyRead.includes('~/.ssh'));
     assert.deepEqual(writable.network, readonly.network);
     assert.equal(readonly.network.allowLocalBinding, undefined);
@@ -97,23 +97,23 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   });
   delete process.env.XAGENTS_FAKE_WORKER;
   process.env.XAGENTS_SRT = join(c.temp, 'fake-srt.js'); await writeFile(process.env.XAGENTS_SRT, '');
-  process.env.XAGENTS_CODEX = '/test/codex';
+  process.env.XAGENTS_CODEX = resolve('/test/codex');
   const codex = await command(job('codex', true), '题目', { denyReadExtra: [] });
-  assert.equal(codex.file, '/test/codex'); assert.equal(codex.stdin, 'prompt');
+  assert.equal(codex.file, resolve('/test/codex')); assert.equal(codex.stdin, 'prompt');
   for (const feature of ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories']) {
     assert.ok(codex.args.some((v, i) => v === '--disable' && codex.args[i + 1] === feature));
   }
   assert.ok(codex.args.includes('--ignore-user-config')); assert.ok(codex.args.includes(codexPermissions(job('codex', true), { denyReadExtra: [] })));
   // Codex 的 :workspace 放开 $TMPDIR：指向任务的 tmp，并由启动前建好。
   const tmp = join(c.home, 'jobs', '0929-1000-test', 'tmp');
-  assert.deepEqual(codex.env, { TMPDIR: tmp }); assert.ok((await stat(tmp)).isDirectory());
+  assert.deepEqual(codex.env, { TMPDIR: tmp, ...(process.platform === 'win32' ? { TEMP: tmp, TMP: tmp } : {}) }); assert.ok((await stat(tmp)).isDirectory());
   assert.ok(codex.args.includes('model_reasoning_effort="high"'));
   // 普通 Codex 不带 DeepSeek 的配置，Codex 文件夹仍是主人自己的。
   assert.ok(!codex.args.some(v => v.includes('model_provider') || v.includes('api.deepseek.com'))); assert.equal(codex.env.CODEX_HOME, undefined);
   // DeepSeek 借 Codex 跑：同一套隔离，Codex 文件夹换成登记处下单独的那个，连 DeepSeek 的接口，选手的命令去掉带钥匙的环境变量。
   const ds = await command(job('deepseek', true, 'deepseek:high'), '题目', { denyReadExtra: [] });
-  assert.equal(ds.file, '/test/codex'); assert.equal(ds.stdin, 'prompt');
-  assert.deepEqual(ds.env, { TMPDIR: tmp, CODEX_HOME: join(c.home, 'deepseek') });
+  assert.equal(ds.file, resolve('/test/codex')); assert.equal(ds.stdin, 'prompt');
+  assert.deepEqual(ds.env, { ...codex.env, CODEX_HOME: join(c.home, 'deepseek') });
   for (const value of ['model_provider="deepseek"', 'forced_login_method="api"', 'cli_auth_credentials_store="file"', 'web_search="disabled"', 'default_permissions="xa"', 'deepseek-v4-pro', 'model_reasoning_effort="high"']) assert.ok(ds.args.includes(value), value);
   assert.ok(ds.args.some(v => v.startsWith('model_providers.deepseek=') && v.includes('base_url="https://api.deepseek.com/"') && v.includes('requires_openai_auth=true')));
   // Codex 自己那一层：选手的命令去掉带密钥字样的变量，DeepSeek 另外点名去掉 KEY_VARS（有两个不带这些字样）。
@@ -125,11 +125,11 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] })));
   // 三种隔离都禁读终端配置文件和命令历史（主人常把钥匙写在里面，Grok 的登录式 bash 还会自动读），以及常见的登录凭据文件。
   for (const f of [...SHELL_FILES, ...CREDENTIAL_FILES]) {
-    assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`"${join(homedir(), f)}"="deny"`), f);
+    assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`${JSON.stringify(join(homedir(), f))}="deny"`), f);
     for (const who of ['grok', 'cursor-grok'] as Who[]) assert.ok((await sandbox(job(who), { denyReadExtra: [] })).filesystem.denyRead.includes(join(homedir(), f)), `${who} ${f}`);
   }
   // 三种隔离都禁读 DeepSeek 的登录文件夹。
-  assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`"${join(c.home, 'deepseek')}"="deny"`));
+  assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }).includes(`${JSON.stringify(join(c.home, 'deepseek'))}="deny"`));
   const grok = await command(job('grok'), '题目', { denyReadExtra: [] });
   assert.equal(Object.keys(grok.env).length, 13); assert.equal(Object.values(grok.env).filter(v => v === 'false').length, 10);
   // srt 用 CLAUDE_CODE_TMPDIR 给选手设 TMPDIR（不设就是公用的 /tmp/claude）。
@@ -191,7 +191,7 @@ test('Codex 权限表完整禁读、开口 tmp、合并项目双份路径并去�
     // 钥匙串的两个文件夹（本用户的、系统的）都禁读。
     for (const dir of keychainDirs()) assert.ok(table.includes(`${JSON.stringify(dir)}="deny"`), dir);
     // 公用的 /tmp 只读，只有任务自己的 tmp 可写。
-    assert.ok(table.includes(`":slash_tmp"="read"`)); assert.ok(table.includes(`":tmpdir"="read"`)); assert.ok(table.includes(`${JSON.stringify(jobTmpDir(j))}="write"`));
+    assert.equal(table.includes(`":slash_tmp"="read"`), process.platform !== 'win32'); assert.ok(table.includes(`":tmpdir"="read"`)); assert.ok(table.includes(`${JSON.stringify(jobTmpDir(j))}="write"`));
     for (const base of [j.repo, j.worktree]) for (const extra of p.denyReadExtra) {
       assert.equal(table.split(`${JSON.stringify(join(base, extra))}="deny"`).length - 1, 1);
     }
@@ -199,7 +199,7 @@ test('Codex 权限表完整禁读、开口 tmp、合并项目双份路径并去�
 });
 
 test('Codex TOML 路径转义引号和反斜杠，保留空格中文，拒绝控制字符和越界路径', () => {
-  const j = { ...job('codex'), repo: '/仓库 空格"反\\斜', worktree: '/副本 空格"反\\斜' };
+  const j = { ...job('codex'), repo: resolve('/仓库 空格"反\\斜'), worktree: resolve('/副本 空格"反\\斜') };
   const extra = '目录 空格"反\\斜';
   const table = codexPermissions(j, { denyReadExtra: [extra] });
   for (const root of [j.repo, j.worktree]) assert.ok(table.includes(`${JSON.stringify(join(root, extra))}="deny"`));
@@ -221,7 +221,7 @@ test('Codex 最终参数只换权限档，其余完全保留，绝不混用 -s �
   for (const ro of [false, true]) {
     const j = job('codex', ro);
     const actual = await command(j, '题目', p);
-    assert.deepEqual(actual.args, ['exec', '--ignore-user-config',
+    assert.deepEqual(actual.args, ['exec', '--ignore-user-config', ...(process.platform === 'win32' ? WINDOWS_SANDBOX : []),
       '--disable', 'plugins', '--disable', 'apps', '--disable', 'remote_plugin', '--disable', 'computer_use', '--disable', 'browser_use', '--disable', 'browser_use_external', '--disable', 'in_app_browser', '--disable', 'hooks', '--disable', 'memories',
       '-c', codexEnvPolicy(), '-m', j.model, '-c', 'model_reasoning_effort="high"', '-c', 'default_permissions="xa"', '-c', codexPermissions(j, p),
       '-C', j.worktree, '--json', '-o', join(c.home, 'jobs', j.id, 'final.md'), '-']);
@@ -252,16 +252,16 @@ test('各家全局配置和公用临时目录对选手只读：模板只放开�
   }
   const tmp = jobTmpDir(job('cursor-sonnet'));
   const cursor = await sandbox(job('cursor-sonnet'), p);
-  assert.deepEqual(cursor.filesystem.allowWrite, ['/test/repo/worktree', cursorStateDir(job('cursor-sonnet')), tmp]);
+  assert.deepEqual(cursor.filesystem.allowWrite, [resolve('/test/repo/worktree'), cursorStateDir(job('cursor-sonnet')), tmp]);
   assert.deepEqual((await sandbox(job('cursor-sonnet', true), p)).filesystem.allowWrite, [cursorStateDir(job('cursor-sonnet')), tmp]);
-  const grok = await sandbox(job('grok'), p), session = join(homedir(), '.grok/sessions', '%2Ftest%2Frepo%2Fworktree');
-  assert.deepEqual(grok.filesystem.allowWrite, ['/test/repo/worktree', session, tmp]);
+  const grok = await sandbox(job('grok'), p), session = join(homedir(), '.grok/sessions', encodeURIComponent(job('grok').worktree));
+  assert.deepEqual(grok.filesystem.allowWrite, [resolve('/test/repo/worktree'), session, tmp]);
   assert.deepEqual((await sandbox(job('grok', true), p)).filesystem.allowWrite, [session, tmp]);
   for (const config of [cursor, grok]) for (const path of config.filesystem.allowWrite) {
     assert.ok(!['.cursor', '.grok', '.local', '.claude', '.agents', '.codex'].some(dir => path === join(homedir(), dir)), path);
   }
 });
-test('Grok 会话文件夹按副本路径逐段转义；中文、特殊字符两种写法、真实路径都覆盖', async t => {
+test('Grok 会话文件夹按副本路径逐段转义；中文、特殊字符两种写法、真实路径都覆盖', { skip: process.platform === 'win32' ? '只属于 macOS：快照按 POSIX 绝对路径的 %2F 会话名编码' : false }, async t => {
   const c = await context(t, false);
   const sessions = join(homedir(), '.grok/sessions');
   assert.deepEqual(await grokSessionDirs('/不存在/示例 项目/x.y-z'), [join(sessions, '%2F%E4%B8%8D%E5%AD%98%E5%9C%A8%2F' + encodeURIComponent('示例 项目') + '%2Fx.y-z')]);
@@ -274,13 +274,13 @@ test('Grok 会话文件夹按副本路径逐段转义；中文、特殊字符两
 
 test('可写路径必须是规范绝对路径、不含通配符；会话文件夹名不会比本副本更宽', async t => {
   const c = await context(t, false); process.env.XAGENTS_HOME = c.home;
-  for (const bad of ['', '.', '..', 'relative/wt', '/', '/a/../b', '/a/b/', '/a/*/b', '/a/b?', '/a/[b]']) await assert.rejects(grokSessionDirs(bad), /规范的绝对路径/, JSON.stringify(bad));
+  for (const bad of ['', '.', '..', 'relative/wt', parse(c.temp).root, resolve('/a') + sep + '..' + sep + 'b', resolve('/a/b') + sep, resolve('/a/*/b'), resolve('/a/b?'), resolve('/a/[b]')]) await assert.rejects(grokSessionDirs(bad), /规范的绝对路径/, JSON.stringify(bad));
   // 带 * 的写法（encodeURIComponent 不转义 *）会被 srt 当通配符，只留严格转义的那一种；此时副本路径本身也不许带 *。
   const p = { denyReadExtra: [] } as unknown as Project;
-  await assert.rejects(sandbox({ ...job('grok'), worktree: '/test/repo/wt*' }, p), /规范的绝对路径/);
-  await assert.rejects(sandbox({ ...job('cursor-sonnet'), worktree: '/test/repo/wt*' }, p), /规范的绝对路径/);
-  await assert.rejects(sandbox(job('cursor-sonnet'), p, '/state/*'), /规范的绝对路径/);
-  for (const dir of await grokSessionDirs("/a/b(1)!'~")) assert.equal(dir.slice(0, dir.lastIndexOf('/')), join(homedir(), '.grok/sessions'));
+  await assert.rejects(sandbox({ ...job('grok'), worktree: resolve('/test/repo/wt*') }, p), /规范的绝对路径/);
+  await assert.rejects(sandbox({ ...job('cursor-sonnet'), worktree: resolve('/test/repo/wt*') }, p), /规范的绝对路径/);
+  await assert.rejects(sandbox(job('cursor-sonnet'), p, resolve('/state/*')), /规范的绝对路径/);
+  for (const dir of await grokSessionDirs(resolve("/a/b(1)!'~"))) assert.equal(dirname(dir), join(homedir(), '.grok/sessions'));
 });
 test('派 Grok 活前在隔离外刷新登录：排队、带 5 小时阈值、失败就不派', async t => {
   const c = await context(t, false); process.env.XAGENTS_HOME = c.home;
@@ -319,7 +319,7 @@ test('设置里额外禁读的家目录位置，三家隔离都加上；写错�
     const deny = (await sandbox(job(who), home)).filesystem.denyRead;
     assert.ok(deny.includes(join(homedir(), '.my-secrets')) && deny.includes(join(homedir(), 'vault/keys')), who);
   }
-  process.env.XAGENTS_CODEX = '/test/codex';
+  process.env.XAGENTS_CODEX = resolve('/test/codex');
   const codex = await command(job('codex'), '题目', home);
   assert.ok(codex.args.some(a => a.includes(`${JSON.stringify(join(homedir(), '.my-secrets'))}="deny"`)));
   for (const bad of [['../escape'], ['/abs'], ['~/.x'], ['.'], [''], 'x', [1], ['a\nb']]) {
@@ -342,7 +342,7 @@ test('Cursor 状态目录够短：长任务号也不会让 cursor-agent 退到�
   process.env.XAGENTS_HOME = c.home;
 });
 
-test('DeepSeek 登录和派活前的登录检查：钥匙只经标准输入给 Codex，用单独的 Codex 文件夹，不带别家的钥匙变量', async t => {
+test('DeepSeek 登录和派活前的登录检查：钥匙只经标准输入给 Codex，用单独的 Codex 文件夹，不带别家的钥匙变量', { skip: process.platform === 'win32' ? '只属于 macOS：此替身依赖 shebang 直接启动，loginDeepseek 按文件名 spawn 且不支持注入执行器' : false }, async t => {
   const c = await context(t, false);
   const oldHome = process.env.XAGENTS_HOME, oldCodex = process.env.XAGENTS_CODEX, oldKeys = KEY_VARS.map(k => process.env[k]);
   // 替身 Codex：记下参数、标准输入、Codex 文件夹和继承到的钥匙变量；login status 时按“已登录”回答。
@@ -374,7 +374,7 @@ if (process.argv.includes('status')) console.log('Logged in using an API key - s
   assert.deepEqual(calls[1].args.slice(0, 2), ['login', 'status']);
 });
 
-test('Cursor 的登录：在隔离外从钥匙串取，取不到、快过期都报错让主人登录；不是 JWT 的令牌照用', async () => {
+test('Cursor 的登录：在隔离外从钥匙串取，取不到、快过期都报错让主人登录；不是 JWT 的令牌照用', { skip: process.platform === 'win32' ? '只属于 macOS：Cursor 登录使用 security 钥匙串命令' : false }, async () => {
   const token = (exp: number) => `h.${Buffer.from(JSON.stringify({ exp })).toString('base64url')}.sig`;
   const now = Date.UTC(2026, 9, 2);
   const calls: string[][] = [];
