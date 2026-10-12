@@ -104,7 +104,9 @@ export function findSh(env: NodeJS.ProcessEnv = process.env, exists: (path: stri
   }
   throw new Error('找不到 Git 自带的 sh。请先安装 Git for Windows，并确认命令行里能运行 git。');
 }
-export function shell(command: string): { file: string; args: string[] } {
-  if (!isWindows) return { file: '/bin/sh', args: ['-c', command] };
-  return { file: cachedSh ??= findSh(), args: ['-c', command] };
+// env：起这条命令时要另外带上的环境变量。Windows 上关掉 Git 的 sh 对参数的“路径转换”：
+// 它把命令交给 Windows 程序时会改写参数（实测：成对的反斜杠被折成一个，命令里带 Windows 路径的脚本因此出语法错）。
+export function shell(command: string): { file: string; args: string[]; env: Record<string, string> } {
+  if (!isWindows) return { file: '/bin/sh', args: ['-c', command], env: {} };
+  return { file: cachedSh ??= findSh(), args: ['-c', command], env: { MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' } };
 }
