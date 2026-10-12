@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { context, until } from './helpers.ts';
+import { context, until, killLeftover } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
 import { readJob } from '../src/core/job.ts';
 import { jobDir } from '../src/core/paths.ts';
@@ -33,7 +33,7 @@ async function setup(t: TestContext) {
     for (const name of names) {
       try {
         const team = JSON.parse(await readFile(join(c.home, 'teams', name, 'team.json'), 'utf8')) as { pid?: number };
-        if (team.pid) process.kill(team.pid, 'SIGKILL');
+        killLeftover(team.pid);
       } catch { /* 进程已经不在，或登记读不到 */ }
     }
   });

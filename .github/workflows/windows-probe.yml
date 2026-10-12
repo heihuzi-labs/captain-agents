@@ -98,11 +98,16 @@ jobs:
           retention-days: 14
 
   # The suites take a long time; on a push they run only when the commit message says [tests].
+  # Three copies side by side: a test that only fails now and then shows up sooner.
   tests:
-    name: Test suites (windows-2022)
+    name: Test suites (windows-2022, run ${{ matrix.run }})
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[tests]')
     runs-on: windows-2022
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3]
     steps:
       - name: Check out source
         uses: actions/checkout@v7.0.1
@@ -151,7 +156,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs
+          name: test-logs-${{ matrix.run }}
           path: test-logs/*
           if-no-files-found: warn
           retention-days: 14

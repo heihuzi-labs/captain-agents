@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { TestContext } from 'node:test';
-import { context, until, exec, root } from './helpers.ts';
+import { context, until, exec, root, killLeftover } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
 import { awakeCommand } from '../src/core/awake.ts';
 import { isWindows } from '../src/core/platform.ts';
@@ -19,7 +19,7 @@ async function setup(t: TestContext) {
   const c = await context(t); await c.add();
   const file = join(c.temp, 'fake-caffeinate.cjs'), marker = join(c.temp, 'awake.json'), ended = join(c.temp, 'awake-ended');
   const pids: number[] = [];
-  t.after(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch {} } });
+  t.after(() => { for (const pid of pids) killLeftover(pid); });
   await writeFile(file, `const fs = require('node:fs');
 const args = process.argv.slice(2), watched = Number(args[2]);
 const end = why => { fs.writeFileSync(process.env.XA_AWAKE_ENDED, why); process.exit(0); };

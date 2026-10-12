@@ -5,7 +5,7 @@ import { join, posix, win32 } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { backgroundSpawn, expandHomePath, findSh, isWindows, killTree, parseSnapshot, relativeInside, samePath, shell, treeOf, treeSpawn } from '../src/core/platform.ts';
 import { alive } from '../src/core/fsx.ts';
-import { until } from './helpers.ts';
+import { until, killLeftover } from './helpers.ts';
 
 for (const implementation of [posix, win32]) {
   test(`路径包含关系（${implementation.sep}）：自身、子目录、父目录、相邻目录与规范化`, () => {
@@ -130,7 +130,7 @@ test('killTree 停掉整棵树，一个不剩', async () => {
     for (const pid of pids) assert.ok(alive(pid), `进程 ${pid} 应当在跑`);
     killTree(child.pid, 'SIGKILL', since);
     await until(async () => pids.filter(alive), left => left.length === 0);
-  } finally { for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* 已经没了 */ } }
+  } finally { for (const pid of pids) killLeftover(pid); }
 });
 
 test('killTree：父进程先退了，留下的子孙照样收走', async () => {
@@ -144,7 +144,7 @@ test('killTree：父进程先退了，留下的子孙照样收走', async () => 
     if (!isWindows) assert.ok(alive(pids[1]) && alive(pids[2]), '子孙应当还在');
     killTree(child.pid, 'SIGKILL', since, exitedAt);
     await until(async () => pids.filter(alive), left => left.length === 0);
-  } finally { for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* 已经没了 */ } }
+  } finally { for (const pid of pids) killLeftover(pid); }
 });
 
 test('killTree：进程号无效或树已经不在，不报错', () => {

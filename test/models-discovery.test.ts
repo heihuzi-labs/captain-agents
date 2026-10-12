@@ -3,7 +3,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { context, root, until, desktopView } from './helpers.ts';
+import { context, root, until, desktopView, killLeftover } from './helpers.ts';
 import { roster, whos, keptWhos, builtinWhos, workerDisplay, workerHandles, fastWhos, spec, specFor, loadRoster, isWho, allowedEfforts, launchModels, vendorOf, isolationOf, setModelsCatalog, loadWorkerHandles } from '../src/core/roster.ts';
 import type { DiscoveredModel, ExtraModel, Vendor, ModelsCache } from '../src/core/roster.ts';
 import { readModelsCache, refreshModels, normalizeModels, parseCodexModels, parseTextModels } from '../src/core/models.ts';
@@ -239,14 +239,14 @@ test('独立推进进程：小队和群聊能启动新选手，群聊续接前�
   const teams = await readdir(join(c.home, 'teams'));
   const teamId = teams.find(n => !n.startsWith('.'))!;
   const readTeam = async () => JSON.parse(await readFile(join(c.home, 'teams', teamId, 'team.json'), 'utf8'));
-  t.after(async () => { const team = await readTeam().catch(() => null); if (team?.pid) { try { process.kill(team.pid, 'SIGKILL'); } catch {} } });
+  t.after(async () => { const team = await readTeam().catch(() => null); killLeftover(team?.pid); });
   const team = await until(readTeam, v => v.state !== 'running', 30_000);
   assert.equal(team.reason, 'passed', team.note); assert.equal(team.writer.who, 'codex-6-1-sol');
   const created = await c.cli(['chat', 'new', '测试', '--member', 'codex-6-1-sol:high', '--title', '新增模型群聊']);
   assert.equal(created.code, 0, created.stderr);
   const chatId = (await readdir(join(c.home, 'chats'))).find(n => !n.startsWith('.'))!;
   const readChat = async () => JSON.parse(await readFile(join(c.home, 'chats', chatId, 'chat.json'), 'utf8'));
-  t.after(async () => { const chat = await readChat().catch(() => null); if (chat?.pid) { try { process.kill(chat.pid, 'SIGKILL'); } catch {} } });
+  t.after(async () => { const chat = await readChat().catch(() => null); killLeftover(chat?.pid); });
   const said = await c.cli(['chat', 'say', chatId, '@GPT61Sol 做一遍']); assert.equal(said.code, 0, said.stderr);
   const first = await until(async () => {
     const chat = await readChat();
