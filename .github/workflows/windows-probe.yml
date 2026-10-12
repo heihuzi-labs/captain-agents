@@ -82,6 +82,15 @@ jobs:
           "self-check exit code with a program folder everyone can write to (must not be 0): $LASTEXITCODE"
           Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-writable-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
           icacls "$env:GITHUB_WORKSPACE" /remove '*S-1-1-0' | Out-Null
+          # A home directory like a real one: tens of thousands of files under the folders the permission table
+          # denies. How long does the self-check take then, and is a second run faster? (docs/design-windows.md 11.5)
+          node -e "const fs=require('fs'),path=require('path');for(const d of ['.claude/projects','.codex/sessions','.cursor/extensions','.ssh']){for(let i=0;i<80;i++){const dir=path.join(process.env.USERPROFILE,d,'d'+i);fs.mkdirSync(dir,{recursive:true});for(let j=0;j<250;j++)fs.writeFileSync(path.join(dir,'f'+j+'.txt'),'x');}}"
+          "files under .claude: $((Get-ChildItem -Recurse -File (Join-Path $env:USERPROFILE '.claude')).Count)"
+          foreach ($n in 1, 2) {
+            $t = Measure-Command { node src/cli/cli.ts selfcheck | Out-Host }
+            "self-check with a big home, run ${n}: exit code $LASTEXITCODE, $([int]$t.TotalSeconds) seconds"
+            Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-bighome-$n-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
+          }
           node src/cli/cli.ts windows-setup --remove
           node src/cli/cli.ts selfcheck
           "self-check exit code without the fence: $LASTEXITCODE"
