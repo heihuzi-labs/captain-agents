@@ -24,9 +24,9 @@ function trayImage(windows = process.platform === 'win32') {
   if (!windows) image.setTemplateImage(true);
   return image;
 }
-export function createTray(open: (target?: Destination) => void, quit: () => void) {
-  const windows = process.platform === 'win32';
-  const plain = trayImage(), tray = new Tray(plain);
+// windows：按哪种系统的习惯来；缺省看当前系统，测试里明确指定。
+export function createTray(open: (target?: Destination) => void, quit: () => void, windows = process.platform === 'win32') {
+  const plain = trayImage(windows), tray = new Tray(plain);
   tray.setToolTip('派活工作台');
   // Windows 上点一下图标就是打开窗口（右键才是菜单）；macOS 上点图标直接出菜单。
   if (windows) tray.on('click', () => open());

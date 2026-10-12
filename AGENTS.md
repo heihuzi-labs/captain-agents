@@ -21,13 +21,15 @@
   - 核心测试：`npm test`，`node:test` 跑 `test/*.test.ts`。
   - 界面测试：`npm run test:ui`，Vitest + Testing Library，测组件。
   - 真实窗口冒烟测试：`npm run test:e2e`（`test/e2e/smoke.ts`），用 Playwright 真的启动 Electron 窗口点一遍。它要开桌面窗口，**在隔离里跑不了**，交给负责人验收，报告里写明没跑。
+- 核心测试和界面测试在流水线的 Windows 机器上也跑。两种系统行为不同的地方（路径、进程、权限位、隔离）集中在 `src/core/platform.ts`，写代码和测试时不要假定是 macOS：路径用 `node:path` 和 `platform.ts` 里的比较函数，不写死 `/`、`/bin/sh`、`/tmp`；只属于 macOS 的用例在 Windows 上明确跳过并写原因，反过来也一样。
 - 验收命令是 `npm run verify`：类型检查 → 核心测试 → 界面测试 → 构建 → 冒烟测试，全过才算通过。
 - 在隔离里能跑的是 `npm run typecheck`、`npm test`、`npm run test:ui`；没跑的项不许说“已通过”。
 
 ## 安全底线（不许为了方便放宽）
 
 - 选手的名单和模型集中在 `src/core/roster.ts`，那是唯一的一张表；解析选手、启动参数、额度、隔离、自检都从它派生，不在别处写死选手。
-- 选手的启动参数和隔离模板（`src/core/workers.ts`、`sandbox/*.json`，Codex 的在 `src/core/sandbox.ts`）每一条都来自 2026-09-29 的实测，改动要附新的探针结果。
+- 选手的启动参数和隔离模板（`src/core/workers.ts`、`sandbox/*.json`，Codex 的在 `src/core/sandbox.ts`）每一条都来自 2026-09-29 的实测，改动要附新的探针结果。Windows 上的那一套（`src/core/selfcheck-windows.ts`、`sandbox/windows/*.ps1`、`sandbox.ts` 和 `workers.ts` 里 Windows 的分支）来自 2026-10-12 在三台真的 Windows 机器上的实测，见 [docs/research/windows-codex-sandbox-2026-10-12.md](docs/research/windows-codex-sandbox-2026-10-12.md)，改动同样要附新的探针结果；探针脚本和流水线在 `scripts/probe/`、`.github/workflows/windows-probe.yml`。
+- **Windows 上只开 Codex 这一路**（Codex 的各个模型和借它跑的 DeepSeek），别的选手派活时直接拒绝；哪种系统开放哪几种隔离只写在 `selfcheck.ts` 的 `platformIsolations` 一处。Codex 自己拦不住本机回环，平台另加一层只对它的离线专用账户生效的系统过滤规则（`sandbox/windows/loopback-fence.ps1`）；这一层和 Codex 的隔离由主人运行 `xagents windows-setup` 一次装齐（要管理员确认，平台不替主人提权）。设计和还没做到的地方见 [docs/design-windows.md](docs/design-windows.md)。
 - 推理强度只开中档、高档、超高档，不开最高档；Cursor 里只用 Claude、GPT、Grok 的模型（`roster.ts` 的底线）。
 - 主人在设置里允许哪些选手、哪些强度、要不要快速版（`src/core/policy.ts`），平台在派活时强制执行，`--force` 也跳不过；设置只能在底线之内收窄，不能放宽。
 - 选手联网只有一个总开关，缺省关，只有主人能在桌面应用里打开；打开后网络完全不限（含本机端口），文件和密钥规则不变。

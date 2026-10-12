@@ -98,7 +98,7 @@ xagents run <题目文件> --summary "一两句给主人看的要做什么" --wh
 
 - 派出后在后台运行 `xagents wait <任务号或批号>`，做完会通知你。想看一张表用 `xagents status [任务号或批号] [--all]`。
 - `wait` 的退出码：`0` 都做完了；`1` 有出错或失联；`3` 主人有新动作（留言、用这份、不要了、重做），先按第 11 节处理，再接着 `wait`。开始等之前就已经在待办里的旧事项不会再叫醒你。
-- 选手长时间没动静：先查电脑有没有休眠过（合盖会让连接断掉），macOS 上用 `pmset -g log | grep -E 'Sleep|Wake'`。平台自己会把休眠的时段记进任务，并从用时里扣掉。确认是选手卡住了，再 `xagents stop <任务号>`，然后 `xagents drop` 写明原因，换人重派。
+- 选手长时间没动静：先查电脑有没有休眠过（合盖会让连接断掉），macOS 上用 `pmset -g log | grep -E 'Sleep|Wake'`（Windows 上看任务记录里平台自己记下的休眠时段就行）。平台自己会把休眠的时段记进任务，并从用时里扣掉。确认是选手卡住了，再 `xagents stop <任务号>`，然后 `xagents drop` 写明原因，换人重派。
 
 ## 8. 审查和验收
 
@@ -222,6 +222,7 @@ xagents rate <任务号> --score 1-5 [--good "做得好的"] [--improve "要改�
   - 三家的隔离都必须做到：只能写自己的副本（外加这件活自己的临时目录和各家必需的一处状态目录，见 `docs/design.md` 第 7 节）；写不进公用临时目录（`/tmp`、`/var/folders`，里面有负责人会话的草稿和后台输出、别的程序的临时文件和套接字）；写不进各家的全局配置（`~/.cursor`、`~/.grok`、`~/.claude`、`~/.agents`、`~/.codex` 等，里面的钩子、技能、规矩会被主人在隔离外加载）；联网总开关缺省关，关着时连不上本机端口；主人在桌面应用打开后网络完全不限，文件和密钥规则不变；读不到 `~/.ssh`、`~/.npmrc`、别家的登录文件、系统钥匙串（`~/Library/Keychains`、`/Library/Keychains`）和终端的配置文件、命令历史（`~/.bashrc`、`~/.zshrc` 等，主人常把钥匙写在里面）；看不到名字带 KEY、TOKEN、SECRET、PASS 等字样的环境变量（依据 `docs/research/worker-env-2026-10-02.md`）。
   - Codex 在隔离里连自己的登录文件也读不到（它的登录由隔离外的主进程负责）；Grok、Cursor 必须读得到自己的登录文件，否则启动不了。Cursor 的登录放在钥匙串里，由平台在隔离外取出、只交给这次 Cursor 进程；派 Cursor 活报“没在钥匙串里找到 Cursor 的登录”或“剩不到 2 小时就过期”时，请主人在终端运行一次 `cursor-agent login`。依据见 `docs/design.md` 第 7 节、`docs/research/codex-permissions-2026-09-29.md`、`docs/research/global-config-writes-2026-09-30.md` 和 `docs/research/keychain-2026-10-02.md`。
   - 自检的做法更新后，旧的自检缓存自动作废，下次派活会先自动重检；若报“缺少有效结果”，运行 `xagents selfcheck` 重检即可。
+- **在 Windows 上**：只能派走 Codex 隔离的选手（Codex 的各个模型和 DeepSeek），派别的会被平台拒绝并写明原因。自检报“还没装好 Windows 上的隔离”，或报本机端口没拦住：请主人在终端运行一次 `xagents windows-setup`，系统会弹一次管理员确认框，只有主人能点；装好后再 `xagents selfcheck`。Windows 上选手只挡得住派活那一刻本机已经有的密钥文件；隔离里本机回环整个不通，依赖它的程序（比如 Python 的 asyncio）起不来，这类测试留给你在隔离外跑。项目登记的验收、准备命令在 Windows 上由 Git 自带的 `sh` 来跑，命令里要写路径时用正斜杠。细节见工具仓库 `docs/design-windows.md`。
 - **派 DeepSeek 活报“DeepSeek 还没登录”**：钥匙只有主人能拿到。在对话里请主人在终端运行一次 `xagents login deepseek`，按提示粘贴 DeepSeek 的 API 钥匙；钥匙不要发进对话。它只存在派活工作台单独的 Codex 文件夹里，不影响主人自己的 ChatGPT 登录。DeepSeek 报余额不足（402）时请主人去 DeepSeek 网站充值。
 - **派 Grok 活报“刷新 Grok 登录没成功”，或 Grok 选手说没登录**：派 Grok 活前平台会在隔离外先刷新它的登录，失败就不派。先在终端运行 `grok models` 看报什么；多半是主人的 Grok 登录失效（一件 Grok 活跑得很久、令牌在隔离里到期可能引起），这属于“只有主人能拿到的东西”，在对话里请主人在终端运行一次 `grok` 重新登录。
 - **被主人的设置拒绝**（“主人在设置里关掉了…”“只允许…”“没有打开快速版”）：整批都不派，不留任务和副本。按提示换选手、换强度或去掉 `:fast`；`--force` 也跳不过。
