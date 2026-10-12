@@ -177,6 +177,7 @@ else {
     }
   });
   void app.whenReady().then(async () => {
+    // 命令行启动脚本：没装的自动装上，应用换了位置的跟着改；出错只记日志，不影响启动。
     if (app.isPackaged) await refreshCliLauncher().catch(console.error);
     await loadConfiguredRoster();
     await migrateIcons().catch(console.error);

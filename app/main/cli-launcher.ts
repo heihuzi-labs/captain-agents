@@ -88,9 +88,11 @@ export function createCliLauncher(installation: Installation) {
     if (!platform) return false;
     const list = files();
     const states = () => Promise.all(list.map(fileStatus));
-    const needsRefresh = (values: LauncherFileStatus[]) => values.includes('stale') && !values.includes('other');
-    // 没装过时不创建目录；进锁后再检查一遍，避免覆盖并发安装或修改。
+    // 还没装的自动装上、位置过时的重写（2026-10-12 主人定：不用主人手动点）；有别人的文件就什么都不动，等主人在设置里确认替换。
+    const needsRefresh = (values: LauncherFileStatus[]) => values.some(v => v !== 'installed') && !values.includes('other');
+    // 进锁后再检查一遍，避免覆盖并发安装或修改。
     if (!needsRefresh(await states())) return false;
+    await mkdir(dirname(list[0].path), { recursive: true });
     return withLock(join(dirname(list[0].path), '.xagents-cli-install'), async () => {
       if (!needsRefresh(await states())) return false;
       return writeLaunchers(list, async () => !(await states()).includes('other'));

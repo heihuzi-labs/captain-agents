@@ -153,16 +153,23 @@ for (const windows of [false, true]) {
     }
   });
 
-  test(`${label} 自动更新：未安装不创建目录，只有当前脚本但缺文件也不自动补装`, async t => {
-    const c = await context(t, false), home = join(c.temp, 'untouched'), options = installation(home, false);
-    const cli = createCliLauncher(options);
-    assert.equal(await cli.refreshCliLauncher(), false);
-    await assert.rejects(stat(home), { code: 'ENOENT' });
-    await cli.installCliLauncher();
-    const list = launcherFiles(options);
-    await rm(list.at(-1)!.path);
-    assert.equal(await cli.refreshCliLauncher(), false);
-    await assert.rejects(stat(list.at(-1)!.path), { code: 'ENOENT' });
+  test(`${label} 启动时：还没装的自动装上；装了一半的补齐；开发版什么都不做`, async t => {
+    const c = await context(t, false), home = join(c.temp, 'fresh'), options = installation(home, false);
+    const cli = createCliLauncher(options), list = launcherFiles(options);
+    assert.equal(await cli.cliLauncherStatus(), 'missing');
+    assert.equal(await cli.refreshCliLauncher(), true, '没装过：自动装上（文件夹不在就建）');
+    assert.equal(await cli.cliLauncherStatus(), 'installed');
+    for (const file of list) assert.equal(await readFile(file.path, 'utf8'), file.content);
+    assert.equal(await cli.refreshCliLauncher(), false, '已经装好：不再动');
+    if (list.length > 1) {
+      await rm(list.at(-1)!.path);
+      assert.equal(await cli.refreshCliLauncher(), true, '少了一个文件：补齐');
+      assert.equal(await cli.cliLauncherStatus(), 'installed');
+    }
+    // 开发版（没有应用自带的平台）不装，也不建文件夹。
+    const dev = join(c.temp, 'dev');
+    assert.equal(await createCliLauncher({ home: dev, executable: options.executable }).refreshCliLauncher(), false);
+    await assert.rejects(stat(dev), { code: 'ENOENT' });
   });
 
   test(`${label} 自动更新：别人的、增删或修改一行、目录、链接均原样保留`, async t => {

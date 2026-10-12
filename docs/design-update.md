@@ -38,6 +38,7 @@
 - 平台根目录统一在 `src/core/paths.ts` 的 `resolveToolRoot()` / `toolRoot`：asar 中的后台根据 Electron 自带的 `process.resourcesPath` 找 `platform`，缺目录明确报错；开发构建、源码 CLI 和运行快照继续取自己的根目录。根目录不接受外部环境变量覆盖，已有快照不会切回安装目录的另一版本。
 - 起平台进程统一用 `src/core/node-runtime.ts` 的 `nodeRunner()` / `nodeCommand()`：普通 Node 用 `process.execPath`；Electron 用同一程序加 `ELECTRON_RUN_AS_NODE=1`。入口 `node-entry.ts` 随后清掉开关、把 `process.defaultApp` 设为真（否则 srt 用的参数解析库按 Electron 的习惯把脚本路径当成用户参数，srt 会在隔离里再套一层自己，实测启动失败）并执行目标脚本；推进进程再起看管进程、看管进程再起 srt 时都重新设置，选手拿不到这个变量。自检仅调整启动方式，探针正文不变。
 - **命令行后台**：`app/main/cli-launcher.ts` 提供 `cliLauncherStatus()` 和 `installCliLauncher({ replace?: boolean })`。状态是 `installed`（当前应用的完整启动脚本）、`missing`、`other`（包括源码链接、悬空链接、其他应用位置的脚本）；开发版状态为 `other`，安装报“开发版不安装命令行”。安装在锁内写临时可执行文件再改名，路径和参数正确引用，已有其他文件必须显式选择替换。脚本只用应用自带运行时执行平台中的 `bin/xagents`，同位置更新后自然就是新版。
+- **自动装上**（2026-10-12 主人定）：打包后的应用每次启动时看一眼启动脚本——还没装的自动装上，应用换了位置的跟着重写；终端里已经有一个别的 `xagents`（不是本应用写的）时什么都不动，等主人在设置里确认替换。出错只记日志，不影响启动。开发版不装。
 - **命令行的界面**：设置 → 通用 → 命令行（[界面规范](ui-spec.md) 第 18 节），通过桥上的 `cliStatus()` / `cliInstall(replace)` 调上面两个函数；开发版显示“开发版不安装命令行”。
 - 开发的人照旧使用源码 `bin/xagents`、`npm run dev`、`npm run build && npx electron .` 和 `npm run install-app`。安装脚本只停窗口主进程，避免把同一可执行程序启动的平台后台进程也停掉。
 - `scripts/check-desktop-bundle.mjs` 保留原有外部依赖检查，并检查平台必需文件、srt 依赖完整且没有符号链接。`npm run pack` 顺序是构建 → 准备平台 → 检查 → builder。
