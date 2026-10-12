@@ -17,6 +17,8 @@ test('选手的环境：继承的去掉密钥变量，平台设的照给，点�
   const env = workerEnv(inherited, { TMPDIR: '/job/tmp', CODEX_HOME: '/c' }, ['OPENAI_FEDERATION_RULE_ID']);
   assert.deepEqual(env, { PATH: '/bin', HOME: '/h', TMPDIR: '/job/tmp', CODEX_HOME: '/c' });
   assert.equal(inherited.OTHER_SERVICE_API_KEY, 'sk-test');
+  // 只给平台自己的后台进程看的变量不往下传。
+  assert.deepEqual(workerEnv({ PATH: '/bin', XAGENTS_KOFFI: '/install/node_modules/koffi', XAGENTS_HOME: '/h/.xagents' }), { PATH: '/bin', XAGENTS_HOME: '/h/.xagents' });
 });
 
 test('交给执行器时没列出的变量写成 undefined，子进程真的看不到', async t => {

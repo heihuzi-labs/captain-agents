@@ -17,7 +17,7 @@ import { readQuotaCache } from './quota.ts';
 import { collectRealSteps } from './real.ts';
 import { cursorToken, resumeCommand, selection } from './workers.ts';
 import { workerEnv, passEnv } from './env.ts';
-import { killTree, treeSpawn } from './platform.ts';
+import { assertTreeControl, killTree, treeSpawn } from './platform.ts';
 
 // 停掉选手（或准备命令）带出来的所有进程。since 是起它的时间，只有 Windows 用得上（见 platform.ts）。
 export function killGroup(pid: number | undefined, signal: 'SIGTERM' | 'SIGKILL', since?: number, exitedAt?: number) {
@@ -113,6 +113,7 @@ export async function runWorker(id: string) {
         if (stopping || fatalFailure) return;
         // srt 和测试替身用平台 Node；外部选手直接启动，不带 Electron 开关。
         const launch = cmd.file === nodeRunner().file ? nodeCommand(cmd.args, env) : { ...cmd, env };
+        assertTreeControl();
         workerSince = Date.now();
         const child = spawn(launch.file, launch.args, { cwd: job.worktree, ...treeSpawn(), env: launch.env, stdio: [input?.fd ?? 'ignore', output.fd, errors.fd] });
         const spawned = new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });

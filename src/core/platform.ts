@@ -69,6 +69,11 @@ export function stillRunning(pid: number | undefined, since?: number): boolean {
   return !!row && row.created >= since - BEFORE && row.created <= since + AFTER;
 }
 
+// 起选手之前确认停得了它：Windows 上停整棵树要先读得到进程列表。读不到就抛错，看管进程因此不起选手（停不了的选手不启动）。
+export function assertTreeControl(): void {
+  if (isWindows) processRows();
+}
+
 // 停掉 pid 带出来的整棵进程树；树已经不在了不算错。
 // macOS：给进程组发信号（pid 必须是用 treeSpawn 起的组长）。
 // Windows：没有“请你退出”的信号，两种信号都是直接结束。since 填起这个进程的时间（毫秒）；

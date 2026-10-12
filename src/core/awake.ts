@@ -6,7 +6,7 @@ import { holdAwake } from './native-windows.ts';
 
 // 防休眠。两种系统都做到“看管进程一退，防休眠就放开”，看管进程意外退出时也一样。
 // macOS：起一个帮手 caffeinate -i -w <进程号>，它盯着看管进程，看管进程一退它就退。
-// Windows：看管进程自己向系统申请“别因空闲休眠”（native-windows.ts 的 holdAwake），不起帮手；申请挂在进程上，进程一没申请就没了。
+// Windows：看管进程自己向系统申请“别因空闲休眠”（native-windows.ts 的 holdAwake），不起帮手；申请挂在看管进程的主线程上，进程一没申请就没了。
 // XAGENTS_CAFFEINATE 换成别的程序（测试用，两种系统都认）；给的是 .cjs / .mjs 脚本时用平台的 Node 来跑，参数同 caffeinate。
 export function awakeCommand(pid: number, env: NodeJS.ProcessEnv = process.env): { file: string; args: string[]; env: NodeJS.ProcessEnv } {
   const args = ['-i', '-w', String(pid)], override = env.XAGENTS_CAFFEINATE;

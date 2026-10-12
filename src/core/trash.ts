@@ -51,7 +51,7 @@ export async function moveToTrash(paths: string[], label: string): Promise<strin
     }
     throw new Error(`移到废纸篓失败：${error instanceof Error ? error.message : String(error)}。废纸篓位置：${folder}${failures.length ? `；未能放回：${failures.join('、')}` : ''}`, { cause: error });
   }
-  if (plan.recycle) recycleFolder(folder);
+  if (plan.recycle) await recycleFolder(folder);
   return folder;
 }
 
@@ -75,6 +75,6 @@ export async function copyToTrash(paths: string[], label: string): Promise<strin
   } catch (error) {
     throw new Error(`备份到废纸篓失败：${error instanceof Error ? error.message : String(error)}。已有副本保留在 ${folder}，原文件没有移动。`, { cause: error });
   }
-  if (plan.recycle) recycleFolder(folder);
+  if (plan.recycle) await recycleFolder(folder);
   return folder;
 }

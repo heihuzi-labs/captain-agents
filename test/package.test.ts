@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, posix, win32 } from 'node:path';
@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { relativeInside } from '../src/core/platform.ts';
 import { desktopPath, resolveToolRoot } from '../src/core/paths.ts';
-import { externalPackages } from '../scripts/check-desktop-bundle.mjs';
+import { externalPackages, runtimeLoads } from '../scripts/check-desktop-bundle.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
@@ -119,6 +119,19 @@ test('构建产物检查：允许 Electron 和 Node，拒绝外部包和不能�
   assert.deepEqual(externalPackages('import { app } from "electron"; import fs from "node:fs"; require("path"); import("./chunk.js"); const text = "require(react)";', 'index.js'), []);
   assert.deepEqual(externalPackages('import "react"; export { x } from "react-dom"; require("@anthropic-ai/sandbox-runtime"); import("another"); __require(variable);', 'index.js'),
     ['react', 'react-dom', '@anthropic-ai/sandbox-runtime', 'another', 'index.js：无法静态确认的动态依赖']);
+});
+
+test('构建产物检查：数得出运行时按位置加载模块的地方；主进程的产物里正好只有放行的那一处', async () => {
+  assert.equal(runtimeLoads('import { createRequire } from "node:module"; const require2 = createRequire(import.meta.url); require2("node:fs");'), 0);
+  assert.equal(runtimeLoads('import { createRequire } from "node:module"; const a = createRequire(join(from, "package.json"))(from); function f() { return createRequire$1(x)(y); }'), 2);
+  // 源代码里也只有这一处这么写。
+  const hits: string[] = [];
+  for (const dir of ['src/core', 'src/cli', 'app/main', 'app/preload']) {
+    for (const name of await readdir(join(root, dir))) {
+      if (name.endsWith('.ts') && /createRequire\([^)]*\)\)?\(/.test(await readFile(join(root, dir, name), 'utf8'))) hits.push(`${dir}/${name}`);
+    }
+  }
+  assert.deepEqual(hits, ['src/core/native-windows.ts']);
 });
 
 test('安装脚本语法正确，旧版只移到废纸篓；步骤失败即停', { skip: process.platform === 'win32' ? '只属于 macOS：install-app.sh 安装 .app 并识别 macOS 进程' : false }, async () => {

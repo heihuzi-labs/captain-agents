@@ -128,11 +128,12 @@ function nativeSnapshot(koffi) {
   return rows;
 }
 // 现在的做法（src/core/platform.ts 的 SNAPSHOT）。
-const SNAPSHOT = 'Get-CimInstance Win32_Process | ForEach-Object { if ($_.CreationDate) { "$($_.ProcessId) $($_.ParentProcessId) $(([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds())" } }';
+// 探针里多带一个进程名（最后一段），只为了说清两边各自独有的是谁。
+const SNAPSHOT = 'Get-CimInstance Win32_Process | ForEach-Object { if ($_.CreationDate) { "$($_.ProcessId) $($_.ParentProcessId) $(([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()) $($_.Name)" } }';
 function powershellSnapshot() {
   const r = ps(SNAPSHOT);
   if (r.status !== 0) throw new Error(`PowerShell 读进程列表失败：${(r.stderr || '').trim().slice(0, 300)}`);
-  return r.stdout.split(/\r?\n/).map(l => /^(\d+) (\d+) (\d+)$/.exec(l.trim())).filter(Boolean).map(m => ({ pid: Number(m[1]), parent: Number(m[2]), created: Number(m[3]) }));
+  return r.stdout.split(/\r?\n/).map(l => /^(\d+) (\d+) (\d+) (.*)$/.exec(l.trim())).filter(Boolean).map(m => ({ pid: Number(m[1]), parent: Number(m[2]), created: Number(m[3]), name: m[4] }));
 }
 async function processes(koffi) {
   const since = Date.now();
@@ -160,11 +161,18 @@ async function processes(koffi) {
       compared++;
       if (mine.parent !== row.parent || Math.abs(mine.created - row.created) > 1) differ.push({ powershell: row, native: mine });
     }
+    // 两边各自独有的。原做法独有的：为了这次读取才起的 PowerShell 一家，或者正好在这一秒里出生的。
+    // 新做法独有的：两次新做法都读到了、原做法却没有的，才算“原做法稳定地少了”；只读到一次的是正好在这一秒里退出的。
+    const oldPids = new Set(old.map(r => r.pid)), started = Date.now() - powershellMs - nativeMs - 200;
+    const onlyOld = old.filter(r => !byPid.has(r.pid)).map(r => ({ pid: r.pid, name: r.name, bornDuringRead: r.created >= started }));
+    const onlyNative = native.filter(r => !oldPids.has(r.pid)).map(r => ({ ...r, stable: stable.has(r.pid) }));
     // 我们自己起的三个进程：都读得到，父子关系对，创建时间落在起它们的那一刻附近（和平台认进程用的窗口一样：前 2 秒到后 5 秒）。
     const ours = pids.map(p => ({ ...p, native: byPid.get(p.pid) ?? null, powershell: old.find(r => r.pid === p.pid) ?? null }));
     const oursOk = ours.every(p => p.native && p.native.parent === p.parent && p.native.created >= since - 2000 && p.native.created <= Date.now() + 5000 && p.powershell && Math.abs(p.native.created - p.powershell.created) <= 1);
-    return { ok: oursOk && differ.length === 0 && compared > 20, nativeCount: native.length, powershellCount: old.length, compared, differ: differ.slice(0, 5), differCount: differ.length,
-      withoutTime: native.filter(r => !r.created).map(r => r.pid), onlyPowershell: old.filter(r => !byPid.has(r.pid)).length, nativeMs, powershellMs, ours };
+    // 进程集合也要对得上：原做法独有的都得是读取期间才出生的，新做法不能有稳定的独有项。
+    const sameSet = onlyOld.every(r => r.bornDuringRead) && !onlyNative.some(r => r.stable);
+    return { ok: oursOk && differ.length === 0 && compared > 20 && sameSet, nativeCount: native.length, powershellCount: old.length, compared, differ: differ.slice(0, 5), differCount: differ.length,
+      withoutTime: native.filter(r => !r.created).map(r => r.pid), onlyPowershell: onlyOld, onlyNative, nativeMs, powershellMs, ours };
   } finally {
     // 收掉那棵树（探针里用系统自带的命令，不是要量的东西）。
     spawnSync('taskkill', ['/T', '/F', '/PID', String(tree.pid)], { windowsHide: true });

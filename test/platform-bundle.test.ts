@@ -85,6 +85,7 @@ test('Windows 的安装包带上调系统接口的模块和这种芯片的编译
   await link('@anthropic-ai/sandbox-runtime', srt);
   // 包管理器的摆法：模块和它的编译产物在同一个 node_modules 里并排，项目的 node_modules 里只有模块自己的链接。
   const koffi = await pkg('koffi', join(store, 'koffi/node_modules/koffi'), '3');
+  await writeFile(join(koffi, 'index.cjs'), '');
   await link('koffi', koffi);
   await assert.rejects(preparePlatform(source, destination, 'win-x64'), /缺少平台依赖：@koromix\/koffi-win32-x64/);
   const binary = await pkg('@koromix/koffi-win32-x64', join(store, 'koffi/node_modules/@koromix/koffi-win32-x64'), '3');
@@ -98,6 +99,14 @@ test('Windows 的安装包带上调系统接口的模块和这种芯片的编译
   assert.deepEqual((await preparePlatform(source, mac, 'mac-arm64')).dependencies, ['@anthropic-ai/sandbox-runtime@1']);
   await assert.rejects(stat(join(mac, 'node_modules/koffi')), { code: 'ENOENT' });
   await assert.rejects(checkPlatform(mac, 'win-x64'), /缺少平台依赖：koffi/);
+  // 光有两个 package.json 不算：入口和编译产物少一个都不出包。
+  await rm(join(destination, 'node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node'));
+  await assert.rejects(checkPlatform(destination, 'win-x64'), /平台依赖不完整：缺 @koromix\/koffi-win32-x64\/win32_x64\/koffi\.node/);
+  await writeFile(join(destination, 'node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node'), 'x');
+  await rm(join(destination, 'node_modules/koffi/index.cjs'));
+  await assert.rejects(checkPlatform(destination, 'win-x64'), /平台依赖不完整：缺 koffi\/index\.cjs/);
+  await writeFile(join(destination, 'node_modules/koffi/index.cjs'), '');
+  await checkPlatform(destination, 'win-x64');
   await writeFile(join(destination, 'node_modules/koffi/package.json'), JSON.stringify({ name: 'koffi', version: '4' }));
   await assert.rejects(checkPlatform(destination, 'win-x64'), /版本对不上/);
 });

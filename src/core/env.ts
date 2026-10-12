@@ -23,10 +23,13 @@ export const PLATFORM_SWITCHES = ['AGENT_CLI_CREDENTIAL_STORE'];
 // 自检只在它的值正好等于 HTTP_PROXY 里的口令时才认它是 srt 的。
 export const SRT_OWN_VARS = ['CLOUDSDK_PROXY_PASSWORD'];
 
+// 只给平台自己的后台进程看的变量，不往下传给选手（XAGENTS_KOFFI：见 native-windows.ts）。
+const PLATFORM_ONLY: readonly string[] = ['XAGENTS_KOFFI'];
+
 // 选手进程的完整环境：继承的环境去掉带这些词的变量，再加上平台给它设的，最后去掉这件活点名不要的（比如 DeepSeek 的 KEY_VARS）。
 export function workerEnv(inherited: NodeJS.ProcessEnv, add: Record<string, string> = {}, unset: readonly string[] = []): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(inherited)) if (!isSecretName(name)) env[name] = value;
+  for (const [name, value] of Object.entries(inherited)) if (!isSecretName(name) && !PLATFORM_ONLY.includes(name)) env[name] = value;
   Object.assign(env, add);
   for (const name of unset) delete env[name];
   return env;

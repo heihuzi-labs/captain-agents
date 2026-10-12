@@ -8,11 +8,12 @@ import { paths } from '../src/core/paths.ts';
 import { context, exec, root, until } from './helpers.ts';
 
 // 看管进程、推进进程跑的是代码快照，快照里没有 node_modules：少了这个变量，Windows 上它们停不了选手。
-test('后台进程的环境：带上登记处；Windows 上另外带上调系统接口用的模块在安装目录的位置，已经指过的原样往下传', () => {
+test('后台进程的环境：带上登记处；Windows 上另外带上调系统接口用的模块的位置', () => {
   const env = { PATH: '/bin', XAGENTS_HOME: 'elsewhere' };
   assert.deepEqual(backgroundEnvironment(env, false), { PATH: '/bin', XAGENTS_HOME: paths().home });
   assert.deepEqual(backgroundEnvironment(env, true), { PATH: '/bin', XAGENTS_HOME: paths().home, XAGENTS_KOFFI: join(root, 'node_modules', 'koffi') });
-  assert.equal(backgroundEnvironment({ XAGENTS_KOFFI: join('install', 'node_modules', 'koffi') }, true).XAGENTS_KOFFI, join('install', 'node_modules', 'koffi'));
+  // 自己目录里装着这个模块的（这个仓库就是），交下去的是自己的位置，不听环境里别人指的；自己没有的（代码快照）才原样往下传（test/native-windows.test.ts）。
+  assert.equal(backgroundEnvironment({ XAGENTS_KOFFI: join('elsewhere', 'koffi') }, true).XAGENTS_KOFFI, join(root, 'node_modules', 'koffi'));
   assert.deepEqual(env, { PATH: '/bin', XAGENTS_HOME: 'elsewhere' });
 });
 

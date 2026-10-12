@@ -29,6 +29,10 @@ export async function checkPlatform(root, target = hostTarget()) {
     const version = async name => JSON.parse(await readFile(join(root, 'node_modules', name, 'package.json'), 'utf8').catch(() => { throw new Error(`缺少平台依赖：${name}`); })).version;
     // 两个包版本不一样，模块加载时会拒绝。
     if (await version(koffi) !== await version(binary)) throw new Error(`平台依赖版本对不上：${koffi} 和 ${binary}`);
+    // 真正要加载的两个文件：模块的入口，和这种芯片的编译产物。
+    for (const file of [`${koffi}/index.cjs`, `${binary}/win32_${target.slice(4)}/koffi.node`]) {
+      await stat(join(root, 'node_modules', file)).catch(() => { throw new Error(`平台依赖不完整：缺 ${file}`); });
+    }
   }
   let bytes = 0, files = 0;
   async function walk(dir) {
