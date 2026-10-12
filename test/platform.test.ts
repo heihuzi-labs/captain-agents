@@ -107,3 +107,15 @@ test('killTree：进程号无效或树已经不在，不报错', () => {
   killTree(undefined, 'SIGKILL'); killTree(0, 'SIGKILL'); killTree(-5, 'SIGKILL');
   killTree(2 ** 30, 'SIGKILL', Date.now());
 });
+
+test('Windows 的 PowerShell 脚本只用 ASCII 字符：系统自带的 PowerShell 按本机代码页读没有 BOM 的脚本，别的字符会被读坏', async () => {
+  const { readdir, readFile } = await import('node:fs/promises');
+  const dir = join(import.meta.dirname, '..', 'sandbox', 'windows');
+  const names = (await readdir(dir)).filter(name => name.endsWith('.ps1'));
+  assert.ok(names.includes('setup.ps1') && names.includes('loopback-fence.ps1'));
+  for (const name of names) {
+    const bytes = await readFile(join(dir, name));
+    assert.equal(bytes.findIndex(b => b > 127), -1, name);
+    assert.ok(!bytes.includes(13), `${name} 里不该有回车符`);
+  }
+});

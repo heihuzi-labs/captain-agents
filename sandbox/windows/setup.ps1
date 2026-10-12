@@ -11,7 +11,9 @@ param(
   [Parameter(Mandatory = $true)] [string]$Result,
   [string]$Codex,
   [string]$User,
-  [string[]]$CodexHome = @(),
+  # Codex homes joined with '|' (a character no Windows path can contain). One string, because
+  # powershell.exe -File does not split array arguments.
+  [string]$CodexHomes = '',
   [switch]$Remove
 )
 $ErrorActionPreference = 'Stop'
@@ -32,7 +34,7 @@ try {
   } else {
     if (-not $Codex -or -not (Test-Path -LiteralPath $Codex -PathType Leaf)) { throw 'codex-missing' }
     if (-not $User) { throw 'user-missing' }
-    foreach ($dir in $CodexHome) {
+    foreach ($dir in ($CodexHomes -split '\|' | Where-Object { $_ })) {
       Step 'codex-setup' $dir {
         if (-not (Test-Path -LiteralPath $dir -PathType Container)) { throw 'home-missing' }
         $ErrorActionPreference = 'Continue'
