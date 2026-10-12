@@ -142,7 +142,7 @@ async function outer(codex, resultFile) {
       public: path.join(path.parse(home).root, 'Users', 'Public'), programdata: process.env.ProgramData || 'C:\\ProgramData', 'drive-root': path.parse(home).root,
       'startup-folder': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'), 'codex-home': codexHome,
       'shared-everyone': shared.everyone.dir, 'shared-authenticated': shared.authenticated.dir, 'shared-users': shared.users.dir },
-    read: { 'home-plain': plain, 'home-secret': secret, 'outside-file': outsideFile, self },
+    read: { 'home-plain': plain, 'home-secret': secret, 'outside-file': outsideFile, self, 'codex-auth': path.join(codexHome, 'auth.json'), 'codex-session': path.join(codexHome, 'sessions', 'one.jsonl') },
     list: { home, 'home-secret-dir': secretDir, appdata: path.join(home, 'AppData', 'Roaming'), localappdata: path.join(home, 'AppData', 'Local'),
       'credentials-roaming': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Credentials'), 'credentials-local': path.join(home, 'AppData', 'Local', 'Microsoft', 'Credentials'),
       'protect-roaming': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Protect'), 'codex-home': codexHome, worktree },
@@ -159,8 +159,8 @@ async function outer(codex, resultFile) {
   const version = await run(codex, ['--version'], { env });
   result.codex = (version.stdout || version.stderr).trim();
 
-  const profile = (extend, extra = '') =>
-    `permissions.xa={extends="${extend}",filesystem={${[[secretDir, 'deny'], [':tmpdir', 'read'], [tmp, 'write']].map(([p, v]) => `${toml(p)}="${v}"`).join(',')}}${extra}}`;
+  const profile = (extend, extra = '', rules = []) =>
+    `permissions.xa={extends="${extend}",filesystem={${[[secretDir, 'deny'], [':tmpdir', 'read'], [tmp, 'write'], ...rules].map(([p, v]) => `${toml(p)}="${v}"`).join(',')}}${extra}}`;
   const envPolicy = `shell_environment_policy.exclude=[${SECRET_WORDS.map(w => `"*${w}*"`).join(',')}]`;
   const innerCommand = ['--', process.execPath, probe, '--inner', specFile];
   const brief = r => ({ exit: r.exit, ms: r.ms, ...(r.timedOut ? { timedOut: true } : {}), ...(r.error ? { error: r.error } : {}), stdout: r.stdout.replace(new RegExp(`^${MARK}.*$`, 'm'), '').trim().slice(-3000), stderr: r.stderr.trim().slice(-3000) });
@@ -218,6 +218,13 @@ async function outer(codex, resultFile) {
     result.fenceRemove = brief(await fence('remove'));
     console.log(`[fence remove] 退出码 ${result.fenceRemove.exit} ${result.fenceRemove.stdout} ${result.fenceRemove.stderr.slice(0, 500)}`);
     await sandboxCase('unfenced:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    // Codex 自己的文件夹怎么禁读：隔离要用里面的帮手程序，整个禁掉可能连隔离都起不来。三种写法各试一次。
+    await fs.writeFile(path.join(codexHome, 'auth.json'), '{"probe":true}');
+    await fs.mkdir(path.join(codexHome, 'sessions'), { recursive: true }); await fs.writeFile(path.join(codexHome, 'sessions', 'one.jsonl'), '{}');
+    await sandboxCase('codex-home:not-denied', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    await sandboxCase('codex-home:deny-all', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[codexHome, 'deny']]), '-c', envPolicy]);
+    await sandboxCase('codex-home:deny-all-but-helpers', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[codexHome, 'deny'], [path.join(codexHome, '.sandbox-bin'), 'read'], [path.join(codexHome, '.sandbox'), 'read']]), '-c', envPolicy]);
+    await sandboxCase('codex-home:deny-files', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[path.join(codexHome, 'auth.json'), 'deny'], [path.join(codexHome, 'sessions'), 'deny'], [path.join(codexHome, 'config.toml'), 'deny'], [path.join(codexHome, 'does-not-exist.json'), 'deny'], [path.join(home, '.xagents-probe-missing-dir'), 'deny']]), '-c', envPolicy]);
     // 一次装齐的脚本：换两个新的 Codex 文件夹，走“提权后调用”的那条路（流水线的机器本来就是管理员，不会弹窗）。
     const homes = [path.join(base, 'setup-home-1'), path.join(base, 'setup-home-2')];
     for (const dir of homes) await fs.mkdir(dir);
