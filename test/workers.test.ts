@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, readdir, stat, mkdir, symlink } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, parse, resolve, sep } from 'node:path';
-import { selection, command, WINDOWS_SANDBOX, refreshGrokLogin, checkDeepseekLogin, loginDeepseek, KEY_VARS, cursorToken, checkCursorLogin } from '../src/core/workers.ts';
+import { selection, command, WINDOWS_PLAIN, refreshGrokLogin, checkDeepseekLogin, loginDeepseek, KEY_VARS, cursorToken, checkCursorLogin } from '../src/core/workers.ts';
 import { codexEnvPolicy, isSecretName, PLATFORM_SWITCHES } from '../src/core/env.ts';
 import { extraDenyRead } from '../src/core/settings.ts';
 import { whos, workerDisplay, isolationOf, allowedEfforts, launchModels, vendorOf } from '../src/core/roster.ts';
@@ -243,9 +243,11 @@ test('Codex 最终参数只换权限档，其余完全保留，绝不混用 -s �
   for (const ro of [false, true]) {
     const j = job('codex', ro);
     const actual = await command(j, '题目', p);
-    assert.deepEqual(actual.args, ['exec', '--ignore-user-config', ...(process.platform === 'win32' ? WINDOWS_SANDBOX : []),
+    // Windows 上这里没做过自检（临时登记处是空的），所以走的是“没装加固”的那一路：免安装的隔离，权限表不带禁读名单。
+    const plain = process.platform === 'win32';
+    assert.deepEqual(actual.args, ['exec', '--ignore-user-config', ...(plain ? WINDOWS_PLAIN : []),
       '--disable', 'plugins', '--disable', 'apps', '--disable', 'remote_plugin', '--disable', 'computer_use', '--disable', 'browser_use', '--disable', 'browser_use_external', '--disable', 'in_app_browser', '--disable', 'hooks', '--disable', 'memories',
-      '-c', codexEnvPolicy(), '-m', j.model, '-c', 'model_reasoning_effort="high"', '-c', 'default_permissions="xa"', '-c', codexPermissions(j, p),
+      '-c', codexEnvPolicy(), '-m', j.model, '-c', 'model_reasoning_effort="high"', '-c', 'default_permissions="xa"', '-c', codexPermissions(j, p, undefined, false, undefined, plain),
       '-C', j.worktree, '--json', '-o', join(c.home, 'jobs', j.id, 'final.md'), '-']);
     assert.ok(!actual.args.includes('-s')); assert.ok(!actual.args.includes('--sandbox'));
     assert.ok(!actual.args.some(arg => arg.includes('sandbox_mode')));

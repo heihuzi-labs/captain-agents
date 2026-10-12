@@ -133,8 +133,10 @@ export function PlaceSettings() {
   </SettingGroup>;
 }
 
-// 设置 → 通用 →“隔离”一组，只在 Windows 上（docs/ui-spec.md 第 10 节）：装隔离、自检都在这里点一下，不用主人自己开终端。
-export function IsolationSettings({ selfcheck }: { selfcheck: { ok: boolean | null; note: string } | undefined }) {
+// 设置 → 通用 →“加固”一组，只在 Windows 上（docs/ui-spec.md 第 10 节）。加固是可选的：不装也能派活，选手用 Codex 自带的保护。
+// 想装的在这里点一下（系统弹管理员确认框），装完自动检查；不用主人自己开终端。
+export const HARDEN_WHAT = '不装也能派活：选手用 Codex 自带的保护，只能改这件活自己的那份副本。装上加固以后，另外保证它读不到钥匙、联网关着时上不了网。';
+export function IsolationSettings({ selfcheck }: { selfcheck: { ok: boolean | null; at?: string | null; note: string } | undefined }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   if (!isWindows || !selfcheck || typeof window.xa?.isolationFix !== 'function') return null;
   const fine = selfcheck.ok === true;
@@ -142,10 +144,12 @@ export function IsolationSettings({ selfcheck }: { selfcheck: { ok: boolean | nu
     setBusy(true); setError('');
     void window.xa.isolationFix().catch(e => setError((fine ? '没能检查：' : '没能装好：') + errorReason(e))).finally(() => setBusy(false));
   };
-  const note = busy ? (fine ? '正在检查…' : '正在安装和检查…系统弹出确认框时请点“是”') : error || selfcheck.note || '还没检查过';
-  return <SettingGroup head="隔离" label="隔离">
-    <SettingRow title="选手的隔离" note={note} group>
-      <Button size="sm" variant={fine ? 'secondary' : 'primary'} disabled={busy} onClick={run}>{fine ? '重新检查' : '安装并检查'}</Button>
+  // 没装过只说明它是什么；装过但没通过的，把没过的原话接在后面（没过也不影响派活）。
+  const state = fine ? '已装好，检查通过：' + selfcheck.note : selfcheck.ok === false ? HARDEN_WHAT + '上次检查没通过，现在用的仍是 Codex 自带的保护：' + selfcheck.note : HARDEN_WHAT;
+  const note = busy ? (fine ? '正在检查…' : '正在安装和检查…系统弹出确认框时请点“是”') : error || state;
+  return <SettingGroup head="加固（可选）" label="加固">
+    <SettingRow title="选手的加固隔离" note={note} group>
+      <Button size="sm" disabled={busy} onClick={run}>{fine ? '重新检查' : '安装并检查'}</Button>
     </SettingRow>
   </SettingGroup>;
 }

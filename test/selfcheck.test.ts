@@ -71,22 +71,22 @@ test('缓存一天有效，过期重检；失败和损坏拦截，不能仅凭 o
   const file = join(temp, 'cache/selfcheck.json');
   let calls = 0;
   const checker = async () => { calls++; return current(); };
-  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker); assert.equal(calls, 1);
+  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker, false); assert.equal(calls, 1);
   const now = Date.now(); await writeFile(file, JSON.stringify(current(new Date(now).toISOString())));
   assert.equal((await readSelfcheck(now + 86399999)).ok, true);
   assert.equal((await readSelfcheck(now + 86400000)).ok, null);
   assert.equal((await readSelfcheck(now - 1)).ok, null);
-  await ensureSelfcheck(checker); assert.equal(calls, 1);
-  await writeFile(file, JSON.stringify(current(new Date(now - 86400000).toISOString()))); await ensureSelfcheck(checker); assert.equal(calls, 2);
+  await ensureSelfcheck(checker, false); assert.equal(calls, 1);
+  await writeFile(file, JSON.stringify(current(new Date(now - 86400000).toISOString()))); await ensureSelfcheck(checker, false); assert.equal(calls, 2);
   await writeFile(file, JSON.stringify({ version: 8, platform: process.platform, ok: true, at: new Date().toISOString(), results: [] }));
-  await assert.rejects(ensureSelfcheck(checker), /自检没过/); assert.equal(calls, 2);
+  await assert.rejects(ensureSelfcheck(checker, false), /自检没过/); assert.equal(calls, 2);
   // 旧版本的缓存（探针做法改之前）即使名字齐全、写着通过，也要重新自检；版本 4 还没有钥匙串探针。
   await writeFile(file, JSON.stringify({ ...current(), version: 4 }));
-  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker); assert.equal(calls, 3);
+  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker, false); assert.equal(calls, 3);
   // 第 5 版没有凭据文件探针。
   await writeFile(file, JSON.stringify({ ...current(), version: 5 }));
-  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker); assert.equal(calls, 4);
-  await writeFile(file, '{'); await assert.rejects(ensureSelfcheck(checker), /缓存损坏/);
+  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker, false); assert.equal(calls, 4);
+  await writeFile(file, '{'); await assert.rejects(ensureSelfcheck(checker, false), /缓存损坏/);
 });
 test('隔离内的 CLI 自检不启动真实探针，保存失败且桌面视图不显示通过', async t => {
   const c = await context(t, false);
@@ -95,7 +95,8 @@ test('隔离内的 CLI 自检不启动真实探针，保存失败且桌面视图
   assert.equal(cache.ok, false); assert.equal(cache.results.length, 3); assert.ok(cache.results.every((r: any) => r.probes.length === 0));
   assert.equal((await desktopView(c.home)).selfcheck.ok, false);
 });
-test('真实派发入口被失败自检挡住，尚未登记任务和副本', async t => {
+// Windows 上自检不拦派活（docs/design-windows.md 第 12 节），这一条只属于别的系统。
+test('真实派发入口被失败自检挡住，尚未登记任务和副本', { skip: isWindows ? 'Windows 上自检不拦派活，没装加固就用 Codex 自带的做法' : false }, async t => {
   const c = await context(t); await c.add();
   await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify(evaluateOn([])));
   // 只关选手替身来走真实派发入口；Codex 程序指到一个存在的文件（这台机器上不一定装了 Codex，没装会先被“没找到程序”挡下，走不到自检）。额度查询照样用替身，不许真的启动 Cursor、Grok 去查（2026-09-30 发现每跑一次就在 ~/.cursor/projects 留一个目录）。
@@ -128,12 +129,12 @@ test('旧自检缓存缺 npmrc 或该查的登录探针，即使 ok 为 true 也
     const results = currentPassing(), result = results.find(r => r.isolation === isolation)!;
     result.probes = result.probes.filter(p => p.name !== name);
     await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 8, platform: process.platform, ok: true, at: new Date().toISOString(), results }));
-    await assert.rejects(ensureSelfcheck(), /缺少有效结果/);
+    await assert.rejects(ensureSelfcheck(undefined, false), /缺少有效结果/);
   }
   if (isWindows) for (const name of ['account', 'listen', 'pipe', 'startup-folder', 'tmp-root']) {
     const results = currentPassing(); results[0].probes = results[0].probes.filter(p => p.name !== name);
     await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 8, platform: 'win32', ok: true, at: new Date().toISOString(), results }));
-    await assert.rejects(ensureSelfcheck(), /缺少有效结果/);
+    await assert.rejects(ensureSelfcheck(undefined, false), /缺少有效结果/);
   }
   // 在另一种系统上做的自检结果不作数：要重新自检。
   await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ ...current(), platform: isWindows ? 'darwin' : 'win32' }));

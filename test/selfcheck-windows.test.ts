@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { evaluate, expectedProbes, platformIsolations, platformRefusal, ensurePlatform } from '../src/core/selfcheck.ts';
+import { evaluate, expectedProbes, platformIsolations, platformRefusal, ensurePlatform, ensureSelfcheck, readSelfcheck, windowsHardened } from '../src/core/selfcheck.ts';
+import { context } from './helpers.ts';
 import type { IsolationResult, Probe } from '../src/core/selfcheck.ts';
 import { windowsExpectedProbes, windowsGlobalTargets, windowsLabels, windowsProbeScript, windowsTempPaths, windowsTempTargets, resolveWriteProbe, sweepCredentials, windowsSetup, codexHomes, probeHome } from '../src/core/selfcheck-windows.ts';
 import { codexPermissions, keychainDirs, homeDeny, SHELL_FILES, CREDENTIAL_FILES, WINDOWS_SHELL_FILES, WINDOWS_CREDENTIAL_FILES } from '../src/core/sandbox.ts';
@@ -165,4 +166,32 @@ test('Windows 的权限表只写本机存在的路径；macOS 上不存在的也
   for (const path of ['.ssh', '.npmrc', '.codex', 'Documents/PowerShell', '.netrc']) assert.ok(all.includes(`${JSON.stringify(join(homedir(), path))}="deny"`), path);
   for (const dir of keychainDirs()) assert.ok(all.includes(`${JSON.stringify(dir)}="deny"`), dir);
   assert.ok(all.includes(`${JSON.stringify(join(job.repo, '.data'))}="deny"`) && all.includes(`${JSON.stringify(join(job.worktree, '.data'))}="deny"`));
+});
+
+test('Windows 上自检不拦派活：没装、没过都照派，选手改用 Codex 自带的做法；通过了才算加固；通过过的过期了自动重检一次', { skip: isWindows ? false : '缓存按当前系统判定，这一条要在 Windows 上跑' }, async t => {
+  const c = await context(t, false), old = process.env.XAGENTS_HOME; process.env.XAGENTS_HOME = c.home;
+  t.after(() => { if (old === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = old; });
+  const file = join(c.home, 'cache/selfcheck.json'); await mkdir(dirname(file), { recursive: true });
+  let calls = 0; const check = async () => { calls++; return evaluate(passing(), new Date().toISOString(), true); };
+  const cache = (results: IsolationResult[], at = new Date().toISOString()) => writeFile(file, JSON.stringify({ version: 8, platform: 'win32', ok: true, at, results }));
+  // 从没自检过：不拦，也不替主人去跑那一整套。
+  await ensureSelfcheck(check, true); assert.equal(calls, 0); assert.equal(await windowsHardened(true), false);
+  // 自检没过：照样不拦。
+  const failing = passing(); failing[0].probes.find(p => p.name === 'internet')!.outcome = 'unknown';
+  await cache(failing); await ensureSelfcheck(check, true); assert.equal(calls, 0); assert.equal(await windowsHardened(true), false);
+  // 通过了：这件活用加固。
+  await cache(passing()); assert.equal(await windowsHardened(true), true);
+  // 没过的过期了不重检；通过过的过期了重检一次。
+  const yesterday = new Date(Date.now() - 2 * 86400000).toISOString();
+  await cache(failing, yesterday); await ensureSelfcheck(check, true); assert.equal(calls, 0);
+  await cache(passing(), yesterday); assert.equal((await readSelfcheck()).passed, true); await ensureSelfcheck(check, true); assert.equal(calls, 1);
+});
+
+test('不带禁读名单的权限表：只剩任务临时目录那两条，别的系统上的隔离不受影响', () => {
+  const job = { mode: 'workspace-write' as const, repo: join(tmpdir(), 'r'), worktree: join(tmpdir(), 'w'), id: 'x' }, tmp = join(tmpdir(), 'job-tmp');
+  const plain = codexPermissions(job, { denyReadExtra: ['secret'], denyReadHome: ['.mine'] }, tmp, false, () => true, true);
+  assert.ok(!plain.includes('"deny"'), '没有禁读'); assert.ok(plain.includes(`${JSON.stringify(tmp)}="write"`)); assert.ok(plain.includes('":tmpdir"="read"'));
+  assert.match(plain, /^permissions\.xa=\{extends=":workspace",filesystem=\{/);
+  assert.ok(codexPermissions(job, { denyReadExtra: [] }, tmp, false, () => true).includes('"deny"'), '缺省照旧带禁读名单');
+  assert.ok(codexPermissions(job, { denyReadExtra: [] }, tmp, true, () => true, true).endsWith(',network={enabled=true}}'));
 });

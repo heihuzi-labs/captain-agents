@@ -143,6 +143,10 @@ jobs:
           $cli = Join-Path $app 'resources\platform\bin\xagents'
           $env:ELECTRON_RUN_AS_NODE = '1'
           New-Item -ItemType Directory -Force $env:XAGENTS_HOME | Out-Null
+          # First, with nothing installed for hardening: a job dispatched through the packaged app must get done.
+          node scripts/probe/windows-dispatch.mjs shots\dispatch-packaged.json -- $exe $cli
+          "dispatch through the packaged app, nothing installed: exit code $LASTEXITCODE"
+          $dispatch = $LASTEXITCODE
           & $exe $cli windows-setup | Out-Host
           "setup exit code: $LASTEXITCODE"
           foreach ($n in 1, 2) {
@@ -151,7 +155,7 @@ jobs:
           }
           Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') shots\selfcheck-packaged.json -ErrorAction SilentlyContinue
           & $exe $cli windows-setup --remove | Out-Host
-          exit 0
+          exit $dispatch
 
       - name: Print size and SHA-256
         shell: bash

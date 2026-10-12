@@ -359,7 +359,7 @@ export async function cleanGlobal(token: string, before: Before, probes: { creat
   }
   return problems;
 }
-export async function readSelfcheck(now = Date.now()): Promise<{ ok: boolean | null; at: string | null; note: string }> {
+export async function readSelfcheck(now = Date.now()): Promise<{ ok: boolean | null; at: string | null; note: string; passed?: boolean }> {
   let raw: Selfcheck;
   try { raw = await readJson(join(paths().cache, 'selfcheck.json')); }
   catch (e) { return { ok: hasCode(e, 'ENOENT') ? null : false, at: null, note: hasCode(e, 'ENOENT') ? '还没做过自检' : '自检缓存损坏，请重新自检' }; }
@@ -367,7 +367,8 @@ export async function readSelfcheck(now = Date.now()): Promise<{ ok: boolean | n
   if (raw && (raw.platform ?? 'darwin') !== process.platform) return { ok: null, at: null, note: '这份自检结果是在另一种系统上做的，需要重新自检' };
   if (!raw || raw.version !== cacheVersion || !Array.isArray(raw.results) || typeof raw.at !== 'string' || !Number.isFinite(Date.parse(raw.at))) return { ok: false, at: null, note: '自检缓存格式无效，请重新自检' };
   const age = now - Date.parse(raw.at);
-  if (age < 0 || age >= 86400000) return { ok: null, at: raw.at, note: '自检已过期，请重新自检' };
+  // passed：过期前那一次是不是通过的（Windows 上只有通过过的才值得自动重检，见 ensureSelfcheck）。
+  if (age < 0 || age >= 86400000) return { ok: null, at: raw.at, note: '自检已过期，请重新自检', passed: evaluate(raw.results, raw.at).ok };
   const result = evaluate(raw.results, raw.at);
   return { ok: result.ok, at: result.at, note: result.note };
 }
@@ -485,11 +486,19 @@ export async function selfcheck(run: Executor = execute): Promise<Selfcheck> {
   });
 }
 // 派活前：这几位选手用的隔离在本系统上都开放才往下走。--force 跳不过。
+// Windows 上这件活用不用加固：最近一次自检通过才用；否则用 Codex 自带的、不用安装的那种隔离，权限表不带禁读名单。
+// 别的系统上隔离不是可选的，一律算加固。
+export async function windowsHardened(windows = isWindows): Promise<boolean> {
+  return !windows || (await readSelfcheck()).ok === true;
+}
 export function ensurePlatform(used: Isolation[], windows = isWindows) {
   for (const isolation of new Set(used)) { const why = platformRefusal(isolation, windows); if (why) throw new Error(`${why}，这件没有派出。`); }
 }
-export async function ensureSelfcheck(check = selfcheck) {
+// Windows 上自检不拦派活（2026-10-13 主人定，docs/design-windows.md 第 12 节）：那一整套加固是可选的，没装、没过，
+// 选手就用 Codex 自带的做法（见 windowsHardened）。只有装过并且上一次通过的，过期了才自动重检一次，免得加固悄悄失效。
+export async function ensureSelfcheck(check = selfcheck, windows = isWindows) {
   let result = await readSelfcheck();
+  if (windows) { if (result.ok === null && result.passed) await check().catch(() => {}); return; }
   if (result.ok === null) result = await check();
   if (result.ok !== true) throw new Error(`隔离自检没过，不能派活：${result.note}。请由负责人运行 xagents selfcheck。`);
 }

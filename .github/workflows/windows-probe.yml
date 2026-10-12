@@ -50,6 +50,15 @@ jobs:
           "CODEX_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           & $exe --version
 
+      # Before anything else touches the machine: with nothing installed for hardening, does a job dispatched by the
+      # platform's own commands get done (docs/design-windows.md section 12). A local fake endpoint and a throwaway key.
+      - name: Dispatch a job end to end, nothing installed
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force probe-results | Out-Null
+          $env:XAGENTS_CODEX = $env:CODEX_EXE
+          node scripts/probe/windows-dispatch.mjs "probe-results/dispatch-${{ matrix.os }}.json" -- node src/cli/cli.ts
+
       - name: Run the probes
         shell: pwsh
         run: |
