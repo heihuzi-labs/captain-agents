@@ -11,7 +11,7 @@ import { cursorStateDir, grokSessionDirs, jobTmpDir } from './sandbox.ts';
 import { isolationOf } from './roster.ts';
 import { moveToTrash } from './trash.ts';
 import { killGroup, reconcileSafely } from './runner.ts';
-import { isWindows } from './platform.ts';
+import { isWindows, stillRunning } from './platform.ts';
 import { guardTeamJob } from './team.ts';
 import { collectRealSteps } from './real.ts';
 
@@ -41,7 +41,7 @@ export async function collect(id: string, report: (text: string) => void = () =>
 export async function stop(id: string) {
   for (const job of await selectJobs(id)) {
     await updateJob(job.id, j => {
-      if (!active(j) && j.state !== 'lost' && !alive(j.setupPid)) return;
+      if (!active(j) && j.state !== 'lost' && !stillRunning(j.setupPid, j.setupSince)) return;
       j.stopRequested = true;
       killGroup(j.setupPid, 'SIGKILL', j.setupSince);
       if (alive(j.pid)) {
@@ -154,7 +154,7 @@ function checkRated(jobs: Job[]) {
   if (missing.length) throw new Error(`这些任务已拍板但还没打分：${missing.map(j => j.id).join('、')}。请先 xagents rate <任务号> --score 1-5，再清理。`);
 }
 function checkClean(j: Job) {
-  if (alive(j.setupPid)) throw new Error(`任务 ${j.id} 的准备进程仍在，请先 xagents stop ${j.id}。`);
+  if (stillRunning(j.setupPid, j.setupSince)) throw new Error(`任务 ${j.id} 的准备进程仍在，请先 xagents stop ${j.id}。`);
   if (active(j) || (!j.started && alive(j.queuedBy))) throw new Error(`任务 ${j.id} 仍在运行或准备，请先 stop 并等派发命令退出，再 clean。`);
-  if (j.state === 'lost' && alive(j.workerPid)) throw new Error(`任务 ${j.id} 失联后选手可能仍在运行，请先 xagents stop ${j.id}。`);
+  if (j.state === 'lost' && stillRunning(j.workerPid, j.workerSince)) throw new Error(`任务 ${j.id} 失联后选手可能仍在运行，请先 xagents stop ${j.id}。`);
 }

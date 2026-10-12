@@ -1,5 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
-import { backgroundSpawn, samePath } from './platform.ts';
+import { backgroundSpawn, samePath, stillRunning } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -112,7 +112,7 @@ async function finishBusy(chat: Chat) {
   const messages = await readMessages(chat.id);
   const work = messages.findLast(m => m.kind === 'work' && m.job === job.id);
   const turn = work?.turn ?? turnOf(job);
-  if (job.state === 'lost' || alive(job.workerPid) || alive(job.setupPid)) {
+  if (job.state === 'lost' || stillRunning(job.workerPid, job.workerSince) || stillRunning(job.setupPid, job.setupSince)) {
     const reason = job.state;
     await stop(job.id); // 先消灭残留选手，再让队列里的下一位接触共用副本。
     job = await readJob(job.id);
@@ -275,7 +275,7 @@ async function stopLocked(id: string, closing: boolean) {
   const chat = await readChat(id);
   await killEngine(chat.pid);
   for (const job of await membersJobs(chat)) {
-    if (active(job) || job.state === 'lost' || alive(job.workerPid) || alive(job.pid) || alive(job.setupPid)) await stop(job.id);
+    if (active(job) || job.state === 'lost' || stillRunning(job.workerPid, job.workerSince) || alive(job.pid) || stillRunning(job.setupPid, job.setupSince)) await stop(job.id);
     await updateJob(job.id, foldRounds);
   }
   // 连同停止前尚未入队的消息一起消费，之后再 @ 可以正常开新一轮。
@@ -315,7 +315,7 @@ export async function cleanChat(id: string): Promise<Chat> {
     if (chat.state !== 'closed') throw new Error('请先收起群，再清理群副本。');
     if (alive(chat.pid) || chat.busy) throw new Error('群还在动手，请先停止。');
     const jobs = await membersJobs(chat);
-    if (jobs.some(j => active(j) || alive(j.pid) || alive(j.workerPid) || alive(j.setupPid))) throw new Error('成员任务尚未结束，请先停止。');
+    if (jobs.some(j => active(j) || alive(j.pid) || stillRunning(j.workerPid, j.workerSince) || stillRunning(j.setupPid, j.setupSince))) throw new Error('成员任务尚未结束，请先停止。');
     if (!(await worktreeMissing(chat))) await writeAtomic(join(chatDir(id), 'diff.patch'), await diff(chat));
     await removeWorktree(chat);
     for (const job of jobs) await updateJob(job.id, j => { j.worktreeRemoved ??= new Date().toISOString(); foldRounds(j); });

@@ -65,3 +65,58 @@ test('开发版：状态是 other，拒绝安装且不碰家目录', async t => 
   assert.equal(await cliLauncherStatus(), 'other');
   await assert.rejects(installCliLauncher(), /开发版不安装命令行/);
 });
+
+test('Windows 的命令行启动脚本：两个文件（给 PowerShell 和命令提示符的 .cmd、给 Git 终端的 sh），内容写的是这个应用里的那一份', async t => {
+  const { launcherFiles } = await import('../app/main/cli-launcher.ts');
+  const c = await context(t, false), bin = join(c.temp, 'bin');
+  const executable = 'C:\\Apps\\派活 工作台\\派活工作台.exe', platform = 'C:\\Apps\\派活 工作台\\resources\\platform';
+  const files = launcherFiles({ home: 'C:\\Users\\me', executable, platform, windows: true, binDir: bin });
+  assert.deepEqual(files.map(f => f.path), [join(bin, 'xagents.cmd'), join(bin, 'xagents')]);
+  assert.equal(files[0].content, ['@echo off', 'rem xagents desktop CLI launcher v1', 'setlocal', 'set "ELECTRON_RUN_AS_NODE=1"',
+    '"C:\\Apps\\派活 工作台\\派活工作台.exe" "C:\\Apps\\派活 工作台\\resources\\platform\\bin\\xagents" %*', ''].join('\r\n'));
+  assert.equal(files[1].content, "#!/bin/sh\n# xagents desktop CLI launcher v1\nELECTRON_RUN_AS_NODE=1 exec 'C:/Apps/派活 工作台/派活工作台.exe' 'C:/Apps/派活 工作台/resources/platform/bin/xagents' \"$@\"\n");
+  // 没指定位置时放进用户自己的 WindowsApps。
+  assert.deepEqual(launcherFiles({ home: 'C:\\Users\\me', executable, platform, windows: true }, { LOCALAPPDATA: 'D:\\Local' }).map(f => f.path.replaceAll('/', '\\')),
+    ['D:\\Local\\Microsoft\\WindowsApps\\xagents.cmd', 'D:\\Local\\Microsoft\\WindowsApps\\xagents']);
+  assert.throws(() => launcherFiles({ home: 'h', executable: 'C:\\100%\\app.exe', platform, windows: true, binDir: bin }), /带 % 或引号的位置/);
+  assert.deepEqual(launcherFiles({ home: 'h', executable, windows: true, binDir: bin }), [], '开发版不装');
+});
+
+test('Windows 的命令行安装：两个文件都对才算已安装；别人的不覆盖；装到一半接着装完；替换要明说', async t => {
+  const c = await context(t, false), bin = join(c.temp, 'windows apps');
+  const cli = createCliLauncher({ home: c.temp, executable: 'C:\\App\\app.exe', platform: 'C:\\App\\resources\\platform', windows: true, binDir: bin });
+  assert.equal(await cli.cliLauncherStatus(), 'missing');
+  await cli.installCliLauncher();
+  assert.equal(await cli.cliLauncherStatus(), 'installed');
+  assert.deepEqual((await readdir(bin)).filter(n => !n.startsWith('.')).sort(), ['xagents', 'xagents.cmd']);
+  await rm(join(bin, 'xagents'));
+  assert.equal(await cli.cliLauncherStatus(), 'other', '只剩一个不算装好');
+  await cli.installCliLauncher();
+  assert.equal(await cli.cliLauncherStatus(), 'installed', '另一个是自己的，接着装完，不用替换');
+  await writeFile(join(bin, 'xagents.cmd'), '别人的');
+  assert.equal(await cli.cliLauncherStatus(), 'other');
+  await assert.rejects(cli.installCliLauncher(), /xagents\.cmd 已存在.*replace: true/);
+  assert.equal(await readFile(join(bin, 'xagents.cmd'), 'utf8'), '别人的');
+  await cli.installCliLauncher({ replace: true });
+  assert.equal(await cli.cliLauncherStatus(), 'installed');
+  assert.equal(await createCliLauncher({ home: c.temp, executable: 'C:\\Other\\app.exe', platform: 'C:\\App\\resources\\platform', windows: true, binDir: bin }).cliLauncherStatus(), 'other');
+});
+
+test('Windows 的命令行启动脚本真的能跑：参数和中文、空格原样交给应用里的平台', { skip: process.platform !== 'win32' ? '只在 Windows 上成立：要用命令提示符和 Git 的终端真的启动' : false }, async t => {
+  const c = await context(t, false), bin = join(c.temp, 'bin dir'), platform = join(c.temp, '平台 目录');
+  const capture = join(c.temp, 'capture.json');
+  await mkdir(join(platform, 'bin'), { recursive: true });
+  // 替身“应用”就是 Node；替身“平台入口”只记下参数和运行时开关。
+  await writeFile(join(platform, 'bin', 'xagents'), `require('node:fs').writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args: process.argv.slice(2), mode: process.env.ELECTRON_RUN_AS_NODE }));\n`);
+  const cli = createCliLauncher({ home: c.temp, executable: process.execPath, platform, windows: true, binDir: bin });
+  await cli.installCliLauncher();
+  const args = ['workers', '中文 空格', 'a=b', '--flag'];
+  const cmd = await exec(process.env.ComSpec || 'cmd.exe', ['/d', '/c', join(bin, 'xagents.cmd'), ...args], c.temp, c.env);
+  assert.equal(cmd.code, 0, cmd.stderr + cmd.stdout);
+  assert.deepEqual(JSON.parse(await readFile(capture, 'utf8')), { args, mode: '1' });
+  await rm(capture);
+  const { shell } = await import('../src/core/platform.ts');
+  const sh = await exec(shell('x').file, [join(bin, 'xagents'), ...args], c.temp, c.env);
+  assert.equal(sh.code, 0, sh.stderr + sh.stdout);
+  assert.deepEqual(JSON.parse(await readFile(capture, 'utf8')), { args, mode: '1' });
+});

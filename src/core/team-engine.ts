@@ -1,5 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
-import { backgroundSpawn } from './platform.ts';
+import { backgroundSpawn, stillRunning } from './platform.ts';
 import { engineEnvironment, engineSnapshot, foldRounds, killEngine, readReport, rememberSession, resumeMember, wakeGate } from './wake.ts';
 export { sessionFromOutput } from './wake.ts';
 import { spawn } from 'node:child_process';
@@ -436,7 +436,7 @@ export async function stopTeam(id: string): Promise<Team> {
     if (!jobId) continue;
     try {
       const job = await readJob(jobId);
-      if (active(job) || job.state === 'lost' || alive(job.pid) || alive(job.workerPid) || alive(job.setupPid)) await stop(jobId);
+      if (active(job) || job.state === 'lost' || alive(job.pid) || stillRunning(job.workerPid, job.workerSince) || stillRunning(job.setupPid, job.setupSince)) await stop(jobId);
     } catch (e) { if (!hasCode(e, 'ENOENT')) throw e; }
   }
   await foldJobs(await readTeam(id));

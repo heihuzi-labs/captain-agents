@@ -1,7 +1,7 @@
 // 小队与项目群共用的续接、运行检查和收尾；启动命令与隔离仍由 workers/runner 负责。
 import { access, rename, cp, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { samePath } from './platform.ts';
+import { samePath, stillRunning } from './platform.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { launch } from './dispatch.ts';
 import { alive, hasCode, readOptional, writeAtomic, writeJson } from './fsx.ts';
@@ -141,7 +141,7 @@ export async function resumeMember(job: Job, round: number, promptBody: string):
     if (current.resume?.round === round && (current.state === 'queued' || current.state === 'running')) return;
     if (current.state === 'queued' || current.state === 'running') throw new Error(`任务 ${current.id} 还在跑，不能叫醒下一轮。请等它结束或先 stop。`);
     if (current.cleaned || current.slimmed || current.worktreeRemoved) throw new Error(`任务 ${current.id} 已清理，不能续接。`);
-    if (alive(current.workerPid) || alive(current.setupPid)) throw new Error(`任务 ${current.id} 仍有选手进程，请先停止。`);
+    if (stillRunning(current.workerPid, current.workerSince) || stillRunning(current.setupPid, current.setupSince)) throw new Error(`任务 ${current.id} 仍有选手进程，请先停止。`);
     if (alive(current.pid)) throw new Error(`任务 ${current.id} 的上一轮看管进程还没退出，不能续接。`);
     // 联网总开关是主人的底线。成员的联网状态固定在第一次派活那一刻（开着联网派的，续接也带着联网）；
     // 主人后来把总开关关了，就不能照旧叫醒它。只收紧、不放宽：关着时派的成员，开关打开后续接仍然不联网。

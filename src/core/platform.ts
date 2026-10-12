@@ -71,6 +71,18 @@ export function treeOf(rows: Row[], root: number, since?: number, exitedAt?: num
   return out;
 }
 
+// 记录里的这个进程号，现在指的还是不是我们当初起的那个进程。
+// macOS：进程号很久才回收，只看在不在。Windows：号回收得很快（实测：活结束后记录里留着的选手进程号被别的进程拿去用，
+// 平台误以为“选手还在跑”），所以在的话再核对创建时间；since 是当初起它的时间，没有就只能按在不在算。
+export function stillRunning(pid: number | undefined, since?: number): boolean {
+  if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') return false; }
+  if (!isWindows || since === undefined) return true;
+  const row = snapshot().find(r => r.pid === pid);
+  return !!row && row.created >= since - BEFORE && row.created <= since + AFTER;
+}
+
 // 停掉 pid 带出来的整棵进程树；树已经不在了不算错。
 // macOS：给进程组发信号（pid 必须是用 treeSpawn 起的组长）。
 // Windows：没有“请你退出”的信号，两种信号都是直接结束。since 填起这个进程的时间（毫秒）；
