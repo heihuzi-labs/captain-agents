@@ -26,7 +26,9 @@ export type Job = {
   id: string; batch: string; project: string; repo: string; base: string; worktree: string; branch: string;
   who: Who; model: string; effort: string; fast?: true; mode: 'read-only' | 'workspace-write'; kind: string; title: string; summary: string;
   state: State; created: string; started?: string; ended?: string; seconds?: number; exit?: number | null;
-  pid?: number; workerPid?: number; setupPid?: number; queuedBy?: number; command?: Command; error?: string; usage?: Usage;
+  pid?: number; workerPid?: number; setupPid?: number; queuedBy?: number;
+  // 起选手、起准备命令的时间（毫秒）。Windows 上停整棵进程树时用它认出自己的进程（platform.ts 的 killTree）。
+  workerSince?: number; setupSince?: number; command?: Command; error?: string; usage?: Usage;
   cleaned?: string; stopRequested?: boolean; decision?: { kind: 'adopt' | 'drop'; note?: string; at: string; by: 'owner' | 'lead'; handled?: string; merged?: string }; verify?: unknown;
   // 负责人写明“这件活不用跑验收命令”的理由（xagents verify --skip）。再跑一次验收，它就让位给真实的结果。
   verifySkip?: { reason: string; at: string };

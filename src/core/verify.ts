@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { hasCode, withLock } from './fsx.ts';
+import { isWindows, killTree, shell, treeSpawn } from './platform.ts';
 import { paths, jobDir } from './paths.ts';
 import { readJob, updateJob, changeJob, active } from './job.ts';
 import type { Job } from './job.ts';
@@ -22,11 +23,12 @@ export type Verification = { ok: boolean; at: string; seconds: number; steps: Ve
 export const execute: Executor = async (file, args, cwd, timeoutMs, onData, env) => {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new Error('命令超时必须是有效的正数。');
   return new Promise(resolve => {
-    const child = spawn(file, args, { cwd, env: { ...externalEnvironment(), ...env }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const since = Date.now();
+    const child = spawn(file, args, { cwd, env: { ...externalEnvironment(), ...env }, ...treeSpawn(), stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', timedOut = false, error: string | undefined, interrupted: string | undefined;
     const kill = () => {
-      if (child.pid) try { process.kill(-child.pid, 'SIGKILL'); }
-      catch (e) { if (!hasCode(e, 'ESRCH')) error = `无法停止进程组：${(e as Error).message}`; }
+      try { killTree(child.pid, 'SIGKILL', since); }
+      catch (e) { error = `无法停止进程组：${(e as Error).message}`; }
     };
     const onInt = () => { interrupted = 'SIGINT'; kill(); };
     const onTerm = () => { interrupted = 'SIGTERM'; kill(); };
@@ -35,9 +37,13 @@ export const execute: Executor = async (file, args, cwd, timeoutMs, onData, env)
     const data = (b: Buffer) => { const text = b.toString('utf8'); output = (output + text).slice(-262144); onData?.(text); };
     child.stdout.on('data', data); child.stderr.on('data', data);
     child.once('error', e => { error = e.message; });
-    child.once('exit', kill);
+    // 命令退出后清掉它遗留的后台子进程。它们若还握着输出管道，close 会一直不来：清完再等 5 秒，还不来就主动关掉管道，不永远等。
+    let swept = false, giveUp: ReturnType<typeof setTimeout> | undefined;
+    child.once('exit', () => { kill(); swept = true; giveUp = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy(); }, 5000); });
     child.once('close', (exit, signal) => {
-      clearTimeout(timer); kill(); process.removeListener('SIGINT', onInt); process.removeListener('SIGTERM', onTerm);
+      clearTimeout(timer); clearTimeout(giveUp); process.removeListener('SIGINT', onInt); process.removeListener('SIGTERM', onTerm);
+      // Windows 上清一次要读一遍进程列表（约一秒），退出时清过就不再重复。
+      if (!isWindows || !swept) kill();
       resolve({ exit, output, timedOut, ...(interrupted || signal ? { signal: interrupted || signal! } : {}), ...(error ? { error } : {}) });
     });
   });
@@ -105,7 +111,8 @@ export async function executeLogged(cmd: string, cwd: string, minutes: number, f
   let pending = Promise.resolve();
   let logError: unknown;
   let result: Execution;
-  try { result = await run('/bin/sh', ['-c', cmd], cwd, minutes * 60000, text => {
+  const sh = shell(cmd);
+  try { result = await run(sh.file, sh.args, cwd, minutes * 60000, text => {
     pending = pending.then(async () => { if (!logError) await fd.write(text); }).catch(e => { logError = e; });
   }); } catch (e) { result = { exit: null, timedOut: false, output: '', error: (e as Error).message }; }
   await pending;

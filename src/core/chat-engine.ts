@@ -1,4 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
+import { backgroundSpawn } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -211,7 +212,7 @@ async function launchEngine(id: string) {
       if (alive(c.pid)) return;
       const entry = await engineSnapshot(chatDir(id), 'chat-entry.ts', true);
       const node = nodeCommand([entry, id], engineEnvironment());
-      const child = spawn(node.file, node.args, { detached: true, stdio: ['ignore', fd.fd, fd.fd], env: node.env });
+      const child = spawn(node.file, node.args, { ...backgroundSpawn(), stdio: ['ignore', fd.fd, fd.fd], env: node.env });
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       c.pid = child.pid; child.unref();
     });

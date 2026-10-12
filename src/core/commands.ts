@@ -11,6 +11,7 @@ import { cursorStateDir, grokSessionDirs, jobTmpDir } from './sandbox.ts';
 import { isolationOf } from './roster.ts';
 import { moveToTrash } from './trash.ts';
 import { killGroup, reconcileSafely } from './runner.ts';
+import { isWindows } from './platform.ts';
 import { guardTeamJob } from './team.ts';
 import { collectRealSteps } from './real.ts';
 
@@ -42,13 +43,16 @@ export async function stop(id: string) {
     await updateJob(job.id, j => {
       if (!active(j) && j.state !== 'lost' && !alive(j.setupPid)) return;
       j.stopRequested = true;
-      killGroup(j.setupPid, 'SIGKILL');
+      killGroup(j.setupPid, 'SIGKILL', j.setupSince);
       if (alive(j.pid)) {
+        // Windows 没有“请你退出”的信号（发了就是直接结束，看管进程来不及收尾）：这里直接停掉选手的进程树，
+        // 看管进程等到选手退出、看到上面的记号，自己收尾成“被停止”；它每 2 秒也会看一次这个记号。
+        if (isWindows) { killGroup(j.workerPid, 'SIGKILL', j.workerSince); return; }
         try { process.kill(j.pid!, 'SIGTERM'); return; }
         catch (e) { if (!hasCode(e, 'ESRCH')) throw e; }
       }
       // 看管进程被杀时选手可能仍在，不能只改一个状态字。
-      killGroup(j.workerPid, 'SIGKILL');
+      killGroup(j.workerPid, 'SIGKILL', j.workerSince);
       finish(j, 'stopped');
     });
   }

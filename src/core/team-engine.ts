@@ -1,4 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
+import { backgroundSpawn } from './platform.ts';
 import { engineEnvironment, engineSnapshot, foldRounds, killEngine, readReport, rememberSession, resumeMember, wakeGate } from './wake.ts';
 export { sessionFromOutput } from './wake.ts';
 import { spawn } from 'node:child_process';
@@ -293,7 +294,7 @@ export async function launchEngine(id: string) {
     await updateTeam(id, async current => {
       if (current.state !== 'running' || alive(current.pid)) return;
       const node = nodeCommand([entry, id], engineEnvironment());
-      const child = spawn(node.file, node.args, { detached: true, stdio: ['ignore', fd.fd, fd.fd], env: node.env });
+      const child = spawn(node.file, node.args, { ...backgroundSpawn(), stdio: ['ignore', fd.fd, fd.fd], env: node.env });
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       current.pid = child.pid;
       child.unref();

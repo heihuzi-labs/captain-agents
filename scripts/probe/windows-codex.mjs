@@ -73,6 +73,9 @@ async function inner(spec) {
   await attempt('net:internet', () => connect({ host: '1.1.1.1', port: 443 }));
   await attempt('net:listener', () => connect({ host: '127.0.0.1', port: spec.port }));
   await attempt('net:listener-v6', () => connect({ host: '::1', port: spec.port6 }));
+  for (const [name, host] of Object.entries(spec.lanHosts)) await attempt(`net:listener-lan:${name}`, () => connect({ host, port: spec.portAny }));
+  const curl = await run('curl.exe', ['--noproxy', '*', '--connect-timeout', '2', '--max-time', '4', '-s', '-o', 'NUL', '-w', '%{http_code}', `http://127.0.0.1:${spec.httpPort}/`], { timeout: 15_000 });
+  out['net:listener-curl'] = { ok: curl.exit === 0, exit: curl.exit, head: (curl.stdout + ' ' + curl.stderr).trim().slice(0, 200) };
   await attempt('pipe:outer', () => connect({ path: spec.pipe }));
   await attempt('net:listen-local', () => new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -121,6 +124,14 @@ async function outer(codex, resultFile) {
   result.credentialCreated = cred.exit === 0;
 
   const server = net.createServer(s => s.destroy()), server6 = net.createServer(s => s.destroy()), pipeServer = net.createServer(s => s.destroy());
+  const serverAny = net.createServer(s => s.destroy());
+  const http = (await import('node:http')).createServer((_, res) => res.end('ok'));
+  await new Promise(r => serverAny.listen(0, '0.0.0.0', r));
+  await new Promise(r => http.listen(0, '127.0.0.1', r));
+  const lanHosts = Object.fromEntries(Object.entries(os.networkInterfaces()).flatMap(([name, list]) => (list ?? []).filter(a => a.family === 'IPv4' && !a.internal).map(a => [name.replace(/[^\w-]/g, '_'), a.address])));
+  // 防火墙现状：三个配置文件开没开，Codex 装的那条“拦本机回环”的规则长什么样。
+  const fw = async args => { const r = await run('netsh.exe', args, { timeout: 30_000 }); return (r.stdout + r.stderr).trim().slice(0, 4000); };
+  result.firewall = { profiles: await fw(['advfirewall', 'show', 'allprofiles', 'state']) };
   const pipe = `\\\\.\\pipe\\xagents-probe-${id}`;
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   await new Promise(r => server6.listen(0, '::1', r)).catch(() => {});
@@ -135,7 +146,7 @@ async function outer(codex, resultFile) {
     list: { home, 'home-secret-dir': secretDir, appdata: path.join(home, 'AppData', 'Roaming'), localappdata: path.join(home, 'AppData', 'Local'),
       'credentials-roaming': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Credentials'), 'credentials-local': path.join(home, 'AppData', 'Local', 'Microsoft', 'Credentials'),
       'protect-roaming': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Protect'), 'codex-home': codexHome, worktree },
-    outsideFile, port: server.address().port, port6: server6.address()?.port ?? 1, pipe, credential,
+    outsideFile, port: server.address().port, port6: server6.address()?.port ?? 1, portAny: serverAny.address().port, httpPort: http.address().port, lanHosts, pipe, credential,
     commands: { node: [process.execPath, '--version'], git: ['git.exe', '--version'], whoami: ['whoami.exe'], 'whoami-groups': ['whoami.exe', '/groups', '/fo', 'csv', '/nh'] },
   };
   const specFile = path.join(worktree, 'spec.json'); await fs.writeFile(specFile, JSON.stringify(spec));
@@ -194,10 +205,12 @@ async function outer(codex, resultFile) {
     for (const name of await fs.readdir(path.join(codexHome, '.sandbox')).catch(() => [])) {
       if (name.endsWith('.log')) result.sandboxLogs[name] = (await fs.readFile(path.join(codexHome, '.sandbox', name), 'utf8').catch(() => '')).slice(-5000);
     }
+    result.firewall.loopbackRule = await fw(['advfirewall', 'firewall', 'show', 'rule', 'name=codex_sandbox_offline_block_loopback_tcp', 'verbose']);
+    result.firewall.outboundRule = await fw(['advfirewall', 'firewall', 'show', 'rule', 'name=codex_sandbox_offline_block_outbound', 'verbose']);
     const users = await run('net.exe', ['user']);
     result.localUsers = users.stdout.split(/\s+/).filter(name => /sandbox/i.test(name));
   } finally {
-    server.close(); server6.close(); pipeServer.close();
+    server.close(); server6.close(); pipeServer.close(); serverAny.close(); http.close();
     await run('cmdkey.exe', [`/delete:${credential}`]);
     for (const file of [plain]) await fs.rm(file, { force: true }).catch(() => {});
     for (const dir of [secretDir, ...Object.values(shared).map(s => s.dir)]) await fs.rm(dir, { recursive: true, force: true }).catch(e => { result.cleanupErrors = [...(result.cleanupErrors ?? []), `${dir}: ${e.code}`]; });

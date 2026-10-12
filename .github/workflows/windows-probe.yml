@@ -21,7 +21,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, windows-2025]
+        # Two server images and one Windows 11 image (the closest to a user's machine).
+        os: [windows-2022, windows-2025, windows-11-arm]
     env:
       # The Codex release the probes were written against. Change it together with the research note.
       CODEX_RELEASE: 0.162.1

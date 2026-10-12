@@ -1,4 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
+import { backgroundSpawn } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { open, realpath } from 'node:fs/promises';
 import { join, resolve, basename, extname } from 'node:path';
@@ -31,7 +32,7 @@ export async function launch(job: Job, cli: string) {
     await updateJob(job.id, async current => {
       if (current.state !== 'queued') return;
       const node = nodeCommand([cli, job.id], { ...process.env, XAGENTS_HOME: paths().home });
-      const child = spawn(node.file, node.args, { detached: true, stdio: ['ignore', fd.fd, fd.fd], env: node.env });
+      const child = spawn(node.file, node.args, { ...backgroundSpawn(), stdio: ['ignore', fd.fd, fd.fd], env: node.env });
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       current.pid = child.pid;
       child.unref();
