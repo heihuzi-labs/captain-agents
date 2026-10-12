@@ -11,6 +11,7 @@ export type CliLauncherStatus = 'installed' | 'missing' | 'other';
 // windows、binDir 只供离线测试指定；实际安装时按当前系统取。
 type Installation = { home: string; executable: string; platform?: string; windows?: boolean; binDir?: string };
 type LauncherFile = { path: string; content: string; shown: string; executable: boolean };
+type LauncherFileStatus = CliLauncherStatus | 'stale';
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 
 // 启动脚本放哪、写什么。
@@ -39,13 +40,61 @@ export function createCliLauncher(installation: Installation) {
   const { platform } = installation, windows = installation.windows ?? isWindows;
   const files = () => launcherFiles(installation);
 
-  async function fileStatus(file: LauncherFile): Promise<CliLauncherStatus> {
+  // 只解析生成器的两个带引号参数，再交回同一个生成器逐字核对整份文件。
+  // 旧路径仅用于字符串比较：不执行，也不访问它们指向的文件。
+  function isPreviousLauncher(file: LauncherFile, content: string): boolean {
+    const batch = windows && file.shown === 'xagents.cmd';
+    const match = batch
+      ? content.match(/"([^"\r\n]*)" "([^"\r\n]*)" %\*/)
+      : content.match(/'((?:[^']|'\\'')*)' '((?:[^']|'\\'')*)' "\$@"/);
+    if (!match) return false;
+    const decode = (value: string) => batch ? value : value.replaceAll("'\\''", "'");
+    const executable = decode(match[1]), entry = decode(match[2]);
+    const pathDirname = windows ? win32.dirname : dirname;
+    try {
+      const previous = launcherFiles({ ...installation, executable, platform: pathDirname(pathDirname(entry)) });
+      return previous.find(old => old.path === file.path)?.content === content;
+    } catch { return false; }
+  }
+
+  async function fileStatus(file: LauncherFile): Promise<LauncherFileStatus> {
     try {
       const info = await lstat(file.path);
       // 开发者的链接（包括悬空链接）、目录和被改过的启动脚本都不能当作自己的。Windows 上没有“可执行”这个权限位，不看。
-      if (!info.isFile() || (file.executable && !(info.mode & 0o111))) return 'other';
-      return await readFile(file.path, 'utf8') === file.content ? 'installed' : 'other';
+      if (!info.isFile() || (file.executable && !isWindows && !(info.mode & 0o111))) return 'other';
+      const bytes = await readFile(file.path), content = bytes.toString('utf8');
+      if (!bytes.equals(Buffer.from(content, 'utf8'))) return 'other';
+      return content === file.content ? 'installed' : isPreviousLauncher(file, content) ? 'stale' : 'other';
     } catch (error) { if (hasCode(error, 'ENOENT')) return 'missing'; throw error; }
+  }
+
+  // 调用方持有安装锁；每次改名前重新核对，和手动安装共用原子写入。
+  async function writeLaunchers(list: LauncherFile[], check: () => Promise<boolean>): Promise<boolean> {
+    let rewritten = false;
+    for (const file of list) {
+      if (await fileStatus(file) === 'installed') continue;
+      const temporary = join(dirname(file.path), `.xagents-${randomUUID()}.tmp`);
+      try {
+        await writeFile(temporary, file.content, { flag: 'wx', mode: 0o755 });
+        if (!await check()) return rewritten;
+        await rename(temporary, file.path);
+        rewritten = true;
+      } finally { await rm(temporary, { force: true }); }
+    }
+    return rewritten;
+  }
+
+  async function refreshCliLauncher(): Promise<boolean> {
+    if (!platform) return false;
+    const list = files();
+    const states = () => Promise.all(list.map(fileStatus));
+    const needsRefresh = (values: LauncherFileStatus[]) => values.includes('stale') && !values.includes('other');
+    // 没装过时不创建目录；进锁后再检查一遍，避免覆盖并发安装或修改。
+    if (!needsRefresh(await states())) return false;
+    return withLock(join(dirname(list[0].path), '.xagents-cli-install'), async () => {
+      if (!needsRefresh(await states())) return false;
+      return writeLaunchers(list, async () => !(await states()).includes('other'));
+    });
   }
   async function cliLauncherStatus(): Promise<CliLauncherStatus> {
     if (!platform) return 'other';
@@ -68,18 +117,10 @@ export function createCliLauncher(installation: Installation) {
         return status;
       };
       if (await check() === 'installed') return;
-      for (const file of list) {
-        if (await fileStatus(file) === 'installed') continue;
-        const temporary = join(dir, `.xagents-${randomUUID()}.tmp`);
-        try {
-          await writeFile(temporary, file.content, { flag: 'wx', mode: 0o755 });
-          await check();
-          await rename(temporary, file.path);
-        } finally { await rm(temporary, { force: true }); }
-      }
+      await writeLaunchers(list, async () => { await check(); return true; });
     });
   }
-  return { cliLauncherStatus, installCliLauncher };
+  return { cliLauncherStatus, installCliLauncher, refreshCliLauncher };
 }
 
 function currentInstallation(): Installation {
@@ -97,4 +138,7 @@ export function cliLauncherStatus(): Promise<CliLauncherStatus> {
 }
 export function installCliLauncher(options: { replace?: boolean } = {}): Promise<void> {
   return createCliLauncher(currentInstallation()).installCliLauncher(options);
+}
+export async function refreshCliLauncher(): Promise<boolean> {
+  return createCliLauncher(currentInstallation()).refreshCliLauncher();
 }

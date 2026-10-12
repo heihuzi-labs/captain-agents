@@ -74,6 +74,10 @@ test('打包配置：中文名、固定应用标识、图标、独立平台资�
   assert.equal(config.mac.icon, 'build/icon.icns'); assert.equal(config.mac.identity, null);
   assert.deepEqual(config.mac.target, [{ target: 'dir', arch: ['arm64', 'x64'] }]);
   assert.deepEqual(config.win.target, [{ target: 'nsis', arch: ['x64'] }]);
+  assert.equal(config.win.executableName, 'captain-agents');
+  assert.equal(config.nsis.oneClick, false);
+  assert.equal(config.nsis.perMachine, false);
+  assert.equal(config.nsis.allowToChangeInstallationDirectory, true);
   // 安装包文件名按共用下载桶的约定起，流水线和发版脚本都认这个名字。
   assert.equal(config.nsis.artifactName, 'captain-agents_${version}_windows-x64.${ext}');
   assert.deepEqual(config.files.filter((p: string) => !p.startsWith('!')), ['out/main/**', 'out/preload/**', 'out/renderer/**', 'package.json']);

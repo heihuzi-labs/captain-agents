@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { isWindows } from '../ui/platform.ts';
-import type { AppInfo, CliStatus } from '../../shared/ipc.ts';
+import type { AppInfo, CliStatus, Places } from '../../shared/ipc.ts';
 import { errorReason } from '../lib/errors.ts';
 import { fmtTime } from '../lib/board.ts';
 import { checkUpdate, closeUpdateDialog, downloadUpdate, megabytes, openUpdateDialog, percent, pillText, restartForUpdate, setAutoCheck, useUpdate } from '../lib/update.ts';
@@ -111,5 +111,22 @@ export function CliSettings() {
       {status === 'other' && <Button size="sm" disabled={busy} onClick={() => setConfirm(true)}>替换…</Button>}
     </SettingRow>
     {confirm && <ConfirmDialog tone="primary" busy={busy} message={isWindows ? "把现有的 xagents 命令换成这个应用里的那一份？" : "把现有的 ~/.local/bin/xagents 换成这个应用里的那一份？"} detail="原来那个文件会被覆盖；如果它是你自己链到源码目录的开发版，换了以后终端里用的就不再是源码目录里的代码。" confirmLabel="替换" onCancel={() => setConfirm(false)} onConfirm={() => void install(true)} />}
+  </SettingGroup>;
+}
+
+// 设置 → 通用 →“位置”一组，只在 Windows 上（docs/ui-spec.md 第 10 节）：安装时可以选位置，装完要看得到程序和数据各在哪。
+const PLACES: [keyof Places, string][] = [['app', '程序'], ['data', '数据']];
+export function PlaceSettings() {
+  const [places, setPlaces] = useState<Places | null>(null), [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    if (isWindows && typeof window.xa?.places === 'function') void window.xa.places().then(p => { if (alive) setPlaces(p); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!places) return null;
+  const open = (which: keyof Places) => { setError(''); void window.xa.openPlace(which).catch(e => setError('没能打开：' + errorReason(e))); };
+  return <SettingGroup head="位置" label="位置">
+    {PLACES.map(([which, title]) => <SettingRow key={which} title={title} note={places[which]} group><Button size="sm" onClick={() => open(which)}>打开文件夹</Button></SettingRow>)}
+    {error && <p role="alert" className="setting-row setting-foot">{error}</p>}
   </SettingGroup>;
 }

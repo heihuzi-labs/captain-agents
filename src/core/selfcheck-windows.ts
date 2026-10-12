@@ -36,6 +36,9 @@ export const windowsGlobalTargets = () => [...globalTargets,
 ];
 // 公用的可写位置：主人自己的临时目录（里面有负责人会话的草稿和别的程序的临时文件）、Windows 的临时目录、
 // 所有用户共用的公共目录和程序数据目录、盘符根目录、npm 的日志目录。
+// 另加派活工作台自己的程序目录（2026-10-12）：安装时可以选位置了，装到一个“所有人可写”的文件夹里，选手就能改平台自己的程序，
+// 那些程序是在隔离外以主人的身份运行的，等于逃出隔离。写得进就判不过，请主人换个位置装（docs/design-windows.md 第 11.1 节）。
+// 查两层：平台代码所在的那一层，和可执行程序所在的那一层（打包后是安装目录本身；权限不往下继承时两层可能不一样）。
 export const windowsTempTargets = [
   { name: 'tmp-user', label: '写主人的临时目录' },
   { name: 'tmp-shared', label: '写 Windows 的公用临时目录' },
@@ -43,12 +46,14 @@ export const windowsTempTargets = [
   { name: 'tmp-programdata', label: '写所有用户共用的程序数据目录' },
   { name: 'tmp-root', label: '写盘符根目录' },
   { name: 'npm-logs', label: '写 npm 日志目录' },
+  { name: 'own-install', label: '改派活工作台自己的程序（这一项没过，请把应用换个位置安装）' },
+  { name: 'own-program', label: '往运行派活工作台的程序旁边放文件（这一项没过，请把应用换个位置安装）' },
 ] as const;
-export function windowsTempPaths(home = homedir(), env: NodeJS.ProcessEnv = process.env, ownerTmp = tmpdir()): Record<string, string | null> {
+export function windowsTempPaths(home = homedir(), env: NodeJS.ProcessEnv = process.env, ownerTmp = tmpdir(), own = toolRoot, program = dirname(process.execPath)): Record<string, string | null> {
   const local = env.LOCALAPPDATA || join(home, 'AppData', 'Local');
   return {
     'tmp-user': ownerTmp, 'tmp-shared': join(env.SystemRoot || 'C:\\Windows', 'Temp'), 'tmp-public': env.PUBLIC || join(parse(home).root, 'Users', 'Public'),
-    'tmp-programdata': env.ProgramData || join(parse(home).root, 'ProgramData'), 'tmp-root': parse(home).root, 'npm-logs': join(local, 'npm-cache', '_logs'),
+    'tmp-programdata': env.ProgramData || join(parse(home).root, 'ProgramData'), 'tmp-root': parse(home).root, 'npm-logs': join(local, 'npm-cache', '_logs'), 'own-install': own, 'own-program': program,
   };
 }
 const logins = ['login-codex', 'login-grok', 'login-cursor', 'login-deepseek'];

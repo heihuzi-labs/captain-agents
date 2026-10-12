@@ -32,7 +32,8 @@ export type IsolationResult = { isolation: Isolation; probes: Probe[]; error?: s
 //    加终端配置文件和命令历史的禁读探针。
 // 7：2026-10-03 加常见登录凭据文件（~/.netrc、~/.git-credentials、~/.docker、~/.kube 等）的禁读探针；
 //    钥匙串和环境变量两条并行的修复合并，统一升到这一版（两边各自升过的 5、6 都作废重检）。
-const cacheVersion = 7;
+// 8：2026-10-12 Windows 上加“改派活工作台自己的程序目录”的探针（安装时可以选位置了）。macOS 的探针没变，只是跟着重检一次。
+const cacheVersion = 8;
 // platform：在哪种系统上做的自检。旧的缓存没有这一项，都是 macOS 上做的。
 export type Selfcheck = { version: typeof cacheVersion; platform?: string; ok: boolean; at: string; note: string; results: IsolationResult[] };
 // 自检覆盖选手清单里出现的每一种隔离；新选手沿用已有隔离就自动被覆盖。

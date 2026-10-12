@@ -8,8 +8,9 @@ import { IntroPane } from './IntroPane.tsx';
 import { defaultColumns } from '../../shared/ipc.ts';
 import type { Settings as Values, SettingsPatch } from '../../shared/ipc.ts';
 import { Button, ColorField, Modal, Segmented, Select, SettingGroup, SettingRow, SideNavLayout, Switch } from '../ui/index.ts';
+import { TRAY } from '../ui/platform.ts';
 import { policyOf, WorkerSettings } from './WorkerSettings.tsx';
-import { CliSettings, UpdateSettings } from './Update.tsx';
+import { CliSettings, PlaceSettings, UpdateSettings } from './Update.tsx';
 import { NetworkSettings } from './NetworkSettings.tsx';
 
 type Who = keyof Values['workers'];
@@ -101,7 +102,7 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
         {page === 'general' && <><SettingGroup>
           <SettingRow title="外观" note="选了立刻生效" group><Segmented label="外观" items={APPEARANCES} value={values.appearance} onChange={id => void save({ appearance: id as Values['appearance'] })} /></SettingRow>
           {([
-          ['keepAwake', '有活在跑时不让电脑自动休眠', '合上盖子仍会休眠'], ['notifications', '系统通知', undefined], ['openAtLogin', '开机自动启动', '登录后自动在菜单栏出现'],
+          ['keepAwake', '有活在跑时不让电脑自动休眠', '合上盖子仍会休眠'], ['notifications', '系统通知', undefined], ['openAtLogin', '开机自动启动', `登录后自动在${TRAY}出现`],
         ] as const).map(([key, label, note]) => <SettingRow key={key} title={label} note={note}><Switch label={label} checked={values[key]} onChange={next => void save({ [key]: next })} /></SettingRow>)}</SettingGroup>
         <SettingGroup head="存储">
           <SettingRow title="自动清理旧日志" note={SLIM_NOTE(values.storage.days)}><Switch label="自动清理旧日志" checked={values.storage.slim} onChange={slim => storage({ slim })} /></SettingRow>
@@ -110,7 +111,8 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
           {view?.storage && <p className="setting-row setting-foot">{storageLine(view.storage)}</p>}
         </SettingGroup>
         <UpdateSettings />
-        <CliSettings /></>}
+        <CliSettings />
+        <PlaceSettings /></>}
         {page === 'workers' && view && <>
           <SettingGroup head="派活限制">
             <SettingRow title="同时最多跑" note="在跑的加排队的，满了就先不派新活"><Select label="同时最多跑" items={RUN_CHOICES.map(n => ({ id: String(n), label: n + ' 件' }))} value={String(values.limits.maxRunning)}

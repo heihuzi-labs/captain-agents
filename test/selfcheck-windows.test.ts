@@ -85,9 +85,11 @@ test('试写的位置：目标在就试目标；不在就试最近的现有上�
 
 test('Windows 的公用可写位置和存凭据的系统文件夹：按环境变量取，取不到用缺省位置', () => {
   const home = join('C:', 'Users', 'me');
-  const temp = windowsTempPaths(home, { LOCALAPPDATA: 'L', SystemRoot: 'S', PUBLIC: 'P', ProgramData: 'D' }, 'T');
+  const temp = windowsTempPaths(home, { LOCALAPPDATA: 'L', SystemRoot: 'S', PUBLIC: 'P', ProgramData: 'D' }, 'T', 'A', 'B');
   assert.deepEqual(Object.keys(temp), windowsTempTargets.map(t => t.name));
-  assert.deepEqual(temp, { 'tmp-user': 'T', 'tmp-shared': join('S', 'Temp'), 'tmp-public': 'P', 'tmp-programdata': 'D', 'tmp-root': temp['tmp-root'], 'npm-logs': join('L', 'npm-cache', '_logs') });
+  assert.deepEqual(temp, { 'tmp-user': 'T', 'tmp-shared': join('S', 'Temp'), 'tmp-public': 'P', 'tmp-programdata': 'D', 'tmp-root': temp['tmp-root'], 'npm-logs': join('L', 'npm-cache', '_logs'), 'own-install': 'A', 'own-program': 'B' });
+  // 派活工作台自己的程序目录也在试写之列：装到隔离挡不住的位置时，自检要判不过。
+  for (const name of ['own-install', 'own-program']) assert.ok(windowsExpectedProbes().includes(name), name);
   assert.deepEqual(keychainDirs(true, home, { APPDATA: 'R', LOCALAPPDATA: 'L' }), [join('R', 'Microsoft', 'Credentials'), join('L', 'Microsoft', 'Credentials'), join('R', 'Microsoft', 'Protect'), join('R', 'Microsoft', 'Vault'), join('L', 'Microsoft', 'Vault')]);
   assert.deepEqual(keychainDirs(true, home, {}).slice(0, 2), [join(home, 'AppData', 'Roaming', 'Microsoft', 'Credentials'), join(home, 'AppData', 'Local', 'Microsoft', 'Credentials')]);
   assert.deepEqual(keychainDirs(false, '/Users/me'), [join('/Users/me', 'Library/Keychains'), '/Library/Keychains']);

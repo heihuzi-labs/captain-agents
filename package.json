@@ -84,6 +84,7 @@
       "identity": null
     },
     "win": {
+      "executableName": "captain-agents",
       "target": [
         {
           "target": "nsis",
@@ -95,6 +96,9 @@
       "icon": "build/icon.png"
     },
     "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
       "artifactName": "captain-agents_${version}_windows-x64.${ext}"
     }
   }

@@ -76,6 +76,12 @@ jobs:
           "new entries in the home directory after the self-check (there should be none):"
           Get-ChildItem -Force $env:USERPROFILE | Where-Object { $before -notcontains $_.Name } | Select-Object -ExpandProperty Name
           Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
+          # The platform's own folder made writable for everyone: the self-check must refuse (docs/design-windows.md 11.1).
+          icacls "$env:GITHUB_WORKSPACE" /grant '*S-1-1-0:(OI)(CI)M' | Out-Null
+          node src/cli/cli.ts selfcheck
+          "self-check exit code with a program folder everyone can write to (must not be 0): $LASTEXITCODE"
+          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-writable-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
+          icacls "$env:GITHUB_WORKSPACE" /remove '*S-1-1-0' | Out-Null
           node src/cli/cli.ts windows-setup --remove
           node src/cli/cli.ts selfcheck
           "self-check exit code without the fence: $LASTEXITCODE"

@@ -3,7 +3,7 @@ import { modelsRefresher, modelsRefreshHandler, modelsKeepHandler, modelsSchedul
 import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeTheme, protocol, screen, session, shell } from 'electron';
 import { connect, connectArgument, connectStatus, disconnect } from '../../src/core/connect.ts';
 import { INTRO_TEXT } from '../../src/core/intro.ts';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { desktopPath, paths } from '../../src/core/paths.ts';
 import { buildView } from '../../src/core/view.ts';
@@ -35,7 +35,7 @@ import { slimOld } from '../../src/core/slim.ts';
 // Electron 自带的“原始文件函数”：不把路径里的 .asar 当虚拟目录（更新包里有 app.asar，见 update-install.ts）。
 import originalFs from 'original-fs';
 import { desktopUpdater } from './update-runtime.ts';
-import { cliLauncherStatus, installCliLauncher } from './cli-launcher.ts';
+import { cliLauncherStatus, installCliLauncher, refreshCliLauncher } from './cli-launcher.ts';
 import { updateActions } from './updater.ts';
 import type { Updater } from './updater.ts';
 
@@ -177,6 +177,7 @@ else {
     }
   });
   void app.whenReady().then(async () => {
+    if (app.isPackaged) await refreshCliLauncher().catch(console.error);
     await loadConfiguredRoster();
     await migrateIcons().catch(console.error);
     applyAppearance(nativeTheme, (await readSettings()).appearance);
@@ -219,6 +220,15 @@ else {
     // 命令行启动脚本：开发版不提供；参数只认一个开关，路径都由后台自己定，窗口传不进来。
     const cliStatus = async (): Promise<CliStatus> => app.isPackaged ? cliLauncherStatus() : 'unavailable';
     ipcMain.handle(channels.cliStatus, (event, ...args: unknown[]) => { guard(event); if (args.length) throw new Error('读取命令行状态不需要参数。'); return cliStatus(); });
+    // 位置：只有两处固定的位置（程序所在的文件夹、登记处），窗口传不进路径。
+    const places = () => ({ app: dirname(process.execPath), data: paths().home });
+    ipcMain.handle(channels.places, (event, ...args: unknown[]) => { guard(event); if (args.length) throw new Error('读取位置不需要参数。'); return places(); });
+    ipcMain.handle(channels.openPlace, async (event, ...args: unknown[]) => {
+      guard(event);
+      if (args.length !== 1 || (args[0] !== 'app' && args[0] !== 'data')) throw new Error('只能打开程序或数据所在的文件夹。');
+      const failed = await shell.openPath(places()[args[0]]);
+      if (failed) throw new Error(failed);
+    });
     ipcMain.handle(channels.cliInstall, async (event, ...args: unknown[]) => {
       guard(event);
       if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('安装命令行只能接收一个开关。');

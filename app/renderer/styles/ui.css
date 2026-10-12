@@ -244,7 +244,7 @@ fieldset.settings { border: 0; margin: 0; padding: 0; min-width: 0; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-6); min-height: 48px; padding: var(--sp-3) var(--sp-4); }
 .setting-row + .setting-row, .setting-group-head + .setting-row { border-top: 1px solid var(--line); }
 .setting-copy { display: flex; flex-direction: column; min-width: 0; }
-.setting-note { font-size: var(--fs-sm); color: var(--muted); }
+.setting-note { font-size: var(--fs-sm); color: var(--muted); overflow-wrap: anywhere; }
 .setting-lead { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
 .setting-row-dim { opacity: .55; }
 /* 设置 → 接入 AI（ui-spec 第 10 节） */
