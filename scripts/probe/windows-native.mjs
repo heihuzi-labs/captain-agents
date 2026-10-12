@@ -25,6 +25,8 @@ const loadKoffi = () => process.env.XA_KOFFI_FROM ? createRequire(path.join(proc
 const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const ps = (command, env = process.env) => spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 60_000, env });
 const sleep = ms => new Promise(done => setTimeout(done, ms));
+// 系统目录里的 whoami：从 Git 的终端里跑时，搜索路径上先找到的是另一个同名程序。
+const whoami = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe');
 const ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x1;
 
 // 子进程的两种角色（探针自己起自己）。
@@ -52,7 +54,7 @@ async function main() {
   };
   // 是不是管理员身份（完整性级别“高”）：流水线上是，主人的电脑上平时不是。
   // 记下令牌里的完整性级别那一行和管理员组那一行（管理员组“只用于拒绝”就是没有管理员权限）。
-  const groups = (spawnSync('whoami', ['/groups', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout || '').split(/\r?\n/);
+  const groups = (spawnSync(whoami, ['/groups', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout || '').split(/\r?\n/);
   result.token = { label: groups.find(l => l.includes('S-1-16-'))?.slice(0, 160) ?? null, admins: groups.find(l => l.includes('S-1-5-32-544'))?.slice(0, 200) ?? null };
   result.elevated = /S-1-16-(12288|16384)/.test(result.token.label ?? '') && !/deny only/i.test(result.token.admins ?? '');
 
@@ -183,7 +185,7 @@ async function processes(koffi) {
 const recycled = () => (ps('(New-Object -ComObject Shell.Application).NameSpace(10).Items() | ForEach-Object { $_.Name }').stdout || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 // 更直接的证据：这个盘的回收站目录里，属于当前账户的条目有几个（每送进去一样东西，系统记一个 $I 开头的文件）。
 function binEntries(drive) {
-  const sid = /S-1-5-21-[\d-]+/.exec(spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout || '')?.[0];
+  const sid = /S-1-5-21-[\d-]+/.exec(spawnSync(whoami, ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout || '')?.[0];
   if (!sid) return null;
   try { return fs.readdirSync(path.join(drive, '$Recycle.Bin', sid)).filter(n => n.startsWith('$I')).length; }
   catch (error) { return error.code === 'ENOENT' ? 0 : null; }

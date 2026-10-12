@@ -211,9 +211,11 @@ test('clean --done 保留采用任务，路径穿越和额外参数被拒绝', a
   await access(j.worktree); assert.equal((await c.jobs()).filter(j => j.cleaned).length, 1);
   for (const args of [['status', '../outside'], ['clean', jobs[0].id, '--done'], ['board', 'extra'], ['run', c.task, '--summary', '完成本次测试任务', '--who'], ['project', 'add', '../outside', c.repo], ['project', 'add', 'bad', c.repo, '--worktree-root', '../bad']]) assert.equal((await c.cli(args)).code, 1, args.join(' '));
 });
+// 准备命令里的程序路径要加引号：Windows 上不加的话，Git 的 sh 会把路径里的反斜杠吃掉，命令成了“找不到程序”，
+// 准备阶段一闪就结束，下面两条要测的“准备还在跑”就不成立了（以前读进程列表慢，正好把这个毛病盖住）。
 test('setup 尚未结束时 stop 也能终止准备进程，不启动选手', async t => {
   const c = await context(t);
-  await c.add(['--setup', `${process.execPath} -e 'setInterval(() => {}, 1000)'`]);
+  await c.add(['--setup', `'${process.execPath}' -e 'setInterval(() => {}, 1000)'`]);
   const child = spawn(process.execPath, [join(root, 'src/cli/cli.ts'), 'run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { cwd: c.repo, env: c.env, stdio: 'ignore' });
   t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
   const ended = once(child, 'close');
@@ -225,7 +227,7 @@ test('setup 尚未结束时 stop 也能终止准备进程，不启动选手', as
 });
 test('派发进程准备期间被杀后登记不永远排队，可停止残留准备进程', async t => {
   const c = await context(t);
-  await c.add(['--setup', `${process.execPath} -e 'setInterval(() => {}, 1000)'`]);
+  await c.add(['--setup', `'${process.execPath}' -e 'setInterval(() => {}, 1000)'`]);
   const child = spawn(process.execPath, [join(root, 'src/cli/cli.ts'), 'run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { cwd: c.repo, env: c.env, stdio: 'ignore' });
   const ended = once(child, 'close');
   t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });

@@ -90,7 +90,8 @@ test('防休眠：申请以后系统的名单里有这个进程，撤掉以后�
 test('回收站：文件夹整个送进去，回收站里多一条，原处没有了；不存在的路径报错', { skip: onlyWindows || (!process.env.CI && '只在流水线上：会在回收站里留一个文件夹') }, async t => {
   const base = await mkdtemp(join(tmpdir(), 'xa-recycle-')), folder = join(base, '派活工作台-测试 回收站');
   t.after(() => rm(base, { recursive: true, force: true }));
-  const sid = /S-1-5-21-[\d-]+/.exec(spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout || '')?.[0];
+  const sid = /S-1-5-21-[\d-]+/.exec(spawnSync(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout || '')?.[0];
+  // 用系统目录里的 whoami：从 Git 的终端里跑测试时，搜索路径上先找到的是另一个同名程序，不认这些参数。
   assert.ok(sid, '读不到当前账户的编号');
   const entries = async () => (await readdir(join(parse(base).root, '$Recycle.Bin', sid)).catch(() => [] as string[])).filter(name => name.startsWith('$I')).length;
   await mkdir(join(folder, '里面'), { recursive: true });
