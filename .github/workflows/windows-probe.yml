@@ -58,6 +58,11 @@ jobs:
           New-Item -ItemType Directory -Force probe-results | Out-Null
           $env:XAGENTS_CODEX = $env:CODEX_EXE
           node scripts/probe/windows-dispatch.mjs "probe-results/dispatch-${{ matrix.os }}.json" -- node src/cli/cli.ts
+          $write = $LASTEXITCODE
+          # A read-only job (a review): the command must still run inside the isolation.
+          $env:XA_DISPATCH_RO = '1'
+          node scripts/probe/windows-dispatch.mjs "probe-results/dispatch-ro-${{ matrix.os }}.json" -- node src/cli/cli.ts
+          if ($write -ne 0) { exit $write }
 
       - name: Run the probes
         shell: pwsh

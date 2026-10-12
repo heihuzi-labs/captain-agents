@@ -37,7 +37,9 @@ function run(file, args, { cwd = repo, input = '', timeout = 240_000 } = {}) {
 const cli = (...args) => run(xagents[0], [...xagents.slice(1), ...args]);
 
 // 假模型：第一问叫选手跑一条命令（在当前目录写一个文件），带着结果的第二问回一句话。两种工具写法都认（见 codex-endpoint.mjs）。
-const WRITE = 'echo dispatched > dispatched.txt';
+// 只读的活（XA_DISPATCH_RO）：命令只打印一句话；要看的是命令在隔离里跑得起来，而且副本里写不进东西。
+const RO = Boolean(process.env.XA_DISPATCH_RO);
+const WRITE = RO ? 'echo read-only-probe' : 'echo dispatched > dispatched.txt';
 const usage = { input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0 };
 const flatten = tools => tools.flatMap(t => t.type === 'namespace' ? flatten(t.tools ?? []) : [t]);
 let asked = 0, toolOutput = null;
@@ -82,7 +84,7 @@ try {
   result.steps.projectAdd = { exit: added.exit, tail: added.out.trim().split(/\r?\n/).slice(-2).join(' | ') };
   const workers = await cli('workers');
   result.steps.workers = workers.out.trim().split(/\r?\n/).filter(l => /Codex|DeepSeek|Grok|Cursor|没找到|不能派/.test(l)).map(l => l.trim().slice(0, 90));
-  const sent = await cli('run', task, '--project', 'probe', '--who', 'codex:medium', '--title', '写一个文件', '--summary', '端到端检查：派一件活，看它在隔离里把文件写进副本');
+  const sent = await cli('run', task, '--project', 'probe', '--who', 'codex:medium', ...(RO ? ['--ro', '--kind', '审查'] : []), '--title', '写一个文件', '--summary', '端到端检查：派一件活，看它在隔离里把文件写进副本');
   const id = /^(\d{4}-\d{4}-\S+)/m.exec(sent.out)?.[1];
   result.steps.run = { exit: sent.exit, id: id ?? null, out: sent.out.trim().slice(-600) };
   if (id) {
@@ -94,7 +96,9 @@ try {
       sandbox: args.find(a => a.startsWith('windows.sandbox=')) ?? null, endpoint: args.includes('model_provider="probe"'),
       denyRead: args.some(a => a.startsWith('permissions.xa=') && a.includes('"deny"')) };
     if (job.state !== 'done' || !written) for (const name of ['stderr.log', 'supervisor.log', 'run.log']) result.steps[name] = (await fs.readFile(path.join(registry, 'jobs', id, name), 'utf8').catch(() => '')).slice(-800);
-    ok = job.state === 'done' && written;
+    const ran = /exit_code\\*"\s*:\s*0/.test(toolOutput ?? '');
+    result.steps.job.ran = ran;
+    ok = job.state === 'done' && (RO ? ran && !written : written);
     await cli('stop', id); await cli('clean', id);
   }
 } catch (error) { result.error = String(error?.stack ?? error); }
@@ -106,5 +110,5 @@ finally {
   await fs.rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
 }
 console.log(JSON.stringify(result, null, 2));
-console.log(ok ? '通过：活派出去了，在隔离里做完了，文件写进了副本。' : '没过：活没有做完，看上面的结果。');
+console.log(ok ? (RO ? '通过：只读的活派出去了，命令在隔离里跑起来了，副本没被改。' : '通过：活派出去了，在隔离里做完了，文件写进了副本。') : '没过：活没有做完，看上面的结果。');
 process.exit(ok ? 0 : 1);

@@ -187,11 +187,11 @@ test('Windows 上自检不拦派活：没装、没过都照派，选手改用 Co
   await cache(passing(), yesterday); assert.equal((await readSelfcheck()).passed, true); await ensureSelfcheck(check, true); assert.equal(calls, 1);
 });
 
-test('不带禁读名单的权限表：只剩任务临时目录那两条，别的系统上的隔离不受影响', () => {
+test('没装加固时的权限表：什么都不加，就是 Codex 自带的那一档；只读的活也一样（另外放开临时目录它会拒绝运行）', () => {
   const job = { mode: 'workspace-write' as const, repo: join(tmpdir(), 'r'), worktree: join(tmpdir(), 'w'), id: 'x' }, tmp = join(tmpdir(), 'job-tmp');
-  const plain = codexPermissions(job, { denyReadExtra: ['secret'], denyReadHome: ['.mine'] }, tmp, false, () => true, true);
-  assert.ok(!plain.includes('"deny"'), '没有禁读'); assert.ok(plain.includes(`${JSON.stringify(tmp)}="write"`)); assert.ok(plain.includes('":tmpdir"="read"'));
-  assert.match(plain, /^permissions\.xa=\{extends=":workspace",filesystem=\{/);
+  const project = { denyReadExtra: ['secret'], denyReadHome: ['.mine'] };
+  assert.equal(codexPermissions(job, project, tmp, false, () => true, true), 'permissions.xa={extends=":workspace",filesystem={}}');
+  assert.equal(codexPermissions({ ...job, mode: 'read-only' }, project, tmp, false, () => true, true), 'permissions.xa={extends=":read-only",filesystem={}}');
+  assert.equal(codexPermissions(job, project, tmp, true, () => true, true), 'permissions.xa={extends=":workspace",filesystem={},network={enabled=true}}');
   assert.ok(codexPermissions(job, { denyReadExtra: [] }, tmp, false, () => true).includes('"deny"'), '缺省照旧带禁读名单');
-  assert.ok(codexPermissions(job, { denyReadExtra: [] }, tmp, true, () => true, true).endsWith(',network={enabled=true}}'));
 });

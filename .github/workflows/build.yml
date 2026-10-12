@@ -147,6 +147,11 @@ jobs:
           node scripts/probe/windows-dispatch.mjs shots\dispatch-packaged.json -- $exe $cli
           "dispatch through the packaged app, nothing installed: exit code $LASTEXITCODE"
           $dispatch = $LASTEXITCODE
+          $env:XA_DISPATCH_RO = '1'
+          node scripts/probe/windows-dispatch.mjs shots\dispatch-packaged-ro.json -- $exe $cli
+          "read-only dispatch through the packaged app: exit code $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { $dispatch = $LASTEXITCODE }
+          Remove-Item Env:XA_DISPATCH_RO
           & $exe $cli windows-setup | Out-Host
           "setup exit code: $LASTEXITCODE"
           foreach ($n in 1, 2) {
