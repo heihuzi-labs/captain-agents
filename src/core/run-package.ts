@@ -2,7 +2,8 @@
 import { randomUUID } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative } from 'node:path';
+import { join } from 'node:path';
+import { expandHomePath, relativeInside } from './platform.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { readJson, writeJson } from './fsx.ts';
 import type { Command, Job } from './job.ts';
@@ -20,7 +21,7 @@ type SrtPolicy = { kind: 'srt'; denyRead: string[]; allowWrite: string[]; denyWr
 type Policy = CodexPolicy | SrtPolicy;
 const fail = (why: string): never => { throw new Error(`无法确认旧隔离约束一条没丢，拒绝续接：${why}`); };
 const unique = (items: string[]) => [...new Set(items)];
-const absolute = (path: string) => path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
+const absolute = (path: string) => expandHomePath(path, homedir());
 
 // 只识别平台曾生成的这套 TOML 写法；不能完整解析的旧权限表绝不猜测。
 // 从头一条一条往后认，认完条目后剩下的必须正好是结尾（带或不带联网那一段）。
@@ -67,8 +68,7 @@ function srtPolicy(value: unknown): SrtPolicy {
 const denied = (policy: Policy) => policy.kind === 'codex'
   ? [...policy.files].filter(([, p]) => p === 'deny').map(([p]) => p) : policy.denyRead;
 function contains(root: string, path: string) {
-  const rel = relative(root, path);
-  return !!rel && !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') ? rel : undefined;
+  return relativeInside(root, path) || undefined;
 }
 async function previousPolicy(job: Job): Promise<Policy> {
   if (!job.command) return fail('没有保存上一轮的命令。');

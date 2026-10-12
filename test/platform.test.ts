@@ -1,11 +1,41 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { backgroundSpawn, findSh, isWindows, killTree, parseSnapshot, shell, treeOf, treeSpawn } from '../src/core/platform.ts';
+import { backgroundSpawn, expandHomePath, findSh, isWindows, killTree, parseSnapshot, relativeInside, samePath, shell, treeOf, treeSpawn } from '../src/core/platform.ts';
 import { alive } from '../src/core/fsx.ts';
 import { until } from './helpers.ts';
+
+for (const implementation of [posix, win32]) {
+  test(`路径包含关系（${implementation.sep}）：自身、子目录、父目录、相邻目录与规范化`, () => {
+    const root = implementation.resolve(implementation === win32 ? 'C:\\work\\repo' : '/work/repo');
+    assert.equal(relativeInside(root, root, implementation), '');
+    assert.equal(relativeInside(root, implementation.join(root, 'src', 'a.ts'), implementation), implementation.join('src', 'a.ts'));
+    assert.equal(relativeInside(root, implementation.join(root, '..inside'), implementation), '..inside');
+    for (const candidate of [implementation.dirname(root), `${root}-other`, implementation.join(root, '..', 'outside')]) {
+      assert.equal(relativeInside(root, candidate, implementation), undefined, candidate);
+    }
+    assert.equal(relativeInside(root, implementation.join(root, 'src', '..', 'a.ts'), implementation), 'a.ts');
+    assert.ok(samePath(root, `${root}${implementation.sep}.`, implementation));
+    assert.equal(samePath(root, `${root}-other`, implementation), false);
+    assert.equal(expandHomePath('~/bin/tool', root, implementation), implementation.join(root, 'bin', 'tool'));
+    assert.equal(expandHomePath('~other/bin', root, implementation), '~other/bin');
+  });
+}
+
+test('Git 副本路径比较：Windows 斜杠和大小写等价，POSIX 大小写不同不等价', () => {
+  for (const saved of ['C:\\a\\b', 'c:\\A\\b', 'C:\\a\\b\\']) assert.ok(samePath('C:/a/b', saved, win32));
+  assert.equal(samePath('/a/b', '/A/b', posix), false);
+  assert.equal(samePath('/a/b', '/a\\b', posix), false);
+  assert.equal(samePath('C:/a/b', 'D:/a/b', win32), false);
+  assert.equal(relativeInside('C:\\a', 'D:\\a\\b', win32), undefined);
+  assert.equal(relativeInside('C:\\a', 'c:/A/b', win32), 'b');
+  assert.equal(relativeInside('/a', '/A/b', posix), undefined);
+  assert.equal(relativeInside('\\\\server\\share\\repo', '//SERVER/share/repo/a', win32), 'a');
+  assert.equal(relativeInside('\\\\server\\share', '\\\\server\\other\\a', win32), undefined);
+  assert.equal(expandHomePath('~\\bin\\tool', 'C:\\Users\\owner', win32), 'C:\\Users\\owner\\bin\\tool');
+});
 
 test('进程快照只收“进程号 父进程号 创建时间”三段数字的行，认两种换行', () => {
   assert.deepEqual(parseSnapshot('4 0 100\r\n812 4 250\n\n乱码 1 2\n12 x 3\n 900 812 300 \n'), [
@@ -97,7 +127,8 @@ test('killTree：父进程先退了，留下的子孙照样收走', async () => 
     process.kill(child.pid!, 'SIGKILL');
     await until(async () => alive(child.pid), gone => !gone);
     await sleep(100);
-    assert.ok(alive(pids[1]) && alive(pids[2]), '子孙应当还在');
+    // Windows 上没脱离父进程的子进程会被系统跟着父进程一起收走（实测），所以那里不要求它们还在；之后一样要求一个不剩。
+    if (!isWindows) assert.ok(alive(pids[1]) && alive(pids[2]), '子孙应当还在');
     killTree(child.pid, 'SIGKILL', since);
     await until(async () => pids.filter(alive), left => left.length === 0);
   } finally { for (const pid of pids) try { process.kill(pid, 'SIGKILL'); } catch { /* 已经没了 */ } }
@@ -118,4 +149,17 @@ test('Windows 的 PowerShell 脚本只用 ASCII 字符：系统自带的 PowerSh
     assert.equal(bytes.findIndex(b => b > 127), -1, name);
     assert.ok(!bytes.includes(13), `${name} 里不该有回车符`);
   }
+});
+
+test('被占用时重试：只在 Windows 上、只对“没权限 / 被占用”这几个错误码重试，次数有上限', async () => {
+  const { retryBusy } = await import('../src/core/fsx.ts');
+  const failing = (codes: string[]) => { let n = 0; return { fn: async () => { const code = codes[n++]; if (code) throw Object.assign(new Error(code), { code }); return n; }, calls: () => n }; };
+  const busy = failing(['EPERM', 'EBUSY', 'EACCES']);
+  assert.equal(await retryBusy(busy.fn, true), 4);
+  const posix = failing(['EPERM']);
+  await assert.rejects(retryBusy(posix.fn, false), { code: 'EPERM' }); assert.equal(posix.calls(), 1);
+  const other = failing(['ENOENT']);
+  await assert.rejects(retryBusy(other.fn, true), { code: 'ENOENT' }); assert.equal(other.calls(), 1);
+  const stuck = failing(['EPERM', 'EPERM', 'EPERM', 'EPERM']);
+  await assert.rejects(retryBusy(stuck.fn, true, 3), { code: 'EPERM' }); assert.equal(stuck.calls(), 3);
 });

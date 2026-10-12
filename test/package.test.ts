@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, posix, win32 } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -16,23 +16,31 @@ const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 test('桌面 PATH：只追加存在的目录，保留原顺序，重复调用不重复追加', async t => {
   const home = await mkdtemp(join(tmpdir(), 'xagents-path-'));
   t.after(() => rm(home, { recursive: true, force: true }));
-  const local = join(home, '.local/bin'), grok = join(home, '.grok/bin');
+  const local = posix.join(home, '.local/bin'), grok = posix.join(home, '.grok/bin');
   await mkdir(local, { recursive: true });
   await mkdir(join(home, '.grok'));
   await writeFile(grok, '这是文件，不是目录');
   const original = `/usr/bin:/bin:${local}:/custom/bin`;
-  const first = desktopPath(original, home);
+  const first = desktopPath(original, home, undefined, posix);
   assert.deepEqual(first.split(':').slice(0, 4), original.split(':'));
   assert.equal(first.split(':').filter(p => p === local).length, 1);
   assert.ok(!first.split(':').includes(grok));
-  assert.equal(desktopPath(first, home), first);
+  assert.equal(desktopPath(first, home, undefined, posix), first);
   await rm(grok); await mkdir(grok);
   // 固定系统目录用替身，测试结果不取决于机器是否装了 Homebrew。
   const existing = new Set([local, grok, '/opt/homebrew/bin']);
   const hasDirectory = (path: string) => existing.has(path);
-  assert.equal(desktopPath(original, home, hasDirectory), `${original}:${grok}:/opt/homebrew/bin`);
-  assert.equal(desktopPath(undefined, home, hasDirectory), `${local}:${grok}:/opt/homebrew/bin`);
-  assert.equal(desktopPath('', home, () => false), '');
+  assert.equal(desktopPath(original, home, hasDirectory, posix), `${original}:${grok}:/opt/homebrew/bin`);
+  assert.equal(desktopPath(undefined, home, hasDirectory, posix), `${local}:${grok}:/opt/homebrew/bin`);
+  assert.equal(desktopPath('', home, () => false, posix), '');
+});
+
+test('Windows 桌面 PATH：保留分号、盘符和原顺序，不探测或追加 macOS 目录', () => {
+  const original = 'C:\\Windows\\System32;D:\\tools;C:/Users/owner/bin;';
+  const unexpected = () => { throw new Error('Windows 不应探测 macOS 目录'); };
+  assert.equal(desktopPath(original, 'C:\\Users\\owner', unexpected, win32), original);
+  assert.equal(desktopPath(undefined, 'C:\\Users\\owner', unexpected, win32), '');
+  assert.equal(desktopPath('', 'C:\\Users\\owner', unexpected, win32), '');
 });
 
 test('平台根目录：源码、开发构建、打包后台及运行快照各取自己的平台', async t => {

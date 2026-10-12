@@ -2,9 +2,22 @@
 // 别处不再各写各的 process.platform 判断；规则见 docs/design-windows.md 第 5 节。
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import path, { dirname, join } from 'node:path';
 
 export const isWindows = process.platform === 'win32';
+
+// 只比较路径，不访问文件系统；符号链接由调用方先 realpath。
+// 返回空串表示根目录自身，undefined 表示在外面（包括另一个盘符或 UNC 共享）。
+export function relativeInside(root: string, candidate: string, implementation = path): string | undefined {
+  const rel = implementation.relative(root, candidate);
+  return rel === '..' || rel.startsWith(`..${implementation.sep}`) || implementation.isAbsolute(rel) ? undefined : rel;
+}
+export function samePath(left: string, right: string, implementation = path): boolean {
+  return implementation.relative(left, right) === '';
+}
+export function expandHomePath(value: string, home: string, implementation = path): string {
+  return value.startsWith('~/') || value.startsWith(`~${implementation.sep}`) ? implementation.join(home, value.slice(2)) : value;
+}
 
 // 起一棵“以后要整棵停掉”的进程树（选手、验收命令、准备命令）。
 // macOS：独立进程组，之后按组停。Windows 没有进程组：不脱离父进程（父进程一退，系统会连它一起收走），也不弹控制台窗口。

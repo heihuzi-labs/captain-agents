@@ -85,7 +85,9 @@ test('cursor-sonnet 沿用 Cursor 的隔离模板，不新开模板', async t =>
   // 整个 ~/.grok 都禁读：没登录 Grok 时自检能凭“文件夹也读不到”确认挡住（2026-10-08）。
   assert.ok(file.filesystem.denyRead.includes('~/.grok') && file.filesystem.denyRead.includes('~/.ssh') && file.filesystem.denyRead.includes('~/.npmrc'));
   assert.ok(!file.filesystem.denyRead.includes('~/.cursor/cli-config.json'));
-  assert.deepEqual((await readdir(join(root, 'sandbox'))).sort(), ['cursor.json', 'grok.json']);
+  // 模板只有这两份；sandbox/windows 放的是 Windows 上装隔离用的脚本，不是模板。
+  assert.deepEqual((await readdir(join(root, 'sandbox'))).sort(), ['cursor.json', 'grok.json', 'windows']);
+  assert.deepEqual((await readdir(join(root, 'sandbox', 'windows'))).sort(), ['loopback-fence.ps1', 'setup.ps1']);
 });
 test('四种命令使用指定安全参数、模型、输入输出和环境变量', async t => {
   const c = await context(t, false); process.env.XAGENTS_HOME = c.home;

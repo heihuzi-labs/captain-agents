@@ -7,7 +7,7 @@ import { hasCode, writeAtomic } from './fsx.ts';
 import { jobDir } from './paths.ts';
 import type { Job } from './job.ts';
 import { updateJob } from './job.ts';
-import { killTree, shell, treeSpawn } from './platform.ts';
+import { killTree, samePath, shell, treeSpawn } from './platform.ts';
 
 export async function git(repo: string, args: string[], allowed = [0]): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -92,7 +92,7 @@ export async function saveDiff(job: Job) {
 export async function removeWorktree(job: Pick<Job, 'repo' | 'worktree' | 'branch' | 'chat'>) {
   if (job.chat) return; // 群副本和分支归群所有，只有 cleanChat 能删除。
   const entries = (await git(job.repo, ['worktree', 'list', '--porcelain', '-z'])).split('\0');
-  if (entries.includes(`worktree ${job.worktree}`)) await git(job.repo, ['worktree', 'remove', '--force', job.worktree]);
+  if (entries.some(entry => entry.startsWith('worktree ') && samePath(entry.slice('worktree '.length), job.worktree))) await git(job.repo, ['worktree', 'remove', '--force', job.worktree]);
   else {
     try { await lstat(job.worktree); throw new Error(`目录 ${job.worktree} 仍存在但不属于登记的 Git 副本，请先人工检查。`); }
     catch (e) { if (!hasCode(e, 'ENOENT')) throw e; }
