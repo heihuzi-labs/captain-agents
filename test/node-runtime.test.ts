@@ -3,8 +3,18 @@ import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { externalEnvironment, nodeCommand, nodeInvocation, nodeRunner } from '../src/core/node-runtime.ts';
+import { backgroundEnvironment, externalEnvironment, nodeCommand, nodeInvocation, nodeRunner } from '../src/core/node-runtime.ts';
+import { paths } from '../src/core/paths.ts';
 import { context, exec, root, until } from './helpers.ts';
+
+// 看管进程、推进进程跑的是代码快照，快照里没有 node_modules：少了这个变量，Windows 上它们停不了选手。
+test('后台进程的环境：带上登记处；Windows 上另外带上调系统接口用的模块在安装目录的位置，已经指过的原样往下传', () => {
+  const env = { PATH: '/bin', XAGENTS_HOME: 'elsewhere' };
+  assert.deepEqual(backgroundEnvironment(env, false), { PATH: '/bin', XAGENTS_HOME: paths().home });
+  assert.deepEqual(backgroundEnvironment(env, true), { PATH: '/bin', XAGENTS_HOME: paths().home, XAGENTS_KOFFI: join(root, 'node_modules', 'koffi') });
+  assert.equal(backgroundEnvironment({ XAGENTS_KOFFI: join('install', 'node_modules', 'koffi') }, true).XAGENTS_KOFFI, join('install', 'node_modules', 'koffi'));
+  assert.deepEqual(env, { PATH: '/bin', XAGENTS_HOME: 'elsewhere' });
+});
 
 test('Node 运行器：命令行与 Electron 返回正确程序、环境，不改继承环境', () => {
   const env = { PATH: '/bin', ELECTRON_RUN_AS_NODE: '0', OTHER: 'keep' };

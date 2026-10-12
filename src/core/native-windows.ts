@@ -10,8 +10,8 @@ import { toolRoot } from './paths.ts';
 type Koffi = typeof import('koffi');
 export type ProcessRow = { pid: number; parent: number; created: number };
 
-// 调系统接口用的模块（koffi）在安装目录的 node_modules 里。群和小队的推进进程跑的是代码快照，快照不带 node_modules：
-// 和 srt 一样，由起它的一方用环境变量告诉它模块在哪（wake.ts 的 engineEnvironment）。
+// 调系统接口用的模块（koffi）在安装目录的 node_modules 里。平台的后台进程跑的是代码快照，快照不带 node_modules：
+// 由起它的一方用环境变量告诉它模块在哪（node-runtime.ts 的 backgroundEnvironment）。每件活的看管进程也是从快照里跑的。
 export const koffiPath = (env: NodeJS.ProcessEnv = process.env): string => env.XAGENTS_KOFFI || join(toolRoot, 'node_modules', 'koffi');
 let loaded: Koffi | undefined;
 function koffi(): Koffi {

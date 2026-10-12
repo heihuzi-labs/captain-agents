@@ -1,5 +1,5 @@
 import { checkListed, listedProviders } from './listed.ts';
-import { nodeCommand } from './node-runtime.ts';
+import { backgroundEnvironment, nodeCommand } from './node-runtime.ts';
 import { backgroundSpawn, samePath } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { open, realpath } from 'node:fs/promises';
@@ -32,7 +32,7 @@ export async function launch(job: Job, cli: string) {
   try {
     await updateJob(job.id, async current => {
       if (current.state !== 'queued') return;
-      const node = nodeCommand([cli, job.id], { ...process.env, XAGENTS_HOME: paths().home });
+      const node = nodeCommand([cli, job.id], backgroundEnvironment());
       const child = spawn(node.file, node.args, { ...backgroundSpawn(), stdio: ['ignore', fd.fd, fd.fd], env: node.env });
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
       current.pid = child.pid;

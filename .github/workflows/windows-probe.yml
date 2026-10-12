@@ -38,6 +38,14 @@ jobs:
         with:
           node-version: 24
 
+      # The platform runs from the source tree here; on Windows it needs the module that calls the system directly.
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.33.2
+          pnpm install --frozen-lockfile
+
       - name: Install the Codex command line (official installer)
         shell: pwsh
         run: |

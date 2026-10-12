@@ -407,7 +407,7 @@ Codex 桌面应用（商店包）在 Windows 上的情况（依据是另一个�
 
 **加了一个依赖**：`koffi`（让 Node 直接调系统接口的模块，开源，MIT 许可）。Node 24 自己没有这个功能。版本写死；它的安装脚本不运行（用的是它随包发的编译产物）。只在 Windows 上加载，macOS 的安装包不带它。
 
-**安装包里怎么放**：这个模块不打进桌面应用的主程序，和 srt 一样放在应用的平台目录里（`resources/platform/node_modules`），主程序和命令行都从那里取。它找自己的编译产物时只看同一个文件夹里的邻居，所以两个包并排放（`scripts/prepare-platform.mjs`）；打包时核对两个包都在、版本一致，缺了不出包。群和小队的推进进程跑的是代码快照，快照不带 `node_modules`：和 srt 一样，由起它的一方用环境变量（`XAGENTS_KOFFI`）告诉它模块在哪。
+**安装包里怎么放**：这个模块不打进桌面应用的主程序，和 srt 一样放在应用的平台目录里（`resources/platform/node_modules`），主程序和命令行都从那里取。它找自己的编译产物时只看同一个文件夹里的邻居，所以两个包并排放（`scripts/prepare-platform.mjs`）；打包时核对两个包都在、版本一致，缺了不出包。平台的后台进程（每件活的看管进程、群和小队的推进进程）跑的是代码快照，快照不带 `node_modules`：由起它的一方用环境变量（`XAGENTS_KOFFI`）告诉它模块在哪，只在一处写（`node-runtime.ts` 的 `backgroundEnvironment`）。第一版漏了看管进程这一路，Windows 流水线的测试当场拦住。
 
 **实测**：三台 Windows 机器，新旧做法逐项对照，带管理员身份和不带各一遍，再用装好的应用自己的程序跑一遍，全部一致。见 [research/windows-native-2026-10-13.md](research/windows-native-2026-10-13.md)。
 
