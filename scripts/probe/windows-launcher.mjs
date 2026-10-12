@@ -16,16 +16,16 @@ for (const file of files) await fs.writeFile(file.path, file.content);
 
 const env = { ...process.env, XAGENTS_HOME: path.join(bin, 'registry') };
 delete env.ELECTRON_RUN_AS_NODE;
-const run = (file, args) => {
-  const r = spawnSync(file, args, { env, encoding: 'utf8', timeout: 60_000, windowsHide: true });
+const run = (file, args, verbatim = false) => {
+  const r = spawnSync(file, args, { env, encoding: 'utf8', timeout: 60_000, windowsHide: true, windowsVerbatimArguments: verbatim });
   return { exit: r.status, error: r.error?.message ?? null, stdout: (r.stdout ?? '').slice(0, 300), stderr: (r.stderr ?? '').slice(0, 300) };
 };
 const cmd = path.join(bin, 'xagents.cmd'), sh = path.join(bin, 'xagents').replaceAll('\\', '/');
 const result = { executable, nonAscii: /[^\x00-\x7f]/.test(executable), cases: {
   '当前代码页': run('cmd.exe', ['/d', '/c', 'chcp']),
   '命令提示符（当前代码页）': run('cmd.exe', ['/d', '/c', cmd, '--help']),
-  '命令提示符（简体中文代码页 936）': run('cmd.exe', ['/d', '/c', `chcp 936 >nul & "${cmd}" --help`]),
-  '命令提示符（代码页 65001）': run('cmd.exe', ['/d', '/c', `chcp 65001 >nul & "${cmd}" --help`]),
+  '命令提示符（简体中文代码页 936）': run('cmd.exe', ['/d', '/s', '/c', `"chcp 936 >nul & call "${cmd}" --help"`], true),
+  '命令提示符（代码页 65001）': run('cmd.exe', ['/d', '/s', '/c', `"chcp 65001 >nul & call "${cmd}" --help"`], true),
   'PowerShell': run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `& '${cmd}' --help; exit $LASTEXITCODE`]),
   'Git 的终端': run('bash.exe', ['-lc', `'${sh}' --help`]),
 } };

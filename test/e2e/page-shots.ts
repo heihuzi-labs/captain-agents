@@ -1,8 +1,11 @@
 // 负责人整页整页看界面用：启动真实窗口，把四个页面、设置各分页、任务弹窗，按浅色、深色、几种屏幕缩放、窄窗口各截一张。
 // 登记处是临时的，里面是几件替身活；不碰这台机器上真实的数据。不进 verify。
-// 用法：node test/e2e/page-shots.ts <输出目录> [--app <打包后的可执行文件>] [--scales 1,1.25,1.5]
+// 用法：node test/e2e/page-shots.ts <输出目录> [--app <打包后的可执行文件>] [--scales 1,1.25,1.5] [--as-windows]
 //   不写 --app 就启动 out/main/index.js（先 npm run build）。第一个缩放截全套，其余缩放只截浅色的几张。
-// 截的是页面：系统画的窗口按钮、托盘不在图里，那些要在真机上看（docs/design-windows.md 第 11.2 节）。
+//   --as-windows：在别的系统上把页面标成 Windows，只为看排版（字号、滚动条）；字体渲染要在真的 Windows 上看。
+// 截的是页面，系统画的窗口按钮不在图里。在 Windows 上、缩放是 1 的那一轮另外把窗口亮出来截两张屏幕（平常和开着弹窗），
+// 用来看窗口按钮那一块；托盘、通知仍要在真机上看（docs/design-windows.md 第 11.2 节）。
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
@@ -13,6 +16,10 @@ import type { Job } from '../../src/core/job.ts';
 const args = process.argv.slice(2), option = (name: string) => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
 const output = resolve(args[0] ?? 'test/e2e/artifacts'), executable = option('--app');
 const scales = (option('--scales') ?? '1').split(',').map(Number).filter(n => n > 0);
+const asWindows = args.includes('--as-windows');
+// 截整个屏幕（系统自带的 PowerShell）：页面截图里没有系统画的窗口按钮。
+const screen = (file: string) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+  `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; $i=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($i); $g.CopyFromScreen($b.Left,$b.Top,0,0,$i.Size); $i.Save('${file.replaceAll("'", "''")}')`], { timeout: 30_000 });
 const temp = await mkdtemp(join(tmpdir(), 'xagents-page-shots-'));
 const home = join(temp, 'registry');
 for (const dir of ['jobs', 'batches', 'cache', 'icons', 'projects']) await mkdir(join(home, dir), { recursive: true });
@@ -58,9 +65,12 @@ try {
       const page = await app.firstWindow();
       await page.waitForSelector('[data-testid="running"]', { timeout: 90_000 });
       const resize = (width: number, height: number) => app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setSize(w, h), [width, height]);
+      // Windows 上藏着的窗口过一会儿就不出画面了，截图会一直等：把窗口亮出来（不抢焦点）。
+      if (process.platform === 'win32') await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive());
       await resize(1180, 820);
       await page.evaluate(() => localStorage.setItem('xa.done-expanded', JSON.stringify(['记账应用', '官网改版'])));
       await page.reload(); await page.waitForSelector('[data-testid="running"]');
+      if (asWindows) await page.evaluate(() => { document.documentElement.dataset.platform = 'windows'; });
       const shot = async (name: string) => {
         await page.waitForTimeout(300);
         await page.waitForFunction(() => !document.querySelector('.logo img[data-state="pending"]'));
@@ -90,6 +100,15 @@ try {
         await page.getByRole('button', { name: '设置' }).click();
         await page.getByRole('dialog').getByRole('tab', { name: '选手与模型', exact: true }).click(); await shot('narrow-settings-2');
         await page.keyboard.press('Escape');
+      }
+      if (process.platform === 'win32' && scale === 1) {
+        for (const theme of ['light', 'dark'] as const) {
+          await page.emulateMedia({ colorScheme: theme });
+          await app.evaluate(({ BrowserWindow, nativeTheme }, dark) => { nativeTheme.themeSource = dark ? 'dark' : 'light'; const w = BrowserWindow.getAllWindows()[0]; w.setBounds({ x: 0, y: 0, width: 980, height: 700 }); w.show(); w.focus(); }, theme === 'dark');
+          await top('看板'); await page.waitForTimeout(800); screen(join(output, `window-${theme}.png`));
+          await page.getByRole('button', { name: '设置' }).click(); await page.waitForTimeout(800); screen(join(output, `window-${theme}-modal.png`));
+          await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+        }
       }
     } finally { await app.close().catch(() => {}); }
   }

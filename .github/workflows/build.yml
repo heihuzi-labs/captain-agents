@@ -116,15 +116,12 @@ jobs:
           mkdir -p shots
           node test/e2e/packaged.ts "$APP_EXECUTABLE" "$EXPECTED_TARGET" "shots/${{ matrix.target }}.png"
 
-      # For the lead to look at, never a reason to fail the build (docs/design-windows.md section 11):
-      # whole pages at several display scales, and whether the command line launcher the app writes starts
-      # from each kind of terminal.
-      - name: Page screenshots and the launcher check (Windows)
+      # For the lead to look at, never a reason to fail the build (docs/design-windows.md section 11.1):
+      # does the command line launcher the app writes start from each kind of terminal.
+      - name: Launcher check (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: |
-          node test/e2e/page-shots.ts shots --app "$APP_EXECUTABLE" --scales 1.25,1,1.5 || echo "page screenshots did not finish"
-          node scripts/probe/windows-launcher.mjs "$APP_EXECUTABLE" shots/launcher.json || echo "launcher check did not finish"
+        run: node scripts/probe/windows-launcher.mjs "$APP_EXECUTABLE" shots/launcher.json || echo "launcher check did not finish"
 
       - name: Print size and SHA-256
         shell: bash

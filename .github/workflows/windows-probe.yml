@@ -107,6 +107,55 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # Whole pages at several display scales, for the lead to look at (docs/design-windows.md section 11.2).
+  # The app is built but not packed, so a round takes a few minutes.
+  page-shots:
+    name: Page screenshots (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.33.2
+          pnpm install --frozen-lockfile
+
+      - name: Build
+        shell: bash
+        run: npm run build
+
+      # The default screen of a runner is smaller than the window the screenshots use.
+      - name: Make the screen larger
+        shell: pwsh
+        run: |
+          try { Set-DisplayResolution -Width 1920 -Height 1080 -Force } catch { "could not change the resolution: $_" }
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.SystemInformation]::VirtualScreen
+
+      - name: Take the screenshots
+        shell: bash
+        run: node test/e2e/page-shots.ts shots --scales 1.25,1,1.5
+
+      - name: Upload the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: page-shots
+          path: shots/*
+          if-no-files-found: warn
+          retention-days: 14
+
   # The suites take a long time; on a push they run only when the commit message says [tests].
   # Three copies side by side: a test that only fails now and then shows up sooner.
   tests:

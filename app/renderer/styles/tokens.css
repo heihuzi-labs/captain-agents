@@ -63,4 +63,11 @@
 }
 
 /* Windows：窗口的三个按钮由系统画在顶栏右上角，左边不用留位置，右边留出它们的宽度（docs/ui-spec.md 第 11 节）。 */
-:root[data-platform="windows"] { --titlebar-inset: var(--sp-4); --titlebar-right: 148px; }
+:root[data-platform="windows"] {
+  --titlebar-inset: var(--sp-4); --titlebar-right: 148px;
+  /* 字体、字号按 Windows 自己的来（docs/ui-spec.md 第 2 节“Windows 上不一样的地方”）：中文明写微软雅黑，五档字号各加 1px。 */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace;
+  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-xl: 19px;
+  color-scheme: light dark;
+}
