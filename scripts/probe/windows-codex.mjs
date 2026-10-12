@@ -225,6 +225,26 @@ async function outer(codex, resultFile) {
     await sandboxCase('codex-home:deny-all', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[codexHome, 'deny']]), '-c', envPolicy]);
     await sandboxCase('codex-home:deny-all-but-helpers', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[codexHome, 'deny'], [path.join(codexHome, '.sandbox-bin'), 'read'], [path.join(codexHome, '.sandbox'), 'read']]), '-c', envPolicy]);
     await sandboxCase('codex-home:deny-files', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[path.join(codexHome, 'auth.json'), 'deny'], [path.join(codexHome, 'sessions'), 'deny'], [path.join(codexHome, 'config.toml'), 'deny'], [path.join(codexHome, 'does-not-exist.json'), 'deny'], [path.join(home, '.xagents-probe-missing-dir'), 'deny']]), '-c', envPolicy]);
+    // 两件活互不相干吗：隔离里都是同一个专用账户，上一件活放开的写权限会不会留给下一件。
+    // 第二件活用另一个副本、另一个临时目录，去写第一件活的副本和临时目录（都必须写不进），也读一读（读得到是意料之中）。
+    const worktree2 = path.join(base, 'worktree-2'), tmp2 = path.join(base, 'job-tmp-2');
+    await fs.mkdir(worktree2); await fs.mkdir(tmp2);
+    const spec2 = { ...spec, write: { worktree: worktree2, tmp: tmp2, 'first-worktree': worktree, 'first-tmp': tmp, home, 'shared-authenticated': shared.authenticated.dir },
+      read: { 'first-worktree-file': specFile }, list: { 'first-worktree': worktree }, commands: {} };
+    const specFile2 = path.join(worktree2, 'spec.json'); await fs.writeFile(specFile2, JSON.stringify(spec2));
+    const probe2 = path.join(worktree2, 'probe.mjs'); await fs.copyFile(self, probe2);
+    const profile2 = `permissions.xa={extends=":workspace",filesystem={${[[secretDir, 'deny'], [':tmpdir', 'read'], [tmp2, 'write']].map(([p, v]) => `${toml(p)}="${v}"`).join(',')}}}`;
+    for (const [name, home2] of [['second-job:same-codex-home', codexHome], ['second-job:other-codex-home', otherHome]]) {
+      const env2 = { ...env, CODEX_HOME: home2, TEMP: tmp2, TMP: tmp2, TMPDIR: tmp2 };
+      const r = await run(codex, ['-c', 'windows.sandbox="elevated"', 'sandbox', '-P', 'xa', '-C', worktree2, '-c', profile2, '-c', envPolicy, '--', process.execPath, probe2, '--inner', specFile2], { cwd: worktree2, env: env2, timeout: 180_000 });
+      const line = r.stdout.split(/\r?\n/).find(l => l.startsWith(MARK));
+      result.cases[name] = { run: brief(r), probes: line ? JSON.parse(line.slice(MARK.length)) : null };
+      console.log(`[${name}] 退出码 ${r.exit}`);
+    }
+    result.aclAfter = {};
+    for (const [name, dir] of [['worktree', worktree], ['worktree2', worktree2], ['tmp', tmp], ['secret', secretDir]]) result.aclAfter[name] = (await run('icacls.exe', [dir])).stdout.trim().slice(0, 1500);
+    result.capSid = await fs.readFile(path.join(codexHome, 'cap_sid'), 'utf8').catch(() => null);
+    result.denyState = await fs.readFile(path.join(codexHome, '.sandbox', 'deny_read_acl_state.json'), 'utf8').catch(() => null);
     // 一次装齐的脚本：换两个新的 Codex 文件夹，走“提权后调用”的那条路（流水线的机器本来就是管理员，不会弹窗）。
     const homes = [path.join(base, 'setup-home-1'), path.join(base, 'setup-home-2')];
     for (const dir of homes) await fs.mkdir(dir);
