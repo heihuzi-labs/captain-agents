@@ -344,7 +344,7 @@ test('Cursor 状态目录够短：长任务号也不会让 cursor-agent 退到�
   process.env.XAGENTS_HOME = c.home;
 });
 
-test('DeepSeek 登录和派活前的登录检查：钥匙只经标准输入给 Codex，用单独的 Codex 文件夹，不带别家的钥匙变量', { skip: process.platform === 'win32' ? '只属于 macOS：此替身依赖 shebang 直接启动，loginDeepseek 按文件名 spawn 且不支持注入执行器' : false }, async t => {
+test('DeepSeek 登录和派活前的登录检查：钥匙只经标准输入给 Codex，用单独的 Codex 文件夹，不带别家的钥匙变量', async t => {
   const c = await context(t, false);
   const oldHome = process.env.XAGENTS_HOME, oldCodex = process.env.XAGENTS_CODEX, oldKeys = KEY_VARS.map(k => process.env[k]);
   // 替身 Codex：记下参数、标准输入、Codex 文件夹和继承到的钥匙变量；login status 时按“已登录”回答。

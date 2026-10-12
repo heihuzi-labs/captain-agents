@@ -52,7 +52,8 @@ function deepseekArgs(env: Record<string, string>) {
 // 派 DeepSeek 活前在隔离外查一次登录；没登录就不派，提示主人自己登录（钥匙只有主人能拿到）。
 export async function checkDeepseekLogin(run: Executor = execute) {
   await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
-  const r = await run(codexPath(), ['login', 'status', ...DEEPSEEK_LOGIN], deepseekHome(), 20_000, undefined, deepseekEnv());
+  const status = codexLaunch(['login', 'status', ...DEEPSEEK_LOGIN]);
+  const r = await run(status.file, status.args, deepseekHome(), 20_000, undefined, deepseekEnv());
   if (r.exit !== 0 || r.timedOut || r.error || !/API key/i.test(r.output)) {
     throw new Error('DeepSeek 还没登录，这件没有派出。请主人在终端运行 xagents login deepseek，按提示粘贴 DeepSeek 的 API 钥匙。');
   }
@@ -63,7 +64,8 @@ export async function loginDeepseek(key: string) {
   if (!/^sk-[A-Za-z0-9_-]{8,}$/.test(key)) throw new Error('这不像 DeepSeek 的 API 钥匙（应以 sk- 开头），没有保存。');
   await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
   const ok = await new Promise<boolean>((done, fail) => {
-    const child = spawn(codexPath(), ['login', '--with-api-key', ...DEEPSEEK_LOGIN], { cwd: deepseekHome(), env: { ...externalEnvironment(), ...deepseekEnv() }, stdio: ['pipe', 'ignore', 'ignore'] });
+    const login = codexLaunch(['login', '--with-api-key', ...DEEPSEEK_LOGIN]);
+    const child = spawn(login.file, login.args, { cwd: deepseekHome(), env: { ...externalEnvironment(), ...deepseekEnv() }, stdio: ['pipe', 'ignore', 'ignore'] });
     child.once('error', fail); child.once('close', code => done(code === 0));
     child.stdin.end(key + '\n');
   });
@@ -107,6 +109,11 @@ export async function checkCursorLogin(run: Executor = execute) {
 export const codexPath = () => process.env.XAGENTS_CODEX || (isWindows
   ? join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe')
   : '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex');
+// XAGENTS_CODEX 指向 .cjs / .mjs 脚本（测试替身）时用 Node 来跑：Windows 上不能直接启动脚本文件。
+export function codexLaunch(args: string[]): { file: string; args: string[] } {
+  const file = codexPath();
+  return /\.[cm]js$/.test(file) ? { file: process.execPath, args: [file, ...args] } : { file, args };
+}
 // Windows 上 Codex 有三种隔离做法，只有“管理员装一次、换专用账户来跑”的那种够得着底线（design-windows.md 4.1），启动时明写用它。
 // 不写的话，可写副本会被悄悄降成只读。
 export const WINDOWS_SANDBOX = ['-c', 'windows.sandbox="elevated"'];

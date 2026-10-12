@@ -41,7 +41,7 @@ export async function setup(job: Pick<Job, 'worktree'> & { id?: string }, comman
         if (j && j.state !== 'queued') return;
         const sh = shell(command);
         since = Date.now();
-        const child = spawn(sh.file, sh.args, { cwd: job.worktree, env: { ...externalEnvironment(), ...sh.env }, ...treeSpawn(), stdio: ['ignore', fd.fd, fd.fd] });
+        const child = spawn(sh.file, sh.args, { cwd: job.worktree, env: externalEnvironment(), ...treeSpawn(), stdio: ['ignore', fd.fd, fd.fd] });
         pid = child.pid;
         if (j) { j.setupPid = pid; j.setupSince = since; }
         finished = new Promise<void>((resolve, reject) => {

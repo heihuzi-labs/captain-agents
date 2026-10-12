@@ -116,7 +116,7 @@ export async function executeLogged(cmd: string, cwd: string, minutes: number, f
   const sh = shell(cmd);
   try { result = await run(sh.file, sh.args, cwd, minutes * 60000, text => {
     pending = pending.then(async () => { if (!logError) await fd.write(text); }).catch(e => { logError = e; });
-  }, sh.env); } catch (e) { result = { exit: null, timedOut: false, output: '', error: (e as Error).message }; }
+  }); } catch (e) { result = { exit: null, timedOut: false, output: '', error: (e as Error).message }; }
   await pending;
   if (logError) result.error = `写${logLabel}日志失败：${String(logError)}`;
   return result;
