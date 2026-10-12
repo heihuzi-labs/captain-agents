@@ -56,9 +56,22 @@ export async function stop(id: string) {
       finish(j, 'stopped');
     });
   }
-  const deadline = Date.now() + 10_000;
+  const started = Date.now(), deadline = started + 10_000;
+  let forced = false;
   while ((await selectJobs(id)).some(active)) {
     if (Date.now() >= deadline) throw new Error('停止请求已经发出，但看管进程尚未收尾。请查看 supervisor.log 后再运行 status。');
+    // Windows：看管进程 5 秒还没自己收尾（卡住了，或还没走到会看停止记号的地方），就和 macOS 上发信号的结果一样：
+    // 直接结束它，再停一遍选手的进程树，由这里记成“被停止”。
+    if (isWindows && !forced && Date.now() - started >= 5000) {
+      forced = true;
+      for (const job of await selectJobs(id)) await updateJob(job.id, j => {
+        if (!active(j)) return;
+        if (alive(j.pid)) { try { process.kill(j.pid!, 'SIGKILL'); } catch (e) { if (!hasCode(e, 'ESRCH')) throw e; } }
+        killGroup(j.setupPid, 'SIGKILL', j.setupSince);
+        killGroup(j.workerPid, 'SIGKILL', j.workerSince);
+        finish(j, 'stopped');
+      });
+    }
     await sleep(50);
   }
   await reconcileSafely();

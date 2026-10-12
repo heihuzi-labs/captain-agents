@@ -71,8 +71,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # The suites take a long time; on a push they run only when the commit message says [tests].
   tests:
     name: Test suites (windows-2022)
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[tests]')
     runs-on: windows-2022
     timeout-minutes: 60
     steps:

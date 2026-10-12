@@ -1,4 +1,4 @@
-import { isAbsolute, join, normalize, resolve } from 'node:path';
+import { isAbsolute, join, normalize, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
 import { readJson } from './fsx.ts';
@@ -99,13 +99,16 @@ export async function grokSessionDirs(worktree: string) {
   const real = await realpath(worktree).catch(() => worktree);
   checkRoot(real, '副本的真实路径');
   const names = [...new Set([worktree, real].flatMap(p => [encodeURIComponent(p), strict(p)]))].filter(name => !hasGlob(name));
-  for (const name of names) if (!name.startsWith('%2F') || name.includes('/')) throw new Error(`Grok 会话文件夹名不对：${name}`);
+  // 转义后的名字里不能再有路径分隔符；macOS 上还必须以转义后的 / 开头（绝对路径）。Windows 上 Grok 的写法没有实测过，
+  // 平台在 Windows 上不开 Grok 这一路（docs/design-windows.md 第 3 节），这里只保证算出来的名字不会指到别的目录去。
+  for (const name of names) if ((sep === '/' && !name.startsWith('%2F')) || /[\\/]/.test(name)) throw new Error(`Grok 会话文件夹名不对：${name}`);
   return names.map(name => join(root, name));
 }
 const hasGlob = (p: string) => /[*?[\]]/.test(p);
 // 放开写的每一处都必须是规范的绝对路径、不是根目录、不含通配符，免得展开后比本意更宽。
 function checkRoot(path: string, what: string) {
-  if (!isAbsolute(path) || normalize(path) !== path || path === '/' || path.endsWith('/') || hasGlob(path)) {
+  // 根目录（/ 或 C:\）和结尾带分隔符的写法都不收。
+  if (!isAbsolute(path) || normalize(path) !== path || parse(path).root === path || path.endsWith(sep) || path.endsWith('/') || hasGlob(path)) {
     throw new Error(`${what}必须是规范的绝对路径、不含 * ? [ ]：${JSON.stringify(path)}。`);
   }
 }
