@@ -32,6 +32,7 @@ export const windowsGlobalTargets = () => [...globalTargets,
   { name: 'powershell-profile', path: 'Documents/PowerShell', dir: true, label: '写 PowerShell 配置文件夹' },
   { name: 'powershell-profile-5', path: 'Documents/WindowsPowerShell', dir: true, label: '写旧版 PowerShell 配置文件夹' },
   { name: 'codex-install', path: 'AppData/Local/Programs/OpenAI/Codex', dir: true, label: '改 Codex 程序' },
+  { name: 'codex-app-bin', path: 'AppData/Local/OpenAI/Codex', dir: true, label: '改 Codex 桌面应用放的程序' },
   { name: 'cursor-install-windows', path: 'AppData/Local/cursor-agent', dir: true, label: '改 Cursor 程序（Windows 的安装位置）' },
 ];
 // 公用的可写位置：主人自己的临时目录（里面有负责人会话的草稿和别的程序的临时文件）、Windows 的临时目录、
@@ -209,7 +210,7 @@ export async function windowsCodexSelfcheck(run: Executor): Promise<IsolationRes
   const isolation = 'codex' as const;
   const fail = (error: string): IsolationResult => ({ isolation, probes: [], error });
   const codex = codexPath();
-  try { await access(codex); } catch { return fail(`找不到 Codex 程序（${codex}）。请先安装 Codex 命令行，或用 XAGENTS_CODEX 指明 codex.exe 的位置`); }
+  try { await access(codex); } catch { return fail(`找不到 Codex 程序（${codex}）。请先安装 Codex 桌面应用或命令行并打开一次，或用 XAGENTS_CODEX 指明 codex.exe 的位置`); }
   try { if (!(await lstat(probeHome())).isDirectory()) return fail(NOT_INSTALLED); } catch { return fail(NOT_INSTALLED); }
   const home = homedir(), ownerTmp = await realpath(tmpdir()).catch(() => tmpdir());
   const temp = await realpath(await mkdtemp(join(paths().cache, 'selfcheck-')));

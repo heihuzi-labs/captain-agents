@@ -1,7 +1,7 @@
 import { nodeRunner, externalEnvironment } from './node-runtime.ts';
 import { spawn } from 'node:child_process';
 import { access, mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
 import { homedir } from 'node:os';
 import { jobDir, paths, toolRoot } from './paths.ts';
 import { readOptional, withLock } from './fsx.ts';
@@ -17,6 +17,7 @@ import { codexEnvPolicy } from './env.ts';
 import type { Isolated } from './sandbox.ts';
 import { allowedEfforts, fastWhos, isWho, isolationOf, launchModel, spec, supportsFast, vendorOf, whos } from './roster.ts';
 import type { Effort } from './roster.ts';
+import { readdirSync, statSync } from 'node:fs';
 import { isWindows } from './platform.ts';
 import { codexEndpoint, official } from './endpoint.ts';
 
@@ -106,9 +107,22 @@ export async function checkCursorLogin(run: Executor = execute) {
   catch (e) { throw new Error(`这件没有派出：${(e as Error).message}`); }
 }
 // 本机 Codex 不在 PATH 上，派活和查模型用同一个取路径的地方；XAGENTS_CODEX 可覆盖。
-// Windows 上是官方安装脚本装的位置（实测，docs/research/windows-codex-sandbox-2026-10-12.md）；只认 .exe。
+// Windows 上 Codex 程序可能在两处，只认 .exe（docs/design-windows.md 第 11.4 节）：
+// 一是官方安装脚本装的命令行（实测，docs/research/windows-codex-sandbox-2026-10-12.md）；
+// 二是 Codex 桌面应用自己放的那一份：应用把程序放在 <本机应用数据>\OpenAI\Codex\bin\<一串十六进制>\codex.exe，每个版本一个文件夹，取最新的。
+// 桌面应用安装包里的那一份（Program Files\WindowsApps 下）系统不让直接运行，不用它。两处都没有时返回第一处，报错里好写明该装到哪。
+export function windowsCodexPath(local: string, list: (dir: string) => string[] = dir => readdirSync(dir), modified: (file: string) => number | null = file => { try { const s = statSync(file); return s.isFile() ? s.mtimeMs : null; } catch { return null; } }): string {
+  const cli = win32.join(local, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe');
+  if (modified(cli) !== null) return cli;
+  const bin = win32.join(local, 'OpenAI', 'Codex', 'bin');
+  let names: string[] = [];
+  try { names = list(bin); } catch { /* 没装桌面应用 */ }
+  const found = names.filter(name => /^[0-9a-f]{8,64}$/i.test(name)).map(name => { const file = win32.join(bin, name, 'codex.exe'); return { file, at: modified(file) }; })
+    .filter((x): x is { file: string; at: number } => x.at !== null).sort((a, b) => b.at - a.at || a.file.localeCompare(b.file));
+  return found[0]?.file ?? cli;
+}
 export const codexPath = () => process.env.XAGENTS_CODEX || (isWindows
-  ? join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe')
+  ? windowsCodexPath(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'))
   : '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex');
 // XAGENTS_CODEX 指向 .cjs / .mjs 脚本（测试替身）时用 Node 来跑：Windows 上不能直接启动脚本文件。
 export function codexLaunch(args: string[]): { file: string; args: string[] } {

@@ -416,3 +416,16 @@ test('Cursor 的登录：在隔离外从钥匙串取，取不到、快过期都�
   await assert.rejects(cursorToken(run(0, token(now / 1000 + 7199)), now), /剩不到 2 小时[\s\S]*cursor-agent login/);
   await assert.rejects(checkCursorLogin(run(44, '')), /这件没有派出：没在钥匙串里找到/);
 });
+
+test('Windows 上找 Codex 程序：先认安装脚本装的命令行，再认桌面应用自己放的那一份（取最新的版本），都没有时指向命令行该装的位置', async () => {
+  const { windowsCodexPath } = await import('../src/core/workers.ts');
+  const local = 'C:\\Users\\me\\AppData\\Local', cli = `${local}\\Programs\\OpenAI\\Codex\\bin\\codex.exe`, bin = `${local}\\OpenAI\\Codex\\bin`;
+  const files: Record<string, number> = { [`${bin}\\aaaaaaaaaaaaaaaa\\codex.exe`]: 10, [`${bin}\\bbbbbbbbbbbbbbbb\\codex.exe`]: 30, [`${bin}\\not-a-version\\codex.exe`]: 99 };
+  const list = (dir: string) => { if (dir !== bin) throw new Error('ENOENT'); return ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc', 'not-a-version', 'readme.txt']; };
+  const modified = (file: string) => files[file] ?? null;
+  assert.equal(windowsCodexPath(local, list, modified), `${bin}\\bbbbbbbbbbbbbbbb\\codex.exe`, '桌面应用放的，取最新的；名字不像版本文件夹的不认');
+  files[cli] = 1;
+  assert.equal(windowsCodexPath(local, list, modified), cli, '装了命令行就用命令行');
+  assert.equal(windowsCodexPath(local, () => { throw new Error('ENOENT'); }, () => null), cli, '都没有：指向命令行该装的位置');
+  assert.equal(windowsCodexPath(local, () => ['aaaaaaaaaaaaaaaa'], () => null), cli, '版本文件夹里没有程序也不算');
+});

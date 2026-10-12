@@ -1,6 +1,6 @@
 # 选手按这台电脑的实际情况来；Codex 接什么接口都能派
 
-**状态：** 主人 2026-10-12 点头，按第 6 节分工在做。探针已跑（[research/codex-endpoint-2026-10-12.md](research/codex-endpoint-2026-10-12.md)，macOS 和三台 Windows 机器结论一致）；规则二已实现，规则一、三和手动添加模型名在做。
+**状态：** 主人 2026-10-12 点头后已实现：三条规则、手动添加模型名、界面，都在分支上，macOS 上整套验收通过，Windows 流水线上核心测试和界面测试通过。探针见 [research/codex-endpoint-2026-10-12.md](research/codex-endpoint-2026-10-12.md)（macOS 和三台 Windows 机器结论一致）。还差：在主人接着自定义接口的那台电脑上真派一件活。
 **写于：** 2026-10-12。三条规则是主人当天在对话里定的。
 相关：[design-models.md](design-models.md)、[design.md](design.md) 第 7 节、[design-windows.md](design-windows.md)。
 

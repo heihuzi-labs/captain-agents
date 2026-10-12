@@ -86,10 +86,12 @@ export function UpdateSettings() {
 }
 
 // 设置 → 通用 →“命令行”一组：终端里的 xagents 是不是这个应用里的那一份（docs/ui-spec.md 第 18 节）。开发版不出现。
+// 先说清这个命令是什么、给谁用的，再说现状：主人不需要自己敲它。
+const CLI_WHAT = '负责派活的 AI（比如 Claude、Codex）在终端里用 xagents 这个命令派活、查进度。';
 const CLI_NOTE: Record<Exclude<CliStatus, 'unavailable'>, string> = {
-  installed: '已安装。终端里的 xagents 用的就是这个应用里的平台，以后跟着应用一起更新。',
-  missing: '还没安装。装好后在终端里就能用 xagents，以后跟着应用一起更新。',
-  other: isWindows ? '终端里已经有一个别的 xagents 命令。替换后改用这个应用里的那一份。' : '~/.local/bin/xagents 已经有一个别的（比如链到源码目录的开发版）。替换后改用这个应用里的那一份。',
+  installed: CLI_WHAT + '已安装，用的就是这个应用里的那一份，以后跟着应用一起更新。',
+  missing: CLI_WHAT + '现在还没安装，装上它们才能用。',
+  other: isWindows ? CLI_WHAT + '终端里已经有一个别的 xagents 命令。替换后改用这个应用里的那一份。' : '~/.local/bin/xagents 已经有一个别的（比如链到源码目录的开发版）。替换后改用这个应用里的那一份。',
 };
 export function CliSettings() {
   const [status, setStatus] = useState<CliStatus | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirm, setConfirm] = useState(false);
@@ -106,8 +108,8 @@ export function CliSettings() {
     finally { setBusy(false); }
   };
   return <SettingGroup head="命令行" label="命令行">
-    <SettingRow title="终端里的 xagents" note={error || CLI_NOTE[status]} group>
-      {status === 'missing' && <Button size="sm" disabled={busy} onClick={() => void install(false)}>安装</Button>}
+    <SettingRow title="给 AI 用的 xagents 命令" note={error || CLI_NOTE[status]} group>
+      {status === 'missing' && <Button size="sm" variant="primary" disabled={busy} onClick={() => void install(false)}>安装</Button>}
       {status === 'other' && <Button size="sm" disabled={busy} onClick={() => setConfirm(true)}>替换…</Button>}
     </SettingRow>
     {confirm && <ConfirmDialog tone="primary" busy={busy} message={isWindows ? "把现有的 xagents 命令换成这个应用里的那一份？" : "把现有的 ~/.local/bin/xagents 换成这个应用里的那一份？"} detail="原来那个文件会被覆盖；如果它是你自己链到源码目录的开发版，换了以后终端里用的就不再是源码目录里的代码。" confirmLabel="替换" onCancel={() => setConfirm(false)} onConfirm={() => void install(true)} />}
