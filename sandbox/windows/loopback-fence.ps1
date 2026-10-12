@@ -1,12 +1,15 @@
-# 给 Codex 的离线专用账户补上“本机回环”的拦截。依据：docs/research/windows-codex-sandbox-2026-10-12.md。
-# Codex 靠 Windows 防火墙规则拦本机回环，实测拦不住（防火墙不过滤发往本机的连接）。
-# 这里直接往系统的过滤平台（WFP）加 6 条只对这一个账户生效的规则：
-#   连出：目的地是本机回环的，拦（IPv4、IPv6）
-#   开监听口：拦（IPv4、IPv6）
-#   收进来：来自本机回环的，拦（IPv4、IPv6）
-# 规则是持久的（重启后还在），标识固定，重复安装不会叠加；-Action remove 全部撤掉。要管理员权限。
-# 只动这一个专用账户：主人自己的账户、允许联网时用的另一个专用账户都不受影响。
-# 有没有生效以隔离自检里的本机端口探针为准，不以“装过”为准。
+# Adds a loopback fence for the Codex offline sandbox account. Evidence: docs/research/windows-codex-sandbox-2026-10-12.md.
+# Codex relies on Windows Firewall rules to block loopback, and they do not work (the firewall does not
+# filter connections to the local machine). This adds six WFP filters that match only that one account:
+#   outbound connect to loopback: block (IPv4, IPv6)
+#   listen: block (IPv4, IPv6)
+#   inbound accept from loopback: block (IPv4, IPv6)
+# The filters are persistent and have fixed keys, so installing twice does not stack; -Action remove deletes
+# all of them. Needs administrator rights. The owner's own account and the online sandbox account are untouched.
+# Whether it works is decided by the loopback probes of the isolation self-check, not by "it was installed".
+#
+# Keep this file ASCII only: Windows PowerShell reads a script without a byte order mark in the system
+# code page, and UTF-8 bytes of other characters can turn into quote characters and break parsing.
 param(
   [ValidateSet('install', 'remove')] [string]$Action = 'install',
   [string]$Account = 'CodexSandboxOffline'
@@ -55,7 +58,7 @@ public static class XaLoopbackFence {
   static readonly Guid ConditionUser = new Guid("af043a0a-b34d-4f86-979c-c90371af6e66");   // FWPM_CONDITION_ALE_USER_ID
   static readonly Guid ConditionFlags = new Guid("632ce23b-5167-435c-86d7-e903684aa80c");  // FWPM_CONDITION_FLAGS
 
-  // 规则标识、名字、所在的层、是否只管本机回环。
+  // key, name, layer, loopback only
   static readonly object[][] Specs = new object[][] {
     new object[] { "eb61be92-033b-4fb6-a500-bdbe67c0723b", "xagents_loopback_connect_v4", "c38d57d1-05a7-4c33-904f-7fbceee60e82", true },   // ALE_AUTH_CONNECT_V4
     new object[] { "4028069b-3c74-45ed-b180-de43900754b2", "xagents_loopback_connect_v6", "4a72393b-319f-44bc-84c3-ba54dcb3b6b4", true },   // ALE_AUTH_CONNECT_V6
@@ -100,7 +103,7 @@ public static class XaLoopbackFence {
   }
 
   public static string Install(string sid) {
-    // 只匹配这个账户：一份只给它“匹配规则”权限的安全描述符（和 Windows 防火墙按用户写规则是同一种写法）。
+    // Match this account only: a security descriptor that grants it FWP_ACTRL_MATCH_FILTER.
     RawSecurityDescriptor descriptor = new RawSecurityDescriptor("O:LSG:LSD:(A;;CC;;;" + new SecurityIdentifier(sid).Value + ")");
     byte[] sd = new byte[descriptor.BinaryLength];
     descriptor.GetBinaryForm(sd, 0);
