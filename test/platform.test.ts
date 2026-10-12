@@ -185,7 +185,8 @@ test('还在不在：进程在才算在；Windows 上还要创建时间对得上
     assert.equal(stillRunning(child.pid, since - 3_600_000), !isWindows);
   } finally { child.kill('SIGKILL'); }
   await until(async () => !alive(child.pid));
-  assert.equal(stillRunning(child.pid, since), false);
+  // 等一下再看：Windows 上进程刚被结束的头几毫秒，系统配给它的控制台进程（算它的子进程）还没退完。
+  await until(async () => !stillRunning(child.pid, since));
 });
 
 // 派活进程或看管进程被直接杀掉时就是这种情况：系统只带走它直接起的那一个，那一个自己起的还在跑、还占着副本目录。
@@ -208,5 +209,5 @@ test('还在不在：最上面那个没了、它起的子孙还活着，Windows 
     assert.equal(stillRunning(root.pid, since), isWindows);
   } finally { killTree(root.pid, 'SIGKILL', since); }
   await until(async () => !alive(orphan));
-  assert.equal(stillRunning(root.pid, since), false);
+  await until(async () => !stillRunning(root.pid, since));
 });

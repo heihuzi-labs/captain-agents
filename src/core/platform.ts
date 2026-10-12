@@ -63,6 +63,7 @@ export function treeOf(rows: Row[], root: number, since?: number, exitedAt?: num
 // - 号回收得很快（实测：活结束后记录里留着的选手进程号被别的进程拿去用，平台误以为“选手还在跑”），所以在的话再核对创建时间。
 // - 父进程没了，它起的子孙照样活着（实测 2026-10-13：派活进程被直接杀掉时，系统只带走它直接起的那一个，再下一层的还在跑，
 //   还占着副本目录）。所以它自己不在了也不能算完，要看它有没有留下子孙；有就算还在，stop 才会去收（killTree 认得这种）。
+//   进程刚结束的头几毫秒里，系统配给它的控制台进程还没退完，这一小会儿也算还在。
 export function stillRunning(pid: number | undefined, since?: number): boolean {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
   let present = true;
