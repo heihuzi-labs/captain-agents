@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { backgroundSpawn, expandHomePath, findSh, isWindows, killTree, relativeInside, samePath, shell, stillRunning, treeOf, treeSpawn } from '../src/core/platform.ts';
@@ -184,4 +186,27 @@ test('还在不在：进程在才算在；Windows 上还要创建时间对得上
   } finally { child.kill('SIGKILL'); }
   await until(async () => !alive(child.pid));
   assert.equal(stillRunning(child.pid, since), false);
+});
+
+// 派活进程或看管进程被直接杀掉时就是这种情况：系统只带走它直接起的那一个，那一个自己起的还在跑、还占着副本目录。
+test('还在不在：最上面那个没了、它起的子孙还活着，Windows 上算还在；killTree 把留下的收走以后才算不在', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'xa-orphan-')), file = join(dir, 'pid');
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  // sh 起一个 Node，后面再跟一条命令，sh 自己就得留着等。路径加引号、用正斜杠（Git 的 sh 会吃掉没加引号的反斜杠）。
+  const code = 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)';
+  const sh = shell(`'${process.execPath}' -e '${code}' '${file.replaceAll('\\', '/')}'; true`), since = Date.now();
+  const root = spawn(sh.file, sh.args, { ...treeSpawn(), stdio: 'ignore' });
+  let orphan = 0;
+  try {
+    orphan = Number(await until(async () => readFile(file, 'utf8').catch(() => '')));
+    assert.ok(orphan > 0 && orphan !== root.pid);
+    // 只结束最上面那个。
+    process.kill(root.pid!, 'SIGKILL');
+    await until(async () => !alive(root.pid));
+    assert.equal(alive(orphan), true, '它起的那个还活着');
+    // macOS 上只看组长在不在（和以前一样）；Windows 上留下的子孙也算。
+    assert.equal(stillRunning(root.pid, since), isWindows);
+  } finally { killTree(root.pid, 'SIGKILL', since); }
+  await until(async () => !alive(orphan));
+  assert.equal(stillRunning(root.pid, since), false);
 });

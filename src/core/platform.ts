@@ -22,7 +22,8 @@ export function expandHomePath(value: string, home: string, implementation = pat
 }
 
 // 起一棵“以后要整棵停掉”的进程树（选手、验收命令、准备命令）。
-// macOS：独立进程组，之后按组停。Windows 没有进程组：不脱离父进程（父进程一退，系统会连它一起收走），也不弹控制台窗口。
+// macOS：独立进程组，之后按组停。Windows 没有进程组：不脱离父进程（父进程一退，系统会连它一起收走；但只带走这一个，
+// 它自己又起的子孙不会跟着走，见 stillRunning），也不弹控制台窗口。
 export const treeSpawn = (): { detached?: true; windowsHide?: true } => isWindows ? { windowsHide: true } : { detached: true };
 // 起一个要比自己活得久的后台进程（看管进程、推进进程）。
 export const backgroundSpawn = (): { detached: true; windowsHide?: true } => isWindows ? { detached: true, windowsHide: true } : { detached: true };
@@ -57,16 +58,18 @@ export function treeOf(rows: Row[], root: number, since?: number, exitedAt?: num
   return out;
 }
 
-// 记录里的这个进程号，现在指的还是不是我们当初起的那个进程。
-// macOS：进程号很久才回收，只看在不在。Windows：号回收得很快（实测：活结束后记录里留着的选手进程号被别的进程拿去用，
-// 平台误以为“选手还在跑”），所以在的话再核对创建时间；since 是当初起它的时间，没有就只能按在不在算。
+// 记录里的这个进程号起的那一摊，现在还有没有活着的。
+// macOS：进程号很久才回收，只看在不在。Windows 有两处不同，都要靠 since（当初起它的时间；没有就只能按在不在算）：
+// - 号回收得很快（实测：活结束后记录里留着的选手进程号被别的进程拿去用，平台误以为“选手还在跑”），所以在的话再核对创建时间。
+// - 父进程没了，它起的子孙照样活着（实测 2026-10-13：派活进程被直接杀掉时，系统只带走它直接起的那一个，再下一层的还在跑，
+//   还占着副本目录）。所以它自己不在了也不能算完，要看它有没有留下子孙；有就算还在，stop 才会去收（killTree 认得这种）。
 export function stillRunning(pid: number | undefined, since?: number): boolean {
   if (!pid || !Number.isInteger(pid) || pid <= 0) return false;
+  let present = true;
   try { process.kill(pid, 0); }
-  catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') return false; }
-  if (!isWindows || since === undefined) return true;
-  const row = processRows().find(r => r.pid === pid);
-  return !!row && row.created >= since - BEFORE && row.created <= since + AFTER;
+  catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') present = false; }
+  if (!isWindows || since === undefined) return present;
+  return treeOf(processRows(), pid, since).length > 0;
 }
 
 // 起选手之前确认停得了它：Windows 上停整棵树要先读得到进程列表。读不到就抛错，看管进程因此不起选手（停不了的选手不启动）。

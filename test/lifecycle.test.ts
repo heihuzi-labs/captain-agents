@@ -234,8 +234,9 @@ test('派发进程准备期间被杀后登记不永远排队，可停止残留�
   const j = await until(async () => (await c.jobs())[0], j => Boolean(j?.setupPid));
   child.kill('SIGKILL'); await ended;
   assert.equal((await c.cli(['status'])).code, 0); assert.equal((await c.jobs())[0].state, 'failed');
-  // 同上：Windows 上准备进程跟着派发进程一起被系统收走，不会残留。
-  if (!isWindows) assert.equal((await c.cli(['clean', j.id])).code, 1);
+  // 准备进程还留着（Windows 上系统只带走派发进程直接起的那一个，它起的还在跑）：先 stop 才能清理。
+  const early = await c.cli(['clean', j.id]);
+  assert.equal(early.code, 1); assert.match(early.stderr, /准备进程仍在/);
   const stopped = await c.cli(['stop', j.id]);
   assert.equal(stopped.code, 0, stopped.stderr);
   await until(async () => !alive(j.setupPid));
