@@ -199,8 +199,10 @@ function useNarrow() {
 function Room({ chat, view, open }: { chat: ViewChat; view: View; open: Open }) {
   const [confirm, setConfirm] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   // 成员栏：宽窗口默认开、窄窗口默认收；点了成员按钮就按主人选的来，换一个群回到默认。
-  const narrow = useNarrow(), [side, setSide] = useState<boolean | null>(null), sideOpen = side ?? !narrow, sideId = useId();
-  useEffect(() => { setSide(null); }, [chat.id]);
+  // 换群时在画的当下就清掉主人的选择，不放进副作用里：副作用晚一拍才跑，会把这一拍里刚点的那一下冲掉。
+  const narrow = useNarrow(), [side, setSide] = useState<boolean | null>(null), [sideOf, setSideOf] = useState(chat.id), sideId = useId();
+  if (sideOf !== chat.id) { setSideOf(chat.id); setSide(null); }
+  const sideOpen = (sideOf === chat.id ? side : null) ?? !narrow;
   useEffect(() => {
     if (!narrow || !sideOpen) return;
     const key = (e: globalThis.KeyboardEvent) => { if (e.key === 'Escape') setSide(false); };
