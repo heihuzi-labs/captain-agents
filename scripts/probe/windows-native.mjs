@@ -39,7 +39,7 @@ if (process.argv[3] === 'awake-child') {
   if (depth > 0) spawn(process.execPath, [self, resultFile, 'tree-child', String(depth - 1)], { stdio: 'inherit', windowsHide: true });
   console.log(`pid ${process.pid} ${process.ppid}`);
   setInterval(() => {}, 1000);
-} else await main();
+} else setImmediate(main);   // 等这个文件后面的常量都定义完再开始
 
 async function main() {
   const result = { at: new Date().toISOString(), platform: `${process.platform}-${process.arch}`, release: os.release(), node: process.versions.node,
@@ -49,7 +49,10 @@ async function main() {
     catch (error) { result.checks[name] = { ok: false, error: String(error?.stack ?? error).slice(0, 900) }; }
   };
   // 是不是管理员身份（完整性级别“高”）：流水线上是，主人的电脑上平时不是。
-  result.elevated = /S-1-16-(12288|16384)/.test(spawnSync('whoami', ['/groups'], { encoding: 'utf8', windowsHide: true }).stdout || '');
+  // 记下令牌里的完整性级别那一行和管理员组那一行（管理员组“只用于拒绝”就是没有管理员权限）。
+  const groups = (spawnSync('whoami', ['/groups', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout || '').split(/\r?\n/);
+  result.token = { label: groups.find(l => l.includes('S-1-16-'))?.slice(0, 160) ?? null, admins: groups.find(l => l.includes('S-1-5-32-544'))?.slice(0, 200) ?? null };
+  result.elevated = /S-1-16-(12288|16384)/.test(result.token.label ?? '') && !/deny only/i.test(result.token.admins ?? '');
 
   let koffi = null;
   await check('load', () => {
