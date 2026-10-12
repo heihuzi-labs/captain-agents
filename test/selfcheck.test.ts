@@ -98,8 +98,8 @@ test('隔离内的 CLI 自检不启动真实探针，保存失败且桌面视图
 test('真实派发入口被失败自检挡住，尚未登记任务和副本', async t => {
   const c = await context(t); await c.add();
   await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify(evaluateOn([])));
-  // 只关选手替身来走真实派发入口；额度查询照样用替身，不许真的启动 Cursor、Grok 去查（2026-09-30 发现每跑一次就在 ~/.cursor/projects 留一个目录）。
-  const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { XAGENTS_FAKE_WORKER: undefined, XAGENTS_QUERY_EXEC: join(import.meta.dirname, 'fixtures/quota/query.ts'), XAGENTS_CODEX_SESSIONS: join(import.meta.dirname, 'fixtures/quota') });
+  // 只关选手替身来走真实派发入口；Codex 程序指到一个存在的文件（这台机器上不一定装了 Codex，没装会先被“没找到程序”挡下，走不到自检）。额度查询照样用替身，不许真的启动 Cursor、Grok 去查（2026-09-30 发现每跑一次就在 ~/.cursor/projects 留一个目录）。
+  const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { XAGENTS_FAKE_WORKER: undefined, XAGENTS_CODEX: process.execPath, XAGENTS_QUERY_EXEC: join(import.meta.dirname, 'fixtures/quota/query.ts'), XAGENTS_CODEX_SESSIONS: join(import.meta.dirname, 'fixtures/quota') });
   assert.equal(r.code, 1); assert.match(r.stderr, /隔离自检没过/); assert.equal((await c.jobs()).length, 0);
 });
 
