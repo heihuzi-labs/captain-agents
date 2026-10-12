@@ -171,6 +171,13 @@ async function processes(koffi) {
 
 // 回收站里现在有哪些名字（探针里对照用）。
 const recycled = () => (ps('(New-Object -ComObject Shell.Application).NameSpace(10).Items() | ForEach-Object { $_.Name }').stdout || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+// 更直接的证据：这个盘的回收站目录里，属于当前账户的条目有几个（每送进去一样东西，系统记一个 $I 开头的文件）。
+function binEntries(drive) {
+  const sid = /S-1-5-21-[\d-]+/.exec(spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).stdout || '')?.[0];
+  if (!sid) return null;
+  try { return fs.readdirSync(path.join(drive, '$Recycle.Bin', sid)).filter(n => n.startsWith('$I')).length; }
+  catch (error) { return error.code === 'ENOENT' ? 0 : null; }
+}
 function folder(name) {
   const dir = path.join(os.tmpdir(), `${name}-${process.pid}-${Date.now()}`);
   fs.mkdirSync(dir, { recursive: true });
@@ -183,18 +190,22 @@ async function recycle(koffi) {
   const remove = koffi.load('shell32.dll').func('int __stdcall SHFileOperationW(SHFILEOPSTRUCTW *op)');
   const out = { structSize: koffi.sizeof(struct) };
   // 新做法。路径后面要跟两个空字符：自己加一个，另一个是字符串本来的结尾。名字里带中文和空格（主人看到的文件夹名就是这样的）。
-  const mine = folder('派活工作台-探针 新做法');
+  const mine = folder('派活工作台-探针 新做法'), drive = path.parse(mine).root;
+  out.entriesBefore = binEntries(drive);
   out.returned = remove({ hwnd: null, wFunc: FO_DELETE, pFrom: mine + '\0', pTo: null, fFlags: FLAGS, fAnyOperationsAborted: 0, hNameMappings: null, lpszProgressTitle: null });
   out.gone = !fs.existsSync(mine);
+  out.entriesAfter = binEntries(drive);
   // 现在的做法（src/core/trash.ts 的 RECYCLE），对照。
   const theirs = folder('派活工作台-探针 现在的做法');
   const old = ps("Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($env:XA_RECYCLE_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin', 'ThrowException')", { ...process.env, XA_RECYCLE_PATH: theirs });
   out.oldExit = old.status; out.oldGone = !fs.existsSync(theirs);
+  out.entriesAfterOld = binEntries(drive);
   const names = recycled();
   out.inBin = names.includes(path.basename(mine)); out.oldInBin = names.includes(path.basename(theirs));
   // 不存在的路径：应当报错（返回值不是 0），不弹窗、不卡住。
   out.missingReturned = remove({ hwnd: null, wFunc: FO_DELETE, pFrom: path.join(os.tmpdir(), `xa-no-such-${Date.now()}`) + '\0', pTo: null, fFlags: FLAGS, fAnyOperationsAborted: 0, hNameMappings: null, lpszProgressTitle: null });
   // 进没进回收站只和现在的做法比：机器上没有回收站可用时两边都进不去，那是环境的事。
-  out.ok = out.returned === 0 && out.gone && out.missingReturned !== 0 && out.inBin === out.oldInBin;
+  out.ok = out.returned === 0 && out.gone && out.missingReturned !== 0 && out.inBin === out.oldInBin
+    && (out.entriesBefore === null || out.entriesAfter - out.entriesBefore === out.entriesAfterOld - out.entriesAfter);
   return out;
 }
