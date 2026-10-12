@@ -183,10 +183,13 @@ jobs:
           npm install --global pnpm@10.33.2
           pnpm install --frozen-lockfile
 
-      - name: TEMP one test alone
+      - name: TEMP one test many times
         if: matrix.os == 'windows-2022'
         shell: bash
-        run: node --test --test-timeout=200000 --test-name-pattern="派发进程准备期间|setup 尚未结束|还在不在" test/lifecycle.test.ts test/platform.test.ts || true
+        run: |
+          for i in $(seq 1 14); do
+            node --test --test-timeout=200000 --test-name-pattern="续接按路径比较" test/chat-engine.test.ts > one.log 2>&1 && echo "run $i ok" || { echo "run $i FAILED"; grep -A8 "AssertionError" one.log | head -14; }
+          done
 
       - name: Run the probe
         shell: pwsh

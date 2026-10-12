@@ -138,7 +138,8 @@ describe('项目群聊推进', { concurrency: 1 }, () => {
     assert.equal((await readJob(id)).resume, undefined);
     await updateJob(id, j => { j.worktree = original.worktree; j.repo = c.temp; });
     await sayInChat(chat.id, '@Grok 不能换仓库', 'owner'); await settled(chat.id);
-    assert.ok((await readMessages(chat.id)).some(m => /项目的仓库登记已经改变/.test(m.text)));
+    const refused = (await readMessages(chat.id)).map(m => m.text);
+    assert.ok(refused.some(text => /项目的仓库登记已经改变/.test(text)), JSON.stringify(refused.slice(-4)));
     assert.equal((await readJob(id)).resume, undefined);
     // Windows 同时覆盖 Git 的正斜杠写法；所有系统都覆盖未规范化的同一路径。
     const equivalent = (path: string) => `${path.replaceAll('\\', '/')}/.`;
