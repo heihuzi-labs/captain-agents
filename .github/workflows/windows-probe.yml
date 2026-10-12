@@ -82,11 +82,21 @@ jobs:
           Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-nofence-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
           exit 0
 
+      # A user's Codex that talks to a custom endpoint (docs/design-scan.md): does a job get out with today's
+      # launch arguments, and with the endpoint carried over. A local fake endpoint and a throwaway key.
+      - name: Custom endpoint probe
+        if: always()
+        shell: pwsh
+        run: |
+          node scripts/probe/codex-endpoint.mjs "$env:CODEX_EXE" "probe-results/endpoint-${{ matrix.os }}.json"
+          exit 0
+
       - name: Print the result
         if: always()
         shell: pwsh
         run: |
           if (Test-Path "probe-results/codex-${{ matrix.os }}.json") { Get-Content "probe-results/codex-${{ matrix.os }}.json" }
+          if (Test-Path "probe-results/endpoint-${{ matrix.os }}.json") { Get-Content "probe-results/endpoint-${{ matrix.os }}.json" }
 
       - name: Upload the result
         if: always()
