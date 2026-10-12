@@ -183,6 +183,11 @@ jobs:
           npm install --global pnpm@10.33.2
           pnpm install --frozen-lockfile
 
+      - name: TEMP one test alone
+        if: matrix.os == 'windows-2022'
+        shell: bash
+        run: node --test --test-timeout=200000 --test-name-pattern="派发进程准备期间" test/lifecycle.test.ts || true
+
       - name: Run the probe
         shell: pwsh
         run: |

@@ -236,9 +236,11 @@ test('派发进程准备期间被杀后登记不永远排队，可停止残留�
   assert.equal((await c.cli(['status'])).code, 0); assert.equal((await c.jobs())[0].state, 'failed');
   // 同上：Windows 上准备进程跟着派发进程一起被系统收走，不会残留。
   if (!isWindows) assert.equal((await c.cli(['clean', j.id])).code, 1);
-  assert.equal((await c.cli(['stop', j.id])).code, 0);
+  const stopped = await c.cli(['stop', j.id]);
+  assert.equal(stopped.code, 0, stopped.stderr);
   await until(async () => !alive(j.setupPid));
-  assert.equal((await c.cli(['clean', j.id])).code, 0);
+  const cleaned = await c.cli(['clean', j.id]);
+  assert.equal(cleaned.code, 0, cleaned.stderr);
 });
 test('从仓库子目录和现有工作副本能匹配项目，拒绝指向仓库外的副本目录', async t => {
   const c = await context(t); await c.add();
