@@ -53,7 +53,10 @@ async function inner(spec) {
     socket.once('error', e => { clearTimeout(timer); reject(e); });
   });
 
-  out.identity = { user: os.userInfo().username, home: os.homedir(), cwd: process.cwd(), temp: process.env.TEMP ?? null, tmp: process.env.TMP ?? null, tmpdir: os.tmpdir() };
+  // 隔离里的专用账户查不了 os.userInfo()（实测报 ENOMEM），所以每一项单独取、取不到就记下错误码。
+  const safe = fn => { try { return fn(); } catch (e) { return `!${code(e)}`; } };
+  out.identity = { user: safe(() => os.userInfo().username), envUser: process.env.USERNAME ?? null, home: safe(() => os.homedir()), envProfile: process.env.USERPROFILE ?? null,
+    cwd: safe(() => process.cwd()), temp: process.env.TEMP ?? null, tmp: process.env.TMP ?? null, tmpdir: safe(() => os.tmpdir()), codexHome: process.env.CODEX_HOME ?? null };
   out.envSecretNames = Object.keys(process.env).filter(name => SECRET_WORDS.some(w => name.toUpperCase().includes(w))).sort();
   out.envNames = Object.keys(process.env).sort();
 
@@ -178,11 +181,19 @@ async function outer(codex, resultFile) {
     const otherHome = path.join(base, 'codex-home-2'); await fs.mkdir(otherHome);
     const saved = env.CODEX_HOME; env.CODEX_HOME = otherHome;
     await sandboxCase('elevated:other-codex-home', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    const setup2 = await run(codex, ['sandbox', 'setup', '--elevated', '--current-user'], { cwd: worktree, env, timeout: 300_000 });
+    result.setupOtherHome = brief(setup2);
+    await sandboxCase('elevated:other-codex-home-after-setup', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
     env.CODEX_HOME = saved;
+    // 装过第二个文件夹以后，第一个还好不好用（两个文件夹共用同一对专用账户）。
+    await sandboxCase('elevated:first-home-again', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
     // 对照：另外两种做法和“什么都不写”。只为记录它们为什么不能用。
     await sandboxCase('unelevated:xa-write', 'unelevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
     await sandboxCase('unset:xa-write', null, ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
-    result.sandboxLog = (await fs.readFile(path.join(codexHome, '.sandbox', 'sandbox.log'), 'utf8').catch(() => '')).slice(-6000);
+    result.sandboxLogs = {};
+    for (const name of await fs.readdir(path.join(codexHome, '.sandbox')).catch(() => [])) {
+      if (name.endsWith('.log')) result.sandboxLogs[name] = (await fs.readFile(path.join(codexHome, '.sandbox', name), 'utf8').catch(() => '')).slice(-5000);
+    }
     const users = await run('net.exe', ['user']);
     result.localUsers = users.stdout.split(/\s+/).filter(name => /sandbox/i.test(name));
   } finally {
