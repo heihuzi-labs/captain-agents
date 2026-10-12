@@ -67,13 +67,14 @@ export type Isolated = Pick<Project, 'denyReadExtra'> & { denyReadHome?: string[
 // :workspace 自带 /tmp 和 $TMPDIR 可写：两者都改成只读，只有任务的 tmp 写明可写（启动方另把 TMPDIR 指向它）。
 // 实测不设 TMPDIR 时 :tmpdir 就是系统给本用户的临时目录，所以不能只靠环境变量把它指走。
 // 2026-10-09 主人决定网络完全不限：只加 enabled，不启用 network_proxy（实测报告 3.1）。
-export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job), network = false, exists: (path: string) => boolean = existsSync) {
+// plain：不带禁读名单（Windows 上没装加固时用，见 docs/design-windows.md 第 12 节）。Codex 免安装的那种隔离做不了按名单禁读，带了名单它就不肯跑。
+export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job), network = false, exists: (path: string) => boolean = existsSync, plain = false) {
   tomlString(job.repo); tomlString(job.worktree); tomlString(tmp); checkRoot(tmp, '临时目录');
   const rules = new Map<string, 'read' | 'write' | 'deny'>();
   // Windows：禁读名单里本机不存在的路径，Codex 会先把它建成文件夹再加权限（源码 deny_read_acl.rs，流水线上也实测到了）。
   // 那样主人家里会凭空多出 .npmrc、.netrc 这类名字的文件夹，把别的工具弄坏。所以 Windows 上只写本机真实存在的；
   // 代价是活跑着的时候才新出现的文件，这件活挡不住，下一件才挡得住。macOS 上不存在的也照写（规则对将来出现的同样有效）。
-  const set = (path: string, permission: 'read' | 'deny') => { if (!isWindows || exists(path)) rules.set(path, permission); };
+  const set = (path: string, permission: 'read' | 'deny') => { if (!plain && (!isWindows || exists(path))) rules.set(path, permission); };
   for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...homeDeny(), ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); set(join(homedir(), path), 'deny'); }
   set(join(homedir(), '.codex/tmp'), 'read');
   tomlString(deepseekHome()); set(deepseekHome(), 'deny');
