@@ -230,6 +230,26 @@ else {
       const failed = await shell.openPath(places()[args[0]]);
       if (failed) throw new Error(failed);
     });
+    // 隔离（只在 Windows 上）：主人在设置里点了才做。没装好就先装——提权的确认框由系统弹、主人自己点，应用不替主人提权——再自检；
+    // 自检结果写进缓存，随看板数据推给窗口。同一时间只做一次。
+    let fixing = false;
+    ipcMain.handle(channels.isolationFix, async (event, ...args: unknown[]) => {
+      guard(event);
+      if (args.length) throw new Error('安装和检查隔离不需要参数。');
+      if (process.platform !== 'win32') throw new Error('只有 Windows 上的隔离需要另外安装。');
+      if (fixing) throw new Error('正在安装或检查，请稍等。');
+      fixing = true;
+      try {
+        const { readSelfcheck, selfcheck } = await import('../../src/core/selfcheck.ts');
+        if ((await readSelfcheck()).ok !== true) {
+          const { windowsSetup } = await import('../../src/core/selfcheck-windows.ts');
+          const { execute } = await import('../../src/core/verify.ts');
+          const setup = await windowsSetup(execute);
+          if (!setup.ok) throw new Error(setup.lines.join('；'));
+        }
+        await selfcheck();
+      } finally { fixing = false; publish(await readDesktopView()); }
+    });
     ipcMain.handle(channels.cliInstall, async (event, ...args: unknown[]) => {
       guard(event);
       if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('安装命令行只能接收一个开关。');

@@ -132,3 +132,20 @@ export function PlaceSettings() {
     {error && <p role="alert" className="setting-row setting-foot">{error}</p>}
   </SettingGroup>;
 }
+
+// 设置 → 通用 →“隔离”一组，只在 Windows 上（docs/ui-spec.md 第 10 节）：装隔离、自检都在这里点一下，不用主人自己开终端。
+export function IsolationSettings({ selfcheck }: { selfcheck: { ok: boolean | null; note: string } | undefined }) {
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  if (!isWindows || !selfcheck || typeof window.xa?.isolationFix !== 'function') return null;
+  const fine = selfcheck.ok === true;
+  const run = () => {
+    setBusy(true); setError('');
+    void window.xa.isolationFix().catch(e => setError((fine ? '没能检查：' : '没能装好：') + errorReason(e))).finally(() => setBusy(false));
+  };
+  const note = busy ? (fine ? '正在检查…' : '正在安装和检查…系统弹出确认框时请点“是”') : error || selfcheck.note || '还没检查过';
+  return <SettingGroup head="隔离" label="隔离">
+    <SettingRow title="选手的隔离" note={note} group>
+      <Button size="sm" variant={fine ? 'secondary' : 'primary'} disabled={busy} onClick={run}>{fine ? '重新检查' : '安装并检查'}</Button>
+    </SettingRow>
+  </SettingGroup>;
+}

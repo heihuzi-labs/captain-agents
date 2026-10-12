@@ -10,7 +10,7 @@ import type { Settings as Values, SettingsPatch } from '../../shared/ipc.ts';
 import { Button, ColorField, Modal, Segmented, Select, SettingGroup, SettingRow, SideNavLayout, Switch } from '../ui/index.ts';
 import { TRAY } from '../ui/platform.ts';
 import { policyOf, WorkerSettings } from './WorkerSettings.tsx';
-import { CliSettings, PlaceSettings, UpdateSettings } from './Update.tsx';
+import { CliSettings, IsolationSettings, PlaceSettings, UpdateSettings } from './Update.tsx';
 import { NetworkSettings } from './NetworkSettings.tsx';
 
 type Who = keyof Values['workers'];
@@ -26,7 +26,7 @@ const rememberPage = (id: string) => { try { window.localStorage.setItem(PAGE_KE
 const APPEARANCES: { id: Values['appearance']; label: string }[] = [{ id: 'system', label: '跟随系统' }, { id: 'light', label: '浅色' }, { id: 'dark', label: '深色' }];
 
 // view 里有“选手名单”和展示信息（看板数据），有了才显示“选手与模型”页；设置本身仍单独读、单独存。
-export function Settings({ close, view }: { close(): void; view?: Pick<View, 'roster' | 'workers' | 'quota' | 'storage' | 'projects' | 'models' | 'unlisted'> }) {
+export function Settings({ close, view }: { close(): void; view?: Pick<View, 'roster' | 'workers' | 'quota' | 'storage' | 'projects' | 'models' | 'unlisted'> & Partial<Pick<View, 'selfcheck'>> }) {
   const [values, setValues] = useState<Values | null>(null), [error, setError] = useState(''), [workersError, setWorkersError] = useState('');
   const latest = useRef<Values | null>(null), saved = useRef<Values | null>(null), queued = useRef<SettingsPatch | null>(null);
   const saving = useRef(false), mounted = useRef(true), [remembered, setRemembered] = useState(readPage);
@@ -112,6 +112,7 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
         </SettingGroup>
         <UpdateSettings />
         <CliSettings />
+        <IsolationSettings selfcheck={view?.selfcheck} />
         <PlaceSettings /></>}
         {page === 'workers' && view && <>
           <SettingGroup head="派活限制">

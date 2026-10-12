@@ -112,6 +112,7 @@ export const connectFixture = (): ConnectStatus[] => [
 ];
 export const fixtureBridge = (extra: Partial<XaBridge> = {}): XaBridge => ({
   cliStatus: vi.fn(async () => 'unavailable' as const), cliInstall: vi.fn(async () => 'installed' as const),
+  isolationFix: vi.fn(async () => {}),
   places: vi.fn(async () => ({ app: 'C:\\Apps\\captain-agents', data: 'C:\\Users\\me\\.xagents' })), openPlace: vi.fn(async () => {}),
   appInfo: vi.fn(async () => ({ version: '0.1.0', update: { phase: 'off' as const, reason: '这个版本不带在线更新' }, autoCheck: true })),
   onUpdate: () => () => {}, updateCheck: vi.fn(async () => ({ phase: 'off' as const, reason: '这个版本不带在线更新' })),

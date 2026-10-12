@@ -7,6 +7,7 @@ import type { View } from '../../src/core/view-types.ts';
 const bridge: XaBridge = {
   cliStatus: (...args: unknown[]) => ipcRenderer.invoke(channels.cliStatus, ...args),
   cliInstall: (...args: unknown[]) => ipcRenderer.invoke(channels.cliInstall, ...args),
+  isolationFix: (...args: unknown[]) => ipcRenderer.invoke(channels.isolationFix, ...args),
   places: (...args: unknown[]) => ipcRenderer.invoke(channels.places, ...args),
   openPlace: (...args: unknown[]) => ipcRenderer.invoke(channels.openPlace, ...args),
   appInfo: (...args: unknown[]) => ipcRenderer.invoke(channels.appInfo, ...args),

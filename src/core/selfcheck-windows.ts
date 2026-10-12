@@ -251,7 +251,7 @@ async function addCredential(run: Executor): Promise<string | null> {
   const listed = await run('cmdkey.exe', ['/list'], homedir(), 15_000);
   return quiet(listed) && listed.output.includes(name) ? name : null;
 }
-const NOT_INSTALLED = '还没装好 Windows 上的隔离。请主人运行 xagents windows-setup（系统会弹一次管理员确认框），装好后再自检';
+const NOT_INSTALLED = '还没装好 Windows 上的隔离。请主人在桌面应用的“设置 → 通用 → 隔离”里点“安装并检查”（系统会弹一次管理员确认框）；没有桌面应用时运行 xagents windows-setup，装好后再自检';
 
 export async function windowsCodexSelfcheck(run: Executor): Promise<IsolationResult> {
   const isolation = 'codex' as const;
@@ -300,7 +300,7 @@ export async function windowsCodexSelfcheck(run: Executor): Promise<IsolationRes
       const parsed = JSON.parse(lines[0].slice(marker.length));
       if (!Array.isArray(parsed)) throw new Error('探针结果格式无效');
       probes = parsed as Probe[];
-      for (const p of probes) if (fenceProbes.includes(p.name) && p.outcome !== 'denied') p.reason += '；本机端口没拦住，多半是回环补丁没装或失效了，请主人运行 xagents windows-setup';
+      for (const p of probes) if (fenceProbes.includes(p.name) && p.outcome !== 'denied') p.reason += '；本机端口没拦住，多半是回环补丁没装或失效了，请主人在桌面应用的“设置 → 通用 → 隔离”里点“安装并检查”';
       result = { isolation, probes };
     } catch (e) { result = fail((e as Error).message); }
     for (const path of absent) if (await lstat(path).catch(() => null)) problems.push(`自检期间出现了 ${path}，没有删，请负责人查看`);
