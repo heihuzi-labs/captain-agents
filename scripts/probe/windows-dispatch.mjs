@@ -40,7 +40,7 @@ const cli = (...args) => run(xagents[0], [...xagents.slice(1), ...args]);
 const WRITE = 'echo dispatched > dispatched.txt';
 const usage = { input_tokens: 0, input_tokens_details: null, output_tokens: 0, output_tokens_details: null, total_tokens: 0 };
 const flatten = tools => tools.flatMap(t => t.type === 'namespace' ? flatten(t.tools ?? []) : [t]);
-let asked = 0;
+let asked = 0, toolOutput = null;
 const server = http.createServer((req, res) => {
   let raw = '';
   req.on('data', d => { raw += d; });
@@ -50,7 +50,10 @@ const server = http.createServer((req, res) => {
     let body = {}; try { body = JSON.parse(raw); } catch { /* 按没有工具处理 */ }
     const input = Array.isArray(body.input) ? body.input : [];
     const tools = flatten([...(body.tools ?? []), ...input.filter(i => i?.type === 'additional_tools').flatMap(i => i.tools ?? [])]);
-    const answered = input.some(i => typeof i?.type === 'string' && i.type.endsWith('call_output'));
+    const outputs = input.filter(i => typeof i?.type === 'string' && i.type.endsWith('call_output'));
+    const answered = outputs.length > 0;
+    // 命令在隔离里跑出来的结果（或隔离拒绝它时的报错），原样记下来。
+    if (answered) toolOutput = outputs.map(o => typeof o.output === 'string' ? o.output : JSON.stringify(o.output)).join('\n').slice(0, 900);
     let item = { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '写好了。' }] };
     if (!answered) {
       if (tools.some(t => t.type === 'custom' && t.name === 'exec')) item = { type: 'custom_tool_call', call_id: 'call_1', name: 'exec', input: `const r = await tools.exec_command({ cmd: ${JSON.stringify(WRITE)} });\ntext(typeof r === "string" ? r : JSON.stringify(r));` };
@@ -68,6 +71,8 @@ let ok = false;
 try {
   // “主人的 Codex”：接的是自定义接口（就是上面的假接口），钥匙交给 Codex 自己保管。
   await fs.writeFile(path.join(codexHome, 'config.toml'), `model_provider = "probe"\n\n[model_providers.probe]\nname = "Probe"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = true\n`);
+  // 主人的电脑上常见的一种状态：加固装过（管理员装一次的那种隔离已经给这个 Codex 文件夹装上了），但自检没通过，所以派活走的仍是“没装加固”的那一路。
+  if (windows && process.env.XA_DISPATCH_AFTER_SETUP) result.steps.setup = (await run(codex, ['sandbox', 'setup', '--elevated', '--current-user'], { timeout: 300_000 })).exit;
   const login = await run(codex, ['login', '--with-api-key', '-c', 'cli_auth_credentials_store="file"'], { input: 'sk-probe-not-a-real-key\n' });
   result.steps.login = login.exit;
   for (const args of [['init', '-q', '-b', 'main'], ['-c', 'user.name=probe', '-c', 'user.email=probe@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init']]) await run('git', args);
@@ -85,7 +90,7 @@ try {
     const job = JSON.parse(await fs.readFile(path.join(registry, 'jobs', id, 'job.json'), 'utf8'));
     const written = await fs.stat(path.join(job.worktree, 'dispatched.txt')).then(() => true, () => false);
     const args = job.command?.args ?? [];
-    result.steps.job = { waitExit: waited.exit, state: job.state, error: job.error ?? null, written, asked,
+    result.steps.job = { waitExit: waited.exit, state: job.state, error: job.error ?? null, written, asked, toolOutput,
       sandbox: args.find(a => a.startsWith('windows.sandbox=')) ?? null, endpoint: args.includes('model_provider="probe"'),
       denyRead: args.some(a => a.startsWith('permissions.xa=') && a.includes('"deny"')) };
     if (job.state !== 'done' || !written) for (const name of ['stderr.log', 'supervisor.log', 'run.log']) result.steps[name] = (await fs.readFile(path.join(registry, 'jobs', id, name), 'utf8').catch(() => '')).slice(-800);

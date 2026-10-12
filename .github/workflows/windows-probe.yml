@@ -106,6 +106,17 @@ jobs:
           Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-nofence-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
           exit 0
 
+      # The state the owner's machine is in: the hardened isolation has been installed for this Codex folder, but the
+      # self-check does not pass, so a dispatch still takes the plain path. Does the job get done then?
+      - name: Dispatch a job end to end, hardening installed but not in use
+        if: always()
+        shell: pwsh
+        env:
+          XA_DISPATCH_AFTER_SETUP: '1'
+        run: |
+          $env:XAGENTS_CODEX = $env:CODEX_EXE
+          node scripts/probe/windows-dispatch.mjs "probe-results/dispatch-after-setup-${{ matrix.os }}.json" -- node src/cli/cli.ts
+
       # A user's Codex that talks to a custom endpoint (docs/design-scan.md): does a job get out with today's
       # launch arguments, and with the endpoint carried over. A local fake endpoint and a throwaway key.
       - name: Custom endpoint probe
