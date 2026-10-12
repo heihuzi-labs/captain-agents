@@ -1,0 +1,128 @@
+name: Windows probe
+
+# Measures things that can only be measured on a real Windows machine: the isolation probes
+# (docs/design-windows.md) and the core test suite. It publishes nothing; results are workflow artifacts.
+# Runs when started by hand, or on a push to a branch named probe/...
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'probe/**'
+
+permissions:
+  contents: read
+
+jobs:
+  codex-sandbox:
+    name: Codex sandbox (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    env:
+      # The Codex release the probes were written against. Change it together with the research note.
+      CODEX_RELEASE: 0.162.1
+      CODEX_NON_INTERACTIVE: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install the Codex command line (official installer)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = Join-Path $env:RUNNER_TEMP 'codex-install.ps1'
+          Invoke-WebRequest -Uri 'https://chatgpt.com/codex/install.ps1' -OutFile $script
+          & $script
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\OpenAI\Codex\bin\codex.exe'
+          if (-not (Test-Path $exe)) { Get-ChildItem -Recurse (Join-Path $env:LOCALAPPDATA 'Programs\OpenAI') | Select-Object -First 50 FullName; throw 'codex.exe not found' }
+          "CODEX_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & $exe --version
+
+      - name: Run the probes
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force probe-results | Out-Null
+          node scripts/probe/windows-codex.mjs "$env:CODEX_EXE" "probe-results/codex-${{ matrix.os }}.json"
+
+      - name: Print the result
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "probe-results/codex-${{ matrix.os }}.json") { Get-Content "probe-results/codex-${{ matrix.os }}.json" }
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-codex-${{ matrix.os }}
+          path: probe-results/*
+          if-no-files-found: warn
+          retention-days: 14
+
+  tests:
+    name: Test suites (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@10.33.2
+          pnpm install --frozen-lockfile
+
+      - name: Type check
+        shell: bash
+        run: npm run typecheck
+
+      # A per-test timeout turns a test that never ends into a failure, so one run lists every problem.
+      - name: Core tests
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p test-logs
+          node --test --test-timeout=120000 "test/*.test.ts" 2>&1 | tee test-logs/core.log
+          status=${PIPESTATUS[0]}
+          echo "---- failed ----"
+          grep -E "^(✖|not ok)" test-logs/core.log | sort -u || true
+          tail -n 12 test-logs/core.log
+          exit "$status"
+
+      - name: UI tests
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p test-logs
+          npm run test:ui 2>&1 | tee test-logs/ui.log
+          exit "${PIPESTATUS[0]}"
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: test-logs/*
+          if-no-files-found: warn
+          retention-days: 14
