@@ -1,7 +1,8 @@
 // 小队与项目群共用的续接、运行检查和收尾；启动命令与隔离仍由 workers/runner 负责。
 import { access, rename, cp, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { samePath, stillRunning } from './platform.ts';
+import { isWindows, samePath, stillRunning } from './platform.ts';
+import { koffiPath } from './native-windows.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { launch } from './dispatch.ts';
 import { alive, hasCode, readOptional, writeAtomic, writeJson } from './fsx.ts';
@@ -215,6 +216,8 @@ export async function engineSnapshot(dir: string, name: 'chat-entry.ts' | 'team-
 }
 export function engineEnvironment() {
   // srt 留在安装目录；快照里的 gate 仍按原 srtPath 检查，不修改启动参数或模板。
+  // Windows 上调系统接口用的模块（native-windows.ts）也一样留在安装目录。
   return { ...process.env, XAGENTS_HOME: paths().home,
-    XAGENTS_SRT: process.env.XAGENTS_SRT || join(toolRoot, 'node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js') };
+    XAGENTS_SRT: process.env.XAGENTS_SRT || join(toolRoot, 'node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js'),
+    ...(isWindows ? { XAGENTS_KOFFI: koffiPath() } : {}) };
 }

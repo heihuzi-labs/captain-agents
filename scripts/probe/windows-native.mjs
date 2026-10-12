@@ -6,7 +6,7 @@
 //   三、进程列表：NtQuerySystemInformation 读出来的进程号、父进程号、创建时间，和 PowerShell 读出来的逐项对。
 //   四、回收站：SHFileOperationW 送进去的文件夹，回收站里找不找得到；和现在的做法各做一遍对照。
 // 用来对照的那几步仍然用 PowerShell（只在探针里）。会在回收站里留下两个很小的空文件夹。
-// 用法：node scripts/probe/windows-native.mjs <结果文件>
+// 用法：node scripts/probe/windows-native.mjs <结果文件>        环境里设 XA_KOFFI_FROM 时从那个文件夹加载模块
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -20,6 +20,8 @@ if (process.platform !== 'win32') { console.error('这个探针只在 Windows �
 
 const self = fileURLToPath(import.meta.url);
 const require = createRequire(import.meta.url);
+// XA_KOFFI_FROM：从指定的文件夹加载模块（量装好的应用时，指到应用里的 resources/platform/node_modules/koffi）。
+const loadKoffi = () => process.env.XA_KOFFI_FROM ? createRequire(path.join(process.env.XA_KOFFI_FROM, 'package.json'))(process.env.XA_KOFFI_FROM) : require('koffi');
 const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const ps = (command, env = process.env) => spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true, timeout: 60_000, env });
 const sleep = ms => new Promise(done => setTimeout(done, ms));
@@ -28,7 +30,7 @@ const ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x1;
 // 子进程的两种角色（探针自己起自己）。
 if (process.argv[3] === 'awake-child') {
   // 申请防休眠，说一声，然后一直等着被结束。
-  const koffi = require('koffi');
+  const koffi = loadKoffi();
   const set = koffi.load('kernel32.dll').func('uint32_t __stdcall SetThreadExecutionState(uint32_t flags)');
   set((ES_CONTINUOUS | ES_SYSTEM_REQUIRED) >>> 0);
   console.log('set');
@@ -56,8 +58,8 @@ async function main() {
 
   let koffi = null;
   await check('load', () => {
-    koffi = require('koffi');
-    return { ok: true, version: koffi.version, from: path.relative(process.cwd(), require.resolve('koffi')) };
+    koffi = loadKoffi();
+    return { ok: true, version: koffi.version, from: process.env.XA_KOFFI_FROM ? '装好的应用里' : path.relative(process.cwd(), require.resolve('koffi')) };
   });
   if (koffi) {
     await check('awake', () => awake(koffi));

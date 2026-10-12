@@ -162,18 +162,20 @@ jobs:
           & $exe $cli windows-setup --remove | Out-Host
           exit $dispatch
 
-      # For the lead to look at: does the module that calls the system directly load when the runtime is the app's
-      # own program (docs/design-windows.md section 13). The probe and the module come from the source tree here.
-      - name: System calls without PowerShell, through the app's own program (Windows)
+      # The platform calls the system directly on Windows instead of starting a hidden PowerShell (docs/design-windows.md
+      # section 13). The probe again, with the app's own program as the runtime and the module taken from inside the
+      # installed app: the copy that pack put there must load and give the same answers as the old way.
+      - name: System calls without PowerShell, through the installed app (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           ELECTRON_RUN_AS_NODE: '1'
         run: |
-          $exe = Join-Path $env:LOCALAPPDATA 'Programs\captain-agents\captain-agents.exe'
-          & $exe scripts\probe\windows-native.mjs shots\native-packaged.json | Out-Host
-          "probe through the app's own program: exit code $LASTEXITCODE"
-          exit 0
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\captain-agents'
+          $env:XA_KOFFI_FROM = Join-Path $app 'resources\platform\node_modules\koffi'
+          & (Join-Path $app 'captain-agents.exe') scripts\probe\windows-native.mjs shots\native-packaged.json | Out-Host
+          "probe through the installed app: exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
 
       - name: Print size and SHA-256
         shell: bash

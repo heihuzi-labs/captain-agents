@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { join, posix, win32 } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { backgroundSpawn, expandHomePath, findSh, isWindows, killTree, parseSnapshot, relativeInside, samePath, shell, stillRunning, treeOf, treeSpawn } from '../src/core/platform.ts';
+import { backgroundSpawn, expandHomePath, findSh, isWindows, killTree, relativeInside, samePath, shell, stillRunning, treeOf, treeSpawn } from '../src/core/platform.ts';
 import { alive } from '../src/core/fsx.ts';
 import { until, killLeftover } from './helpers.ts';
 
@@ -35,12 +35,6 @@ test('Git 副本路径比较：Windows 斜杠和大小写等价，POSIX 大小�
   assert.equal(relativeInside('\\\\server\\share\\repo', '//SERVER/share/repo/a', win32), 'a');
   assert.equal(relativeInside('\\\\server\\share', '\\\\server\\other\\a', win32), undefined);
   assert.equal(expandHomePath('~\\bin\\tool', 'C:\\Users\\owner', win32), 'C:\\Users\\owner\\bin\\tool');
-});
-
-test('进程快照只收“进程号 父进程号 创建时间”三段数字的行，认两种换行', () => {
-  assert.deepEqual(parseSnapshot('4 0 100\r\n812 4 250\n\n乱码 1 2\n12 x 3\n 900 812 300 \n'), [
-    { pid: 4, parent: 0, created: 100 }, { pid: 812, parent: 4, created: 250 }, { pid: 900, parent: 812, created: 300 },
-  ]);
 });
 
 test('进程树：root 还在时连它带子孙一起，父在前子在后；别人的进程不碰', () => {

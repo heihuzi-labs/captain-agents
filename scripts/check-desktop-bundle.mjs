@@ -39,7 +39,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         if (dependencies.length) throw new Error(`${path} 仍引用外部依赖：${dependencies.join('、')}`);
       }
     }
-    await checkPlatform(resolve('out/platform'));
-    console.log('主进程和预加载产物检查通过：只依赖 Electron、Node 内置模块和包内文件；平台文件与 srt 依赖完整、无符号链接。');
+    // 主进程在 Windows 上还要用一个调系统接口的模块（src/core/native-windows.ts）：它不打进产物，运行时从平台目录取，
+    // 所以这里核对平台目录里有它（checkPlatform 按打包目标查）。
+    await checkPlatform(resolve('out/platform'), process.argv[2]);
+    console.log('主进程和预加载产物检查通过：只依赖 Electron、Node 内置模块和包内文件；平台文件与依赖完整、无符号链接。');
   } catch (error) { console.error(`打包前检查失败：${error.message}`); process.exitCode = 1; }
 }

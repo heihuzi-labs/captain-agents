@@ -95,10 +95,13 @@ try {
     result.steps.job = { waitExit: waited.exit, state: job.state, error: job.error ?? null, written, asked, toolOutput,
       sandbox: args.find(a => a.startsWith('windows.sandbox=')) ?? null, endpoint: args.includes('model_provider="probe"'),
       denyRead: args.some(a => a.startsWith('permissions.xa=') && a.includes('"deny"')) };
+    // 看管进程在 Windows 上直接调系统接口（防休眠、读进程列表）；模块加载不了时它只会在自己的日志里说一声，这里把它当没过。
+    const complaints = (await fs.readFile(path.join(registry, 'jobs', id, 'supervisor.log'), 'utf8').catch(() => '')).split(/\r?\n/).filter(l => /防休眠|调系统接口|读取进程列表/.test(l));
+    result.steps.job.complaints = complaints.slice(0, 5);
     if (job.state !== 'done' || !written) for (const name of ['stderr.log', 'supervisor.log', 'run.log']) result.steps[name] = (await fs.readFile(path.join(registry, 'jobs', id, name), 'utf8').catch(() => '')).slice(-800);
     const ran = /exit_code\\*"\s*:\s*0/.test(toolOutput ?? '');
     result.steps.job.ran = ran;
-    ok = job.state === 'done' && (RO ? ran && !written : written);
+    ok = job.state === 'done' && (RO ? ran && !written : written) && complaints.length === 0;
     await cli('stop', id); await cli('clean', id);
   }
 } catch (error) { result.error = String(error?.stack ?? error); }

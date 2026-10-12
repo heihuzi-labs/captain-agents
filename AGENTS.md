@@ -12,7 +12,7 @@
 - 现在是“命令行 + 桌面应用”，两边共用 `src/core/` 一份核心；命令行在 `src/cli/`，桌面应用在 `app/`（`main` 后台、`preload` 桥、`renderer` 界面、`shared` 共用类型）。规则只写在核心里，两个外壳不重复写。
 - Node 24 + TypeScript，只用可擦除的写法（不用 `enum`、`namespace`、参数属性）。
 - 命令行入口是 `bin/xagents`（`package.json` 的 `bin`），由 Node 直接运行 `src/cli/cli.ts`，不编译。桌面应用用 electron-vite：`npm run dev` 开发，`npm run build` 构建，应用入口 `out/main/index.js`。
-- 运行时依赖（`package.json` 的 `dependencies`）：`@anthropic-ai/sandbox-runtime`（选手隔离）和桌面界面用的 `react`、`react-dom`、`react-markdown`。开发依赖是构建、打包、类型检查、测试、截图这几类工具（Electron、electron-vite、Vitest、Playwright 等）。加任何依赖先说明理由。
+- 运行时依赖（`package.json` 的 `dependencies`）：`@anthropic-ai/sandbox-runtime`（选手隔离）、`koffi`（只在 Windows 上用：直接调系统接口来防休眠、读进程列表、送进回收站，不在后台启动 PowerShell，见 [docs/design-windows.md](docs/design-windows.md) 第 13 节）和桌面界面用的 `react`、`react-dom`、`react-markdown`。开发依赖是构建、打包、类型检查、测试、截图这几类工具（Electron、electron-vite、Vitest、Playwright 等）。加任何依赖先说明理由。
 - 写登记文件一律先写临时文件再改名；改任务记录一律在锁里“读 → 改 → 写”。
 
 ## 测试与验收

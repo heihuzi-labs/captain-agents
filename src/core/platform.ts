@@ -3,6 +3,8 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path, { dirname, join } from 'node:path';
+import { processRows } from './native-windows.ts';
+import type { ProcessRow as Row } from './native-windows.ts';
 
 export const isWindows = process.platform === 'win32';
 
@@ -26,24 +28,8 @@ export const treeSpawn = (): { detached?: true; windowsHide?: true } => isWindow
 export const backgroundSpawn = (): { detached: true; windowsHide?: true } => isWindows ? { detached: true, windowsHide: true } : { detached: true };
 
 export type TreeSignal = 'SIGTERM' | 'SIGKILL';
-type Row = { pid: number; parent: number; created: number };
+// Windows 的进程快照（进程号、父进程号、创建时间）直接问系统要，不启动别的程序：native-windows.ts 的 processRows。
 
-// Windows 的进程快照：进程号、父进程号、创建时间（毫秒）。用系统自带的 PowerShell 读，一次约一秒。
-const SNAPSHOT = 'Get-CimInstance Win32_Process | ForEach-Object { if ($_.CreationDate) { "$($_.ProcessId) $($_.ParentProcessId) $(([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds())" } }';
-export function parseSnapshot(text: string): Row[] {
-  const rows: Row[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^(\d+) (\d+) (\d+)$/.exec(line.trim());
-    if (m) rows.push({ pid: Number(m[1]), parent: Number(m[2]), created: Number(m[3]) });
-  }
-  return rows;
-}
-function snapshot(): Row[] {
-  const file = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const r = spawnSync(file, ['-NoProfile', '-NonInteractive', '-Command', SNAPSHOT], { encoding: 'utf8', windowsHide: true, timeout: 20_000 });
-  if (r.error || r.status !== 0) throw new Error(`读取进程列表失败：${r.error?.message || (r.stderr || '').trim().slice(0, 300) || `退出码 ${r.status}`}`);
-  return parseSnapshot(r.stdout);
-}
 // 从快照里找出 root 这棵树上还活着的进程（父在前、子在后）。
 // Windows 的进程号回收得很快（实测：流水线上一条命令退出一两秒后，它的号就被别的测试的进程拿去用了），
 // 所以认进程只看号不行，处处要看创建时间：
@@ -79,7 +65,7 @@ export function stillRunning(pid: number | undefined, since?: number): boolean {
   try { process.kill(pid, 0); }
   catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') return false; }
   if (!isWindows || since === undefined) return true;
-  const row = snapshot().find(r => r.pid === pid);
+  const row = processRows().find(r => r.pid === pid);
   return !!row && row.created >= since - BEFORE && row.created <= since + AFTER;
 }
 
@@ -94,7 +80,7 @@ export function killTree(pid: number | undefined, signal: TreeSignal, since?: nu
     catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e; }
     return;
   }
-  for (const target of treeOf(snapshot(), pid, since, exitedAt)) {
+  for (const target of treeOf(processRows(), pid, since, exitedAt)) {
     if (target === process.pid) continue;
     try { process.kill(target, 'SIGKILL'); }
     catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e; }

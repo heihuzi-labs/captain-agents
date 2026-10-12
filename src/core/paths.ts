@@ -3,7 +3,6 @@ import path, { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { statSync } from 'node:fs';
-import { samePath } from './platform.ts';
 
 type PlatformProcess = { versions: { [name: string]: string | undefined }; resourcesPath?: string };
 const isDirectory = (path: string) => {
@@ -18,7 +17,8 @@ export function packagedPlatformRoot(runtime: PlatformProcess = process): string
 export function resolveToolRoot(moduleUrl = import.meta.url, runtime: PlatformProcess = process): string {
   const sourceRoot = resolve(fileURLToPath(new URL('../../', moduleUrl)));
   // 只有 asar 中的后台才切到资源平台；开发构建与正在跑的代码快照仍取自己的根目录。
-  if (runtime.versions.electron && runtime.resourcesPath && samePath(sourceRoot, join(runtime.resourcesPath, 'app.asar'))) {
+  // 两个路径是不是同一个，直接用 node:path 比：这个文件不能引 platform.ts（它经 native-windows.ts 反过来要用这里的 toolRoot）。
+  if (runtime.versions.electron && runtime.resourcesPath && path.relative(sourceRoot, join(runtime.resourcesPath, 'app.asar')) === '') {
     const root = packagedPlatformRoot(runtime);
     if (!root) throw new Error('应用缺少平台目录，请重新安装完整的派活工作台。');
     return root;

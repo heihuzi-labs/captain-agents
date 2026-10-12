@@ -157,13 +157,10 @@ test('选手失败时也关闭防休眠；选手未能启动时不启动 caffein
   assert.equal(await readFile(c.marker, 'utf8'), marker);
 });
 
-test('防休眠帮手的启动命令：macOS 用 caffeinate，Windows 用系统自带的 PowerShell 盯着看管进程；可以整个换成别的程序或脚本', () => {
-  assert.deepEqual({ ...awakeCommand(123, {}, false), env: null }, { file: 'caffeinate', args: ['-i', '-w', '123'], env: null });
-  const win = awakeCommand(123, { SystemRoot: 'D:\\Win' }, true);
-  assert.match(win.file, /^D:\\Win.System32.WindowsPowerShell.v1\.0.powershell\.exe$/);
-  assert.deepEqual(win.args.slice(0, 5), ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command']);
-  assert.match(win.args[5], /SetThreadExecutionState\(\[uint32\]2147483649\)/); assert.match(win.args[5], /Wait-Process -Id 123 /);
-  assert.deepEqual({ ...awakeCommand(7, { XAGENTS_CAFFEINATE: '/x/other' }, true), env: null }, { file: '/x/other', args: ['-i', '-w', '7'], env: null });
-  const script = awakeCommand(7, { XAGENTS_CAFFEINATE: '/x/fake.cjs' }, false);
+// Windows 上不起帮手，看管进程自己向系统申请（test/native-windows.test.ts）。
+test('防休眠帮手的启动命令：caffeinate 盯着看管进程；可以整个换成别的程序或脚本', () => {
+  assert.deepEqual({ ...awakeCommand(123, {}), env: null }, { file: 'caffeinate', args: ['-i', '-w', '123'], env: null });
+  assert.deepEqual({ ...awakeCommand(7, { XAGENTS_CAFFEINATE: '/x/other' }), env: null }, { file: '/x/other', args: ['-i', '-w', '7'], env: null });
+  const script = awakeCommand(7, { XAGENTS_CAFFEINATE: '/x/fake.cjs' });
   assert.equal(script.file, process.execPath); assert.deepEqual(script.args, ['/x/fake.cjs', '-i', '-w', '7']);
 });
