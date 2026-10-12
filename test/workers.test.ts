@@ -103,7 +103,9 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   for (const feature of ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories']) {
     assert.ok(codex.args.some((v, i) => v === '--disable' && codex.args[i + 1] === feature));
   }
-  assert.ok(codex.args.includes('--ignore-user-config')); assert.ok(codex.args.includes(codexPermissions(job('codex', true), { denyReadExtra: [] })));
+  // Windows 上这里没做过自检（临时登记处是空的），走的是“没装加固”的那一路：权限表不带禁读名单。
+  const noHardening = process.platform === 'win32';
+  assert.ok(codex.args.includes('--ignore-user-config')); assert.ok(codex.args.includes(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, undefined, noHardening)));
   // Codex 的 :workspace 放开 $TMPDIR：指向任务的 tmp，并由启动前建好。
   const tmp = join(c.home, 'jobs', '0929-1000-test', 'tmp');
   assert.deepEqual(codex.env, { TMPDIR: tmp, ...(process.platform === 'win32' ? { TEMP: tmp, TMP: tmp } : {}) }); assert.ok((await stat(tmp)).isDirectory());
@@ -122,7 +124,7 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   // Codex 主进程本身也不能继承别家的钥匙（这些变量在 Codex 里比登录文件优先）；普通 Codex 不受影响。
   assert.deepEqual(ds.unset, KEY_VARS); assert.equal(codex.unset, undefined);
   for (const name of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']) assert.ok(KEY_VARS.includes(name), name);
-  assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] })));
+  assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] }, undefined, false, undefined, noHardening)));
   // 主人的 Codex 接的是自定义接口：那一段原样带进启动参数，别的配置不带；钥匙变量只记名字，值不进命令（docs/design-scan.md 规则二）。
   const oldHome = process.env.CODEX_HOME, relayHome = join(c.temp, 'relay-codex');
   await mkdir(relayHome, { recursive: true });

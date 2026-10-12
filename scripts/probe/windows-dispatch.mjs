@@ -5,13 +5,15 @@
 // 用法：node scripts/probe/windows-dispatch.mjs <结果文件> -- <启动 xagents 的命令和参数…>
 //   从源码跑：… -- node src/cli/cli.ts        装好的应用：… -- <应用的程序> <应用里的 platform/bin/xagents>（环境里设 ELECTRON_RUN_AS_NODE=1）
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 
 const split = process.argv.indexOf('--');
-const resultFile = process.argv[2], xagents = split < 0 ? [] : process.argv.slice(split + 1);
+// 命令里写的相对路径（比如 src/cli/cli.ts）按现在的目录补成完整的：后面的命令是在临时仓库里跑的。
+const resultFile = process.argv[2] && path.resolve(process.argv[2]), xagents = (split < 0 ? [] : process.argv.slice(split + 1)).map((v, i) => i > 0 && existsSync(v) ? path.resolve(v) : v);
 if (!resultFile || !xagents.length) { console.error('用法：windows-dispatch.mjs <结果文件> -- <启动 xagents 的命令和参数…>'); process.exit(2); }
 const windows = process.platform === 'win32';
 const codex = process.env.XAGENTS_CODEX || (windows ? path.join(process.env.LOCALAPPDATA, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe') : '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex');
