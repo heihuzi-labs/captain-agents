@@ -9,8 +9,9 @@ import { awakeCommand } from '../src/core/awake.ts';
 import { isWindows } from '../src/core/platform.ts';
 
 // Windows 上进程收不到“请你退出”的信号，被关掉时来不及留下记录：只核对它确实不在了。
+// 看管进程意外退出时，Windows 会把它起的帮手一并收走，帮手同样来不及留记录。
 const endedBy = async (file: string, why: string) => {
-  if (isWindows && why === 'SIGTERM') return assert.rejects(access(file), { code: 'ENOENT' });
+  if (isWindows) return why === 'SIGTERM' ? assert.rejects(access(file), { code: 'ENOENT' }) : undefined;
   assert.equal(await readFile(file, 'utf8'), why);
 };
 

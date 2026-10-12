@@ -49,7 +49,9 @@ test('超时记录没过并杀掉整组孙进程，不留下心跳', async t => 
   const grandchild = `require('node:fs').writeFileSync(${JSON.stringify(heartbeat)},'started');setInterval(()=>require('node:fs').appendFileSync(${JSON.stringify(heartbeat)},'x'),20)`;
   await config(c, [cmd(`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'inherit'});setInterval(()=>{},1000)`) ], 0.01);
   const r = await c.cli(['verify', 'verify-test']); assert.equal(r.code, 1); assert.match(r.stdout, /超时/);
-  const j = JSON.parse(await readFile(join(dir, 'job.json'), 'utf8')); assert.equal(j.verify.ok, false); assert.equal(j.verify.steps[0].exit, null);
+  const j = JSON.parse(await readFile(join(dir, 'job.json'), 'utf8')); assert.equal(j.verify.ok, false);
+  // 被强行结束的进程：macOS 上没有退出码（记的是信号），Windows 上退出码是 1。
+  assert.equal(j.verify.steps[0].exit, process.platform === 'win32' ? 1 : null);
   const before = await readFile(heartbeat, 'utf8'); await sleep(150); assert.equal(await readFile(heartbeat, 'utf8'), before);
 });
 test('同项目验收跨进程排队超过 10 秒仍等待，日志不会交叉', async t => {
@@ -57,7 +59,7 @@ test('同项目验收跨进程排队超过 10 秒仍等待，日志不会交叉'
   const trace = join(c.temp, 'trace');
   await config(c, [cmd(`const fs=require('node:fs');const first=!fs.existsSync(${JSON.stringify(trace)});fs.appendFileSync(${JSON.stringify(trace)},'start\\n');setTimeout(()=>fs.appendFileSync(${JSON.stringify(trace)},'end\\n'),first?10500:50)`)]);
   const results = await Promise.all([c.cli(['verify', 'a']), c.cli(['verify', 'b'])]);
-  for (const r of results) assert.equal(r.code, 0, r.stderr);
+  for (const r of results) assert.equal(r.code, 0, r.stderr + r.stdout);
   assert.equal(await readFile(trace, 'utf8'), 'start\nend\nstart\nend\n');
 });
 test('没有验收命令、非法超时、运行中或已清理不会误报通过', async t => {

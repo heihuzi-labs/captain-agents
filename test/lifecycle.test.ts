@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { isWindows } from '../src/core/platform.ts';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, access, mkdir, symlink, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -145,7 +146,8 @@ test('看管进程被 SIGKILL 后 status 判失联，wait 失败，stop 收掉�
   assert.equal((await c.cli(['status', j.id])).code, 0);
   assert.equal((await c.jobs())[0].state, 'lost'); assert.equal((await desktopView(c.home)).jobs[0].state, 'lost');
   assert.equal((await c.cli(['wait', j.id])).code, 1);
-  assert.equal((await c.cli(['clean', j.id])).code, 1);
+  // macOS：看管进程没了，选手还在，清理要先拒绝。Windows：系统把选手跟着看管进程一起收走了，没有残留可拒绝。
+  if (!isWindows) assert.equal((await c.cli(['clean', j.id])).code, 1);
   assert.equal((await c.cli(['stop', j.id])).code, 0); await until(async () => !alive(j.workerPid));
   assert.equal((await c.cli(['clean', j.id])).code, 0);
 });
@@ -230,7 +232,8 @@ test('派发进程准备期间被杀后登记不永远排队，可停止残留�
   const j = await until(async () => (await c.jobs())[0], j => Boolean(j?.setupPid));
   child.kill('SIGKILL'); await ended;
   assert.equal((await c.cli(['status'])).code, 0); assert.equal((await c.jobs())[0].state, 'failed');
-  assert.equal((await c.cli(['clean', j.id])).code, 1);
+  // 同上：Windows 上准备进程跟着派发进程一起被系统收走，不会残留。
+  if (!isWindows) assert.equal((await c.cli(['clean', j.id])).code, 1);
   assert.equal((await c.cli(['stop', j.id])).code, 0);
   await until(async () => !alive(j.setupPid));
   assert.equal((await c.cli(['clean', j.id])).code, 0);
@@ -389,7 +392,7 @@ test('项目显示名：登记时 --label，或用 project label 单独改；只
   assert.deepEqual((await buildView()).projects.find(p => p.name === '测试'), { name: '测试', label: '画布创作站', archived: false });
 });
 
-test('清理 Grok 活时，它在 ~/.grok/sessions 下的会话文件夹一起移进废纸篓；别的会话文件夹不动', async t => {
+test('清理 Grok 活时，它在 ~/.grok/sessions 下的会话文件夹一起移进废纸篓；别的会话文件夹不动', { skip: isWindows ? '只属于 macOS：Grok 的会话文件夹名是按 macOS 上实测的写法算的；Windows 上不开 Grok 这一路' : false }, async t => {
   const c = await context(t);
   assert.equal((await c.add()).code, 0);
   assert.equal((await c.cli(['run', c.task, '--summary', '会话文件夹清理', '--who', 'grok:high', '--who', 'codex:high'])).code, 0);
@@ -428,7 +431,7 @@ test('选手一律看不到名字带密钥字样的环境变量，别的照常�
   }
 });
 
-test('Cursor 的登录由看管进程在隔离外现取，只进选手进程的环境，不进任务记录；取不到就失败', async t => {
+test('Cursor 的登录由看管进程在隔离外现取，只进选手进程的环境，不进任务记录；取不到就失败', { skip: isWindows ? '只属于 macOS：测的是从 macOS 钥匙串取 Cursor 的登录；Windows 上还不开 Cursor 这一路' : false }, async t => {
   const c = await context(t);
   assert.equal((await c.add([])).code, 0);
   // 假的 security：只认 Cursor 登录那一项，打印一个两个月后才过期的假令牌。

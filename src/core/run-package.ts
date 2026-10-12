@@ -117,7 +117,8 @@ function checkEnvironment(old: Command, next: Command) {
 export type PreparedRun = { runtime: string; entry: string; command: Command; actual: Command; isolation: Isolation; round: number };
 export async function prepareRun(job: Job, text: string, project: Isolated, resume?: NonNullable<Job['resume']>): Promise<PreparedRun> {
   const round = resume?.round ?? 1;
-  const runtime = join('runtime', `r${round}-${randomUUID()}`), dir = join(jobDir(job.id), runtime);
+  // 记进任务记录的相对位置一律用 /，两种系统写出来的一样；用的时候再和任务目录拼。
+  const runtime = `runtime/r${round}-${randomUUID()}`, dir = join(jobDir(job.id), runtime);
   try {
     // “平台当前的版本”就是正在跑这段代码的这一份：派活的命令行是安装目录；群的推进进程每次启动都重拍快照（wake.ts 的
     // engineSnapshot），所以它自己就是当时的平台。包从 toolRoot 拍，规则用本进程里的生成器，代码和规则是同一版，不混用。
@@ -190,7 +191,7 @@ export function usePreparedRun(job: Job, prepared: PreparedRun) {
 export async function prunePackages(job: Pick<Job, 'id' | 'launches'>) {
   const keep = new Set((job.launches ?? []).slice(-2).map(l => l.runtime)), root = join(jobDir(job.id), 'runtime');
   for (const name of await readdir(root).catch(() => [] as string[])) {
-    if (!/^r\d+-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(name) || keep.has(join('runtime', name))) continue;
+    if (!/^r\d+-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(name) || keep.has(`runtime/${name}`)) continue;
     await rm(join(root, name), { recursive: true, force: true });
   }
 }
