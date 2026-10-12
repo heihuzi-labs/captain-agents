@@ -1,7 +1,31 @@
 import fs from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { spawn } from 'node:child_process';
 import { hasCode } from './fsx.ts';
+import { paths } from './paths.ts';
+import { isWindows } from './platform.ts';
+
+// 换下来的东西放哪。XAGENTS_TRASH 指定时就是那个目录（测试用）。
+// macOS：~/.Trash 下建一个“派活工作台-<名字>”文件夹，东西移进去。
+// Windows：回收站不是一个能直接往里放东西的目录。先在登记处的 cache/trash-staging 下建同名文件夹、把东西移进去，
+// 再让系统把这个文件夹整个送进回收站（主人在回收站里看到的就是这个名字）。
+export function trashPlan(env: NodeJS.ProcessEnv = process.env, windows = isWindows): { root: string; recycle: boolean } {
+  if (env.XAGENTS_TRASH) return { root: resolve(env.XAGENTS_TRASH), recycle: false };
+  return windows ? { root: join(paths().cache, 'trash-staging'), recycle: true } : { root: join(homedir(), '.Trash'), recycle: false };
+}
+// 用系统自带的 PowerShell 把一个文件夹送进回收站。路径经环境变量传，不拼进命令。
+const RECYCLE = "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($env:XA_RECYCLE_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin', 'ThrowException')";
+function recycle(folder: string): Promise<void> {
+  return new Promise((done, fail) => {
+    const file = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const child = spawn(file, ['-NoProfile', '-NonInteractive', '-Command', RECYCLE], { env: { ...process.env, XA_RECYCLE_PATH: folder }, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+    let err = '';
+    child.stderr.on('data', b => { err = (err + b).slice(-2000); });
+    child.once('error', fail);
+    child.once('close', code => code === 0 ? done() : fail(new Error(`送进回收站没成功（退出码 ${code}）${err.trim() ? '：' + err.trim().split(/\r?\n/)[0] : ''}。东西还在 ${folder}`)));
+  });
+}
 
 // 只有跨磁盘且完整复制成功后才移除源文件；复制不跟随符号链接。
 async function move(source: string, target: string): Promise<void> {
@@ -17,7 +41,7 @@ export async function moveToTrash(paths: string[], label: string): Promise<strin
   if (!label || /[/\\\0]/.test(label) || label === '.' || label === '..') throw new Error('废纸篓文件夹的名字不合法。');
   const sources = paths.map(path => resolve(path));
   if (new Set(sources.map(path => basename(path))).size !== sources.length) throw new Error('要移走的文件里有重名，请分开清理。');
-  const trash = resolve(process.env.XAGENTS_TRASH || join(homedir(), '.Trash'));
+  const plan = trashPlan(), trash = plan.root;
   await fs.mkdir(trash, { recursive: true });
   let folder = '';
   for (let n = 1; ; n++) {
@@ -40,6 +64,7 @@ export async function moveToTrash(paths: string[], label: string): Promise<strin
     }
     throw new Error(`移到废纸篓失败：${error instanceof Error ? error.message : String(error)}。废纸篓位置：${folder}${failures.length ? `；未能放回：${failures.join('、')}` : ''}`, { cause: error });
   }
+  if (plan.recycle) await recycle(folder);
   return folder;
 }
 
@@ -48,7 +73,7 @@ export async function copyToTrash(paths: string[], label: string): Promise<strin
   if (!label || /[/\\\0]/.test(label) || label === '.' || label === '..') throw new Error('废纸篓文件夹的名字不合法。');
   const sources = paths.map(path => resolve(path));
   if (new Set(sources.map(path => basename(path))).size !== sources.length) throw new Error('要备份的文件里有重名，请分开备份。');
-  const trash = resolve(process.env.XAGENTS_TRASH || join(homedir(), '.Trash'));
+  const plan = trashPlan(), trash = plan.root;
   await fs.mkdir(trash, { recursive: true });
   let folder = '';
   for (let n = 1; ; n++) {
@@ -63,5 +88,6 @@ export async function copyToTrash(paths: string[], label: string): Promise<strin
   } catch (error) {
     throw new Error(`备份到废纸篓失败：${error instanceof Error ? error.message : String(error)}。已有副本保留在 ${folder}，原文件没有移动。`, { cause: error });
   }
+  if (plan.recycle) await recycle(folder);
   return folder;
 }

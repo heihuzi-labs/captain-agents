@@ -252,3 +252,14 @@ test('CLI 输出清理件数与 MB，支持预览、force、帮助和已清日�
   }
   for (const args of [['slim', '--unknown'], ['slim', 'unexpected']]) assert.equal((await c.cli(args)).code, 1);
 });
+
+test('换下来的东西放哪：指定了就用指定的；macOS 是 ~/.Trash；Windows 先放登记处的暂存目录再送回收站', async () => {
+  const { trashPlan } = await import('../src/core/trash.ts');
+  const { paths } = await import('../src/core/paths.ts');
+  const { homedir } = await import('node:os');
+  const { resolve } = await import('node:path');
+  assert.deepEqual(trashPlan({ XAGENTS_TRASH: 'some/dir' }, true), { root: resolve('some/dir'), recycle: false });
+  assert.deepEqual(trashPlan({ XAGENTS_TRASH: 'some/dir' }, false), { root: resolve('some/dir'), recycle: false });
+  assert.deepEqual(trashPlan({}, false), { root: join(homedir(), '.Trash'), recycle: false });
+  assert.deepEqual(trashPlan({}, true), { root: join(paths().cache, 'trash-staging'), recycle: true });
+});

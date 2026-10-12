@@ -5,20 +5,27 @@ import { join } from 'node:path';
 import type { TestContext } from 'node:test';
 import { context, until, exec, root } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
+import { awakeCommand } from '../src/core/awake.ts';
+import { isWindows } from '../src/core/platform.ts';
+
+// Windows 上进程收不到“请你退出”的信号，被关掉时来不及留下记录：只核对它确实不在了。
+const endedBy = async (file: string, why: string) => {
+  if (isWindows && why === 'SIGTERM') return assert.rejects(access(file), { code: 'ENOENT' });
+  assert.equal(await readFile(file, 'utf8'), why);
+};
 
 async function setup(t: TestContext) {
   const c = await context(t); await c.add();
-  const file = join(c.temp, 'fake-caffeinate'), marker = join(c.temp, 'awake.json'), ended = join(c.temp, 'awake-ended');
+  const file = join(c.temp, 'fake-caffeinate.cjs'), marker = join(c.temp, 'awake.json'), ended = join(c.temp, 'awake-ended');
   const pids: number[] = [];
   t.after(() => { for (const pid of pids) { try { process.kill(pid, 'SIGKILL'); } catch {} } });
-  await writeFile(file, `#!${process.execPath}
-const fs = require('node:fs');
+  await writeFile(file, `const fs = require('node:fs');
 const args = process.argv.slice(2), watched = Number(args[2]);
 const end = why => { fs.writeFileSync(process.env.XA_AWAKE_ENDED, why); process.exit(0); };
 process.on('SIGTERM', () => { if (!process.env.XA_AWAKE_IGNORE_TERM) end('SIGTERM'); });
 fs.writeFileSync(process.env.XA_AWAKE_MARKER, JSON.stringify({ args, pid: process.pid, watched }));
 setInterval(() => { try { process.kill(watched, 0); } catch { end('parent-ended'); } }, 25);
-`, { mode: 0o700 });
+`);
   const extra = { XAGENTS_CAFFEINATE: file, XA_AWAKE_MARKER: marker, XA_AWAKE_ENDED: ended };
   const observed = async () => {
     const record = await until(async () => {
@@ -39,7 +46,7 @@ test('看管启动 caffeinate -i -w 自己的进程号，任务正常结束主�
   for (const stage of [1, 2]) await writeFile(join(c.home, 'jobs', job.id, `continue-${stage}`), '');
   const wait = await c.cli(['wait', job.id]); assert.equal(wait.code, 0, wait.stderr);
   await until(async () => !alive(awake.pid) && !alive(job.pid));
-  assert.equal(await readFile(c.ended, 'utf8'), 'SIGTERM');
+  await endedBy(c.ended, 'SIGTERM');
   assert.equal((await c.jobs())[0].state, 'done');
 });
 
@@ -60,7 +67,7 @@ test('看管进程意外退出后，替身按 -w 自动关闭，残留选手由 
   const awake = await c.observed();
   process.kill(job.pid!, 'SIGKILL');
   await until(async () => !alive(awake.pid) && !alive(job.pid));
-  assert.equal(await readFile(c.ended, 'utf8'), 'parent-ended');
+  await endedBy(c.ended, 'parent-ended');
   assert.equal((await c.cli(['stop', job.id])).code, 0);
   await until(async () => !alive(job.workerPid));
 });
@@ -73,14 +80,14 @@ test('关闭设置不起 caffeinate；找不到程序只记 supervisor.log，任
   const disabled = (await c.jobs())[0];
   assert.equal((await c.cli(['wait', disabled.id])).code, 0);
   await assert.rejects(access(c.marker), { code: 'ENOENT' });
-  assert.doesNotMatch(await readFile(join(c.home, 'jobs', disabled.id, 'supervisor.log'), 'utf8'), /caffeinate/);
+  assert.doesNotMatch(await readFile(join(c.home, 'jobs', disabled.id, 'supervisor.log'), 'utf8'), /防休眠/);
   await writeFile(join(c.home, 'config.json'), '{'); // 损坏时默认开启。
   result = await c.cli(['run', c.task, '--summary', '程序缺失仍完成', '--who', 'codex:high']);
-  assert.equal(result.code, 0, result.stderr); assert.doesNotMatch(result.stderr + result.stdout, /caffeinate/);
+  assert.equal(result.code, 0, result.stderr); assert.doesNotMatch(result.stderr + result.stdout, /防休眠/);
   const missing = (await c.jobs()).find(j => j.id !== disabled.id)!;
   assert.equal((await c.cli(['wait', missing.id])).code, 0);
   const log = await readFile(join(c.home, 'jobs', missing.id, 'supervisor.log'), 'utf8');
-  assert.equal(log.split('无法启动 caffeinate').length - 1, 1); assert.match(log, /任务继续执行/);
+  assert.equal(log.split('无法启动防休眠程序').length - 1, 1); assert.match(log, /任务继续执行/);
   assert.equal((await c.jobs()).find(j => j.id === missing.id)!.state, 'done');
 });
 
@@ -102,7 +109,7 @@ test('运行中读防休眠设置失败仍按开启处理，记录错误并能�
   assert.deepEqual(awake.args, ['-i', '-w', String(awake.watched)]);
   assert.match(done.stderr, /读取防休眠设置失败：.+。按开启处理，任务继续执行。/);
   await until(async () => !alive(awake.pid));
-  assert.equal(await readFile(c.ended, 'utf8'), 'SIGTERM');
+  await endedBy(c.ended, 'SIGTERM');
 });
 
 test('副本准备后设置读不到，启动前重新装载失败就收尾，不能绕过最新主人策略', async t => {
@@ -139,7 +146,7 @@ test('选手失败时也关闭防休眠；选手未能启动时不启动 caffein
   assert.equal((await running).code, 0);
   assert.equal((await c.jobs())[0].state, 'failed'); assert.equal((await c.jobs())[0].exit, 7);
   await until(async () => !alive(awake.pid));
-  assert.equal(await readFile(c.ended, 'utf8'), 'SIGTERM');
+  await endedBy(c.ended, 'SIGTERM');
   const marker = await readFile(c.marker, 'utf8');
   await writeJson(join(dir, 'job.json'), { ...base, command: {
     file: join(c.temp, 'missing-worker'), args: [], env: {}, stdin: 'ignore', output: 'run.log',
@@ -147,4 +154,15 @@ test('选手失败时也关闭防休眠；选手未能启动时不启动 caffein
   assert.equal((await c.cli(['__run', 'failure'], c.extra)).code, 0);
   assert.equal((await c.jobs())[0].state, 'failed');
   assert.equal(await readFile(c.marker, 'utf8'), marker);
+});
+
+test('防休眠帮手的启动命令：macOS 用 caffeinate，Windows 用系统自带的 PowerShell 盯着看管进程；可以整个换成别的程序或脚本', () => {
+  assert.deepEqual({ ...awakeCommand(123, {}, false), env: null }, { file: 'caffeinate', args: ['-i', '-w', '123'], env: null });
+  const win = awakeCommand(123, { SystemRoot: 'D:\\Win' }, true);
+  assert.match(win.file, /^D:\\Win.System32.WindowsPowerShell.v1\.0.powershell\.exe$/);
+  assert.deepEqual(win.args.slice(0, 5), ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command']);
+  assert.match(win.args[5], /SetThreadExecutionState\(\[uint32\]2147483649\)/); assert.match(win.args[5], /Wait-Process -Id 123 /);
+  assert.deepEqual({ ...awakeCommand(7, { XAGENTS_CAFFEINATE: '/x/other' }, true), env: null }, { file: '/x/other', args: ['-i', '-w', '7'], env: null });
+  const script = awakeCommand(7, { XAGENTS_CAFFEINATE: '/x/fake.cjs' }, false);
+  assert.equal(script.file, process.execPath); assert.deepEqual(script.args, ['/x/fake.cjs', '-i', '-w', '7']);
 });

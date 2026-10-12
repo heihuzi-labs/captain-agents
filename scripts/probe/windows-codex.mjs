@@ -205,7 +205,7 @@ async function outer(codex, resultFile) {
     await sandboxCase('unelevated:xa-write', 'unelevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
     await sandboxCase('unset:xa-write', null, ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
     // 补救试验：给离线专用账户加“拦本机回环”的系统过滤规则，再跑一遍；最后撤掉，确认恢复原样。
-    const fence = action => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(path.dirname(self), 'windows-loopback-fence.ps1'), '-Action', action], { timeout: 120_000 });
+    const fence = action => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(path.dirname(self), '..', '..', 'sandbox', 'windows', 'loopback-fence.ps1'), '-Action', action], { timeout: 120_000 });
     result.fenceInstall = brief(await fence('install'));
     console.log(`[fence install] 退出码 ${result.fenceInstall.exit} ${result.fenceInstall.stdout} ${result.fenceInstall.stderr.slice(0, 500)}`);
     await sandboxCase('fenced:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
@@ -218,6 +218,21 @@ async function outer(codex, resultFile) {
     result.fenceRemove = brief(await fence('remove'));
     console.log(`[fence remove] 退出码 ${result.fenceRemove.exit} ${result.fenceRemove.stdout} ${result.fenceRemove.stderr.slice(0, 500)}`);
     await sandboxCase('unfenced:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    // 一次装齐的脚本：换两个新的 Codex 文件夹，走“提权后调用”的那条路（流水线的机器本来就是管理员，不会弹窗）。
+    const homes = [path.join(base, 'setup-home-1'), path.join(base, 'setup-home-2')];
+    for (const dir of homes) await fs.mkdir(dir);
+    const setupResult = path.join(base, 'setup-result.json'); await fs.writeFile(setupResult, '');
+    const setupScript = path.join(path.dirname(self), '..', '..', 'sandbox', 'windows', 'setup.ps1');
+    const quote = value => "'" + value.replaceAll("'", "''") + "'";
+    const elevated = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',${quote('"' + setupScript + '"')},'-Result',${quote('"' + setupResult + '"')},'-Codex',${quote('"' + codex + '"')},'-User',${quote('"' + os.userInfo().username + '"')},'-CodexHome',${quote(homes.map(h => '"' + h + '"').join(','))}); exit $p.ExitCode`], { timeout: 300_000 });
+    result.setupScript = { run: brief(elevated), result: await fs.readFile(setupResult, 'utf8').then(JSON.parse).catch(e => String(e.message)) };
+    console.log(`[setup.ps1] 退出码 ${elevated.exit} ${JSON.stringify(result.setupScript.result).slice(0, 1500)}`);
+    env.CODEX_HOME = homes[1];
+    await sandboxCase('setup-script:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    env.CODEX_HOME = codexHome;
+    const removed = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', setupScript, '-Result', setupResult, '-Remove'], { timeout: 120_000 });
+    result.setupScriptRemove = { run: brief(removed), result: await fs.readFile(setupResult, 'utf8').then(JSON.parse).catch(e => String(e.message)) };
     result.sandboxLogs = {};
     for (const name of await fs.readdir(path.join(codexHome, '.sandbox')).catch(() => [])) {
       if (name.endsWith('.log')) result.sandboxLogs[name] = (await fs.readFile(path.join(codexHome, '.sandbox', name), 'utf8').catch(() => '')).slice(-5000);

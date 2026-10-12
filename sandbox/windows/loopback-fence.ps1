@@ -1,11 +1,12 @@
-# 试验：给 Codex 的离线专用账户补上“本机回环”的拦截（docs/research/windows-codex-sandbox-2026-10-12.md）。
-# Codex 0.162.1 靠 Windows 防火墙规则拦本机回环，实测拦不住（防火墙不过滤发往本机的连接）。
+# 给 Codex 的离线专用账户补上“本机回环”的拦截。依据：docs/research/windows-codex-sandbox-2026-10-12.md。
+# Codex 靠 Windows 防火墙规则拦本机回环，实测拦不住（防火墙不过滤发往本机的连接）。
 # 这里直接往系统的过滤平台（WFP）加 6 条只对这一个账户生效的规则：
 #   连出：目的地是本机回环的，拦（IPv4、IPv6）
 #   开监听口：拦（IPv4、IPv6）
 #   收进来：来自本机回环的，拦（IPv4、IPv6）
 # 规则是持久的（重启后还在），标识固定，重复安装不会叠加；-Action remove 全部撤掉。要管理员权限。
 # 只动这一个专用账户：主人自己的账户、允许联网时用的另一个专用账户都不受影响。
+# 有没有生效以隔离自检里的本机端口探针为准，不以“装过”为准。
 param(
   [ValidateSet('install', 'remove')] [string]$Action = 'install',
   [string]$Account = 'CodexSandboxOffline'
