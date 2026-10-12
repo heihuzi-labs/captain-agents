@@ -101,6 +101,16 @@ export function finish(job: Job, state: State, error?: string) {
   job.seconds = Math.max(0, (Date.parse(job.ended) - Date.parse(job.started || job.created)) / 1000);
   if (error) job.error = error; else delete job.error;
 }
+// 记录里的准备进程、选手进程，它们留下的子孙最晚可能出生在什么时候（毫秒）。只有 Windows 用得上：那里进程号回收得很快，
+// 找“留下的子孙”不给期限的话，一件很久以前的活会把后来用过同一个号的无关进程的子进程认成留下的，stop 就会杀错（platform.ts 的 treeOf）。
+// - 还没结束的活：到现在为止。
+// - 已经结束的活：到记下的结束时间为止。看管进程自己收尾的，那时选手已经退了；失联的，结束时间是平台发现看管进程不在的那一刻，
+//   而看管进程一没，系统就带走了它直接起的选手，所以选手直接起的子进程都出生在这之前。
+// 期限宁可偏晚不能偏早：偏早会漏掉真留下的选手子进程。所以不用“选手最后一次有动静的时间”（lastActivityAt，选手不出声时也能起进程），
+// 并且多留 5 秒：系统先让别人看到“看管进程没了”，再收走它起的选手，中间差一瞬。
+// 代价：失联一直没人发现（没有别的活在跑、没人运行过命令），拖到 stop 这一刻才记下结束时间，期限就等于现在，起不到作用。
+const SLACK = 5000;
+export const leftBy = (j: Pick<Job, 'ended'>, now = Date.now()) => j.ended ? Date.parse(j.ended) + SLACK : now;
 // 只判断，不改任务、不写文件；进程探针可替换，供状态修正和只读视图共用。
 export function interruption(job: Job, isAlive = alive): { state: State; error?: string } | undefined {
   if (job.state === 'queued' && !isAlive(job.pid) && !isAlive(job.queuedBy)) {

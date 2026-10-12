@@ -162,6 +162,9 @@ export async function resumeMember(job: Job, round: number, promptBody: string):
     current.state = 'queued';
     current.queuedBy = process.pid;
     delete current.ended; delete current.exit; delete current.error; delete current.stopRequested; delete current.usage;
+    // 上一轮的选手进程号不带进新一轮（上面已确认它不在了）。留着的话，新一轮的看管进程登记新号之前这一小段里有人 stop，
+    // 就会照着旧号去找“留下的子孙”，而这时活算还没结束、期限是现在，等于没有期限（job.ts 的 leftBy）。
+    delete current.workerPid; delete current.workerSince;
     start = true;
   });
   if (!start) return false;

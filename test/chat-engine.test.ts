@@ -15,6 +15,7 @@ import { clean, stop } from '../src/core/commands.ts';
 import { dispatch } from '../src/core/dispatch.ts';
 import { git, removeWorktree } from '../src/core/worktree.ts';
 import { command, resumeCommand } from '../src/core/workers.ts';
+import { resumeMember } from '../src/core/wake.ts';
 import { sandbox } from '../src/core/sandbox.ts';
 
 async function setup(t: TestContext, reports: Record<string, string | string[]> = {}, modes: Record<string, string> = {}) {
@@ -464,4 +465,21 @@ test('不设限通过 wake 叫醒 95% 的成员并续接，无需 force', async 
   await settled(chat.id);
   const job = await readJob(id);
   assert.equal(job.state, 'done'); assert.equal(job.rounds?.length, 2);
+});
+
+
+// 上一轮的选手进程号留在记录里的话，新一轮的看管进程登记新号之前有人 stop，就会照着旧号去找“留下的子孙”（Windows 上会找错）。
+test('叫醒下一轮时，上一轮的选手进程号不带进新一轮', async t => {
+  const c = await setup(t, { grok: ['第一轮完成', '第二轮完成'] });
+  const chat = await c.open();
+  await sayInChat(chat.id, '@Grok 第一轮', 'owner');
+  const id = (await settled(chat.id)).members[0].job!;
+  const stale = await updateJob(id, j => { j.workerPid = 2 ** 30; j.workerSince = 1; });
+  assert.equal(stale.state, 'done');
+  assert.equal(await resumeMember(stale, 2, '第二轮'), true);
+  // 这时新一轮的看管进程多半还没起选手：记录里要么没有选手进程号，要么已经是新的，总之不是旧的。
+  const queued = await readJob(id);
+  assert.notEqual(queued.workerPid, 2 ** 30); assert.notEqual(queued.workerSince, 1);
+  const done = await until(() => readJob(id), j => j.state !== 'queued' && j.state !== 'running', 45_000);
+  assert.equal(done.state, 'done'); assert.notEqual(done.workerPid, 2 ** 30);
 });

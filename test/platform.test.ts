@@ -7,6 +7,7 @@ import { join, posix, win32 } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { backgroundSpawn, expandHomePath, findSh, isWindows, killTree, relativeInside, samePath, shell, stillRunning, treeOf, treeSpawn } from '../src/core/platform.ts';
 import { alive } from '../src/core/fsx.ts';
+import { leftBy } from '../src/core/job.ts';
 import { until, killLeftover } from './helpers.ts';
 
 for (const implementation of [posix, win32]) {
@@ -196,6 +197,23 @@ test('进程树：最上面那个不在了、只知道这件活哪一刻算结�
   // 100 号还在而且是我们起的：上限不起作用。
   const alive = [{ pid: 100, parent: 1, created: 1000 }, ...rows];
   assert.deepEqual(treeOf(alive, 100, 1000, undefined, 60_000), treeOf(alive, 100, 1000));
+});
+
+// 按任务记录去找留下的子孙时用的期限（job.ts 的 leftBy）。
+test('找留下的子孙的期限：还没结束的活到现在为止；结束了的（包括失联的）到记下的结束时间再宽 5 秒，宁可偏晚', () => {
+  assert.equal(leftBy({}, 123_456), 123_456);
+  const ended = '2026-10-13T01:00:00.000Z', at = Date.parse(ended);
+  assert.equal(leftBy({ ended }, at + 86_400_000), at + 5000, '过了一天才来停，期限还是当时的结束时间');
+  // 失联的活：选手（100 号）是 since 那一刻起的，早就跟着看管进程没了，结束时间是平台发现失联的那一刻。
+  const since = at - 600_000;
+  const rows = [
+    { pid: 101, parent: 100, created: since + 500 },         // 选手生前起的
+    { pid: 105, parent: 101, created: at + 3_600_000 },       // 它后来又起的孙子：父亲是留下的那个，照样算
+    { pid: 102, parent: 100, created: at + 3000 },            // 落在宽出来的 5 秒里：算（宁可偏晚）
+    { pid: 103, parent: 100, created: at + 3_600_000 },       // 一小时后别的进程用了 100 这个号又起的，和我们无关
+  ];
+  assert.deepEqual(treeOf(rows, 100, since, undefined, leftBy({ ended })), [101, 105, 102]);
+  assert.deepEqual(treeOf(rows, 100, since), [101, 105, 102, 103], '不给期限就会把无关的 103 也收走');
 });
 
 // 派活进程或看管进程被直接杀掉时就是这种情况：系统只带走它直接起的那一个，那一个自己起的还在跑、还占着副本目录。

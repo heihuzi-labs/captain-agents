@@ -1,9 +1,10 @@
 import { test } from 'node:test';
-import { isWindows } from '../src/core/platform.ts';
+import { isWindows, killTree, shell, treeSpawn } from '../src/core/platform.ts';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, access, mkdir, symlink, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { context, until, desktopView } from './helpers.ts';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { context, until, desktopView, killLeftover } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -11,7 +12,7 @@ import { root } from './helpers.ts';
 import { ensureHome } from '../src/core/paths.ts';
 import { PLATFORM_SWITCHES } from '../src/core/env.ts';
 import { reserveJob } from '../src/core/ids.ts';
-import { createJob } from '../src/core/job.ts';
+import { createJob, updateJob } from '../src/core/job.ts';
 import { codexPermissions } from '../src/core/sandbox.ts';
 
 test('四家同批派发到完成、共同起点、收集、diff、清理与记录保留', async t => {
@@ -270,6 +271,41 @@ test('看管进程尚未安装信号处理器时 stop 仍记为 stopped', async 
   assert.equal((await c.jobs())[0].state, 'stopped');
 });
 
+// 看管进程被直接杀掉（或电脑重启）以后过了很久才来 stop 的情况：记录里的选手早就不在了，只能去找它留下的子孙。
+// 这里真的造一个“最上面那个没了、它起的还活着”的选手，任务记录直接写成失联，用结束时间的早晚来分“留下的”和“后来无关的”。
+test('失联的活 stop：只收出生在结束时间之前的子孙；Windows 上晚于它出生的当作后来用了同一个进程号的无关进程，不碰；clean 在收走之前拒绝', async t => {
+  const c = await context(t);
+  process.env.XAGENTS_HOME = c.home; await ensureHome();
+  const file = join(c.temp, 'orphan.pid');
+  const code = 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)';
+  const sh = shell(`'${process.execPath}' -e '${code}' '${file.replaceAll('\\', '/')}'; true`);
+  // 记录里把起选手的时间写早 6 秒：选手一会儿就被结束，它的进程号可能马上被并排跑的别的测试拿去用；
+  // 出生在“起选手之后 5 秒内”的同号进程会被认成选手本人（platform.ts 的 treeOf），写早了就不会。
+  const since = Date.now() - 6000;
+  const worker = spawn(sh.file, sh.args, { ...treeSpawn(), stdio: 'ignore' });
+  let orphan = 0;
+  t.after(() => { try { killTree(worker.pid, 'SIGKILL', since, undefined, Date.now()); } catch {} killLeftover(orphan); });
+  orphan = Number(await until(() => readFile(file, 'utf8').catch(() => '')));
+  assert.ok(orphan > 0 && orphan !== worker.pid);
+  process.kill(worker.pid!, 'SIGKILL'); await until(async () => !alive(worker.pid));
+  assert.equal(alive(orphan), true, '选手起的那个还活着');
+  const id = await reserveJob('codex', c.task), at = (ms: number) => new Date(ms).toISOString();
+  // 第一遍：结束时间比留下的那个出生早一分钟，相当于“这个进程是活结束很久以后才出生的”。
+  await createJob({ id, batch: 'batch', who: 'codex', model: 'gpt-6-astra', effort: 'high', repo: c.repo, worktree: join(c.repo, 'unused'), base: c.base, branch: `xa/${id}`, project: '测试', kind: '实现', title: '失联很久', summary: '测试说明', mode: 'workspace-write',
+    state: 'lost', created: at(since - 120_000), started: at(since - 120_000), ended: at(since - 60_000), pid: 2 ** 30, workerPid: worker.pid, workerSince: since });
+  const first = await c.cli(['stop', id]); assert.equal(first.code, 0, first.stderr);
+  assert.equal((await c.jobs())[0].state, 'stopped');
+  if (isWindows) { await sleep(300); assert.equal(alive(orphan), true, '出生晚于期限的不是这件活留下的，不能碰'); }
+  // 第二遍：同一条记录改回失联，结束时间是现在（留下的那个出生在它之前）。
+  await updateJob(id, j => { j.state = 'lost'; j.ended = at(Date.now()); delete j.stopRequested; });
+  if (isWindows) {
+    const early = await c.cli(['clean', id]);
+    assert.equal(early.code, 1); assert.match(early.stderr, /失联后选手可能仍在运行/);
+  }
+  const second = await c.cli(['stop', id]); assert.equal(second.code, 0, second.stderr);
+  await until(async () => !alive(orphan));
+  assert.equal((await c.jobs())[0].state, 'stopped');
+});
 test('三份样本分段写入：status、桌面视图看到两次动作变化，退出与 collect 都能完整收集', async t => {
   const c = await context(t); await c.add();
   const run = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high', '--who', 'grok:high', '--who', 'cursor-opus:high', '--who', 'cursor-grok:high'], { XA_TEST_MODE: 'stream' });
