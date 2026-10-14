@@ -315,7 +315,8 @@ test('三份样本分段写入：status、桌面视图看到两次动作变化�
   const run = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high', '--who', 'grok:high', '--who', 'cursor-opus:high', '--who', 'cursor-grok:high'], { XA_TEST_MODE: 'stream' });
   assert.equal(run.code, 0, run.stderr);
   const jobs = await c.jobs(); assert.equal(jobs.length, 4);
-  const first = await until(c.jobs, rows => rows.length === 4 && rows.every(j => (j.activity?.length ?? 0) > 0), 16000);
+  // 同时起四件活：流水线的 Windows 机器上有时要 20 秒以上（2026-10-14 发版演练），只是慢，给够时间。
+  const first = await until(c.jobs, rows => rows.length === 4 && rows.every(j => (j.activity?.length ?? 0) > 0), isWindows ? 45000 : 16000);
   await assert.rejects(access(join(c.home, 'board')), { code: 'ENOENT' });
   for (const j of first) {
     assert.equal(j.state, 'running'); assert.equal(j.title, 'task');
