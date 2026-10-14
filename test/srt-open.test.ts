@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { context, exec, root } from './helpers.ts';
 
 // 不执行真实隔离、不监听端口，用库替身验证快照启动脚本的参数引用和退出状态。
-test('srt 启动脚本：按指定库路径加载、参数逐字交给子进程，保留退出码并收尾', async t => {
+test('srt 启动脚本：按指定库路径加载、参数逐字交给子进程，保留退出码并收尾', { skip: process.platform === 'win32' ? '只属于 macOS：srt 联网启动器使用 /bin/sh，Windows 暂不支持这一路隔离' : false }, async t => {
   const c = await context(t, false), dist = join(c.temp, 'fake srt');
   await mkdir(dist);
   await writeFile(join(dist, 'package.json'), '{"type":"module"}');

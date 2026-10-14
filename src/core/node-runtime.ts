@@ -1,5 +1,7 @@
 import { join } from 'node:path';
-import { toolRoot } from './paths.ts';
+import { paths, toolRoot } from './paths.ts';
+import { isWindows } from './platform.ts';
+import { koffiPath } from './native-windows.ts';
 
 type NodeProcess = { execPath: string; versions: { [name: string]: string | undefined } };
 
@@ -8,6 +10,13 @@ export function externalEnvironment(inherited: NodeJS.ProcessEnv = process.env):
   const env = { ...inherited };
   delete env.ELECTRON_RUN_AS_NODE;
   return env;
+}
+
+// 平台起自己的后台进程（每件活的看管进程、群和小队的推进进程）时给的环境。这些进程跑的都是代码快照，快照不带 node_modules：
+// Windows 上调系统接口用的模块留在安装目录，用环境变量告诉它们在哪（native-windows.ts 的 koffiPath：自己目录里有就交自己的位置，
+// 自己也是快照的就把别人交给它的原样往下传）。
+export function backgroundEnvironment(inherited: NodeJS.ProcessEnv = process.env, windows = isWindows): NodeJS.ProcessEnv {
+  return { ...inherited, XAGENTS_HOME: paths().home, ...(windows ? { XAGENTS_KOFFI: koffiPath(inherited) } : {}) };
 }
 
 export function nodeRunner(inherited: NodeJS.ProcessEnv = process.env, runtime: NodeProcess = process) {

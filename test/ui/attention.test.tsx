@@ -112,7 +112,7 @@ test('没有文件变化也定期重读；失败后恢复，关闭时清理计�
 
 test('菜单栏待处理数量与共享判定一致，唯一运行任务变失联后数字归零', () => {
   vi.useFakeTimers();
-  const tray = createTray(vi.fn(), vi.fn()), view = batch(['done', 'done', 'failed']);
+  const tray = createTray(vi.fn(), vi.fn(), false), view = batch(['done', 'done', 'failed']);
   try {
     tray.update(view);
     expect(tray.inspect().attention).toBe(ownerAttention(view).attention.length);

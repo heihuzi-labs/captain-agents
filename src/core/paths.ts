@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { resolve, join } from 'node:path';
+import path, { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { statSync } from 'node:fs';
@@ -17,7 +17,8 @@ export function packagedPlatformRoot(runtime: PlatformProcess = process): string
 export function resolveToolRoot(moduleUrl = import.meta.url, runtime: PlatformProcess = process): string {
   const sourceRoot = resolve(fileURLToPath(new URL('../../', moduleUrl)));
   // 只有 asar 中的后台才切到资源平台；开发构建与正在跑的代码快照仍取自己的根目录。
-  if (runtime.versions.electron && runtime.resourcesPath && sourceRoot === join(runtime.resourcesPath, 'app.asar')) {
+  // 两个路径是不是同一个，直接用 node:path 比：这个文件不能引 platform.ts（它经 native-windows.ts 反过来要用这里的 toolRoot）。
+  if (runtime.versions.electron && runtime.resourcesPath && path.relative(sourceRoot, join(runtime.resourcesPath, 'app.asar')) === '') {
     const root = packagedPlatformRoot(runtime);
     if (!root) throw new Error('应用缺少平台目录，请重新安装完整的派活工作台。');
     return root;
@@ -28,12 +29,13 @@ export const toolRoot = resolveToolRoot();
 // 只给桌面入口调用；不启动登录 shell，也不改变原 PATH 的优先级。
 export function desktopPath(current: string | undefined, home = homedir(), isDirectory = (path: string) => {
   try { return statSync(path).isDirectory(); } catch { return false; }
-}) {
-  const entries = current ? current.split(':') : [];
-  for (const directory of [join(home, '.local/bin'), join(home, '.grok/bin'), '/opt/homebrew/bin', '/usr/local/bin']) {
+}, implementation = path) {
+  const entries = current ? current.split(implementation.delimiter) : [];
+  if (implementation.sep === '\\') return entries.join(implementation.delimiter);
+  for (const directory of [implementation.join(home, '.local', 'bin'), implementation.join(home, '.grok', 'bin'), '/opt/homebrew/bin', '/usr/local/bin']) {
     if (!entries.includes(directory) && isDirectory(directory)) entries.push(directory);
   }
-  return entries.join(':');
+  return entries.join(implementation.delimiter);
 }
 export function paths() {
   const home = resolve(process.env.XAGENTS_HOME || join(homedir(), '.xagents'));

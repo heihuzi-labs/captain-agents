@@ -3,11 +3,11 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { context, root, until, desktopView } from './helpers.ts';
+import { context, root, until, desktopView, killLeftover } from './helpers.ts';
 import { roster, whos, keptWhos, builtinWhos, workerDisplay, workerHandles, fastWhos, spec, specFor, loadRoster, isWho, allowedEfforts, launchModels, vendorOf, isolationOf, setModelsCatalog, loadWorkerHandles } from '../src/core/roster.ts';
 import type { DiscoveredModel, ExtraModel, Vendor, ModelsCache } from '../src/core/roster.ts';
-import { readModelsCache, refreshModels, normalizeModels, parseCodexModels, parseTextModels } from '../src/core/models.ts';
-import { readSettings, loadConfiguredRoster, keepModels, writeSettings, baselineSeenModels } from '../src/core/settings.ts';
+import { readModelsCache, refreshModels, queryModels, normalizeModels, parseCodexModels, parseTextModels } from '../src/core/models.ts';
+import { readSettings, loadConfiguredRoster, keepModels, addModel, writeSettings, baselineSeenModels } from '../src/core/settings.ts';
 import { checkChoice } from '../src/core/policy.ts';
 import { selection } from '../src/core/workers.ts';
 import { buildView } from '../src/core/view.ts';
@@ -239,16 +239,24 @@ test('独立推进进程：小队和群聊能启动新选手，群聊续接前�
   const teams = await readdir(join(c.home, 'teams'));
   const teamId = teams.find(n => !n.startsWith('.'))!;
   const readTeam = async () => JSON.parse(await readFile(join(c.home, 'teams', teamId, 'team.json'), 'utf8'));
-  t.after(async () => { const team = await readTeam().catch(() => null); if (team?.pid) { try { process.kill(team.pid, 'SIGKILL'); } catch {} } });
+  t.after(async () => { const team = await readTeam().catch(() => null); killLeftover(team?.pid); });
   const team = await until(readTeam, v => v.state !== 'running', 30_000);
   assert.equal(team.reason, 'passed', team.note); assert.equal(team.writer.who, 'codex-6-1-sol');
   const created = await c.cli(['chat', 'new', '测试', '--member', 'codex-6-1-sol:high', '--title', '新增模型群聊']);
   assert.equal(created.code, 0, created.stderr);
   const chatId = (await readdir(join(c.home, 'chats'))).find(n => !n.startsWith('.'))!;
   const readChat = async () => JSON.parse(await readFile(join(c.home, 'chats', chatId, 'chat.json'), 'utf8'));
-  t.after(async () => { const chat = await readChat().catch(() => null); if (chat?.pid) { try { process.kill(chat.pid, 'SIGKILL'); } catch {} } });
+  t.after(async () => { const chat = await readChat().catch(() => null); killLeftover(chat?.pid); });
   const said = await c.cli(['chat', 'say', chatId, '@GPT61Sol 做一遍']); assert.equal(said.code, 0, said.stderr);
-  const first = await until(readChat, v => v.members[0].job && !v.pid && !v.busy && !v.queue.length, 30_000);
+  const first = await until(async () => {
+    const chat = await readChat();
+    // 推进已经退出却没派出任务时直接显示平台原因，不让路径错误伪装成等待超时。
+    if (!chat.members[0].job && !chat.pid && !chat.busy && !chat.queue.length) {
+      const messages = await readFile(join(c.home, 'chats', chatId, 'messages.jsonl'), 'utf8');
+      assert.fail(`群聊没有派出成员任务：${messages}`);
+    }
+    return chat;
+  }, v => v.members[0].job && !v.pid && !v.busy && !v.queue.length, 30_000);
   const jobId = first.members[0].job;
   const firstJob = (await c.jobs()).find(j => j.id === jobId)!; assert.equal(firstJob.state, 'done', firstJob.error);
   const saidAgain = await c.cli(['chat', 'say', chatId, '@GPT61Sol 再做一遍']); assert.equal(saidAgain.code, 0, saidAgain.stderr);
@@ -280,4 +288,129 @@ test('Cursor 合并回一个模型时，名字里的档位字样（Low、None、
   assert.deepEqual(normalizeModels('cursor', list).map(m => [m.model, m.shown, m.efforts.join(','), m.fast]), [
     ['gpt-5.5', 'GPT-5.5 1M', 'high', true], ['claude-haiku-5-5', 'Claude Haiku 5.5', 'medium', false], ['claude-fable-5-1-thinking', 'Claude Fable 5.1 1M Thinking (NO ZDR)', 'xhigh', false],
     ['claude-haiku-5-5-thinking', 'Claude Haiku 5.5 Thinking', 'high', false]]);
+});
+
+test('手动添加 Codex 模型：按原规则生成选手号、保存来源和强度，重载不丢，无快速版', async t => {
+  const c = await registry(t);
+  await addModel('codex', 'GPT-Custom__Model++', ['xhigh', 'medium']);
+  const current = await readSettings(), who = 'codex-custom-model';
+  const stored = current.models.extra[who];
+  assert.equal(stored.channel, 'codex'); assert.equal(stored.model, 'GPT-Custom__Model++');
+  assert.equal(stored.shown, stored.model); assert.equal(stored.manual, true);
+  assert.deepEqual(stored.efforts, ['medium', 'xhigh']); assert.ok(Number.isFinite(Date.parse(stored.added)));
+  assert.equal(stored.fast, undefined); assert.ok(keptWhos.includes(who));
+  assert.deepEqual(current.workers[who], { enabled: true, efforts: ['medium', 'xhigh'], fast: false });
+  assert.equal(selection(`${who}:xhigh`).model, stored.model);
+  assert.throws(() => selection(`${who}:xhigh:fast`), /没有快速版/);
+  const disk = JSON.parse(await readFile(join(c.home, 'config.json'), 'utf8'));
+  assert.deepEqual(disk.models.extra[who], stored);
+  loadRoster(); await loadConfiguredRoster();
+  assert.deepEqual(allowedEfforts(who), ['medium', 'xhigh']);
+  const view = await desktopView(c.home);
+  const entry = view.models.channels.find(c => c.channel === 'codex')!.models.find(m => m.who === who)!;
+  assert.deepEqual([entry.manual, entry.kept, entry.builtin, entry.fresh, entry.gone, entry.fast], [true, true, false, false, false, false]);
+});
+
+test('手动添加同通道同模型直接保留，不造重复选手、不重写旧策略；不同模型的选手号碰撞拒绝', async t => {
+  const c = await registry(t); await cache(c.home, [fresh()]);
+  await keepModels('codex', ['gpt-6.1-sol']);
+  await writeSettings({ workers: { 'codex-6-1-sol': { enabled: false, efforts: ['high'], fast: false } } });
+  const original = (await readSettings()).models.extra['codex-6-1-sol'];
+  await keepModels('codex', []); await addModel('codex', 'gpt-6.1-sol', ['medium']);
+  let read = await readSettings();
+  assert.deepEqual(read.models.extra['codex-6-1-sol'], original);
+  assert.equal(read.workers['codex-6-1-sol'].enabled, false);
+  assert.deepEqual(read.workers['codex-6-1-sol'].efforts, ['high']);
+  await addModel('codex', 'gpt-6-astra', ['high']);
+  read = await readSettings(); assert.ok(keptWhos.includes('codex')); assert.equal(read.models.extra.codex, undefined);
+  await addModel('codex', 'custom-a.b', ['high']);
+  const file = join(c.home, 'config.json'), before = await readFile(file, 'utf8');
+  await addModel('codex', 'custom-a.b', ['xhigh']);
+  assert.equal(await readFile(file, 'utf8'), before);
+  for (const model of ['custom-a-b', 'gpt-luna']) await assert.rejects(addModel('codex', model, ['high']), /冲突/);
+  assert.equal(await readFile(file, 'utf8'), before);
+  assert.deepEqual((await readSettings()).models.extra['codex-custom-a-b'].efforts, ['high']);
+});
+
+test('手动添加拒绝错误模型名、越底线/空/重复/稀疏强度和非 Codex 通道，失败不写配置', async t => {
+  const c = await registry(t);
+  for (const model of [null, 3, '', '--help', '../secret', 'a b', 'a\nb', 'x'.repeat(161), '__proto__']) {
+    await assert.rejects(addModel('codex', model, ['high']), /模型名格式/);
+  }
+  for (const efforts of [null, 'high', [], ['max'], ['low'], ['high', 'max'], ['high', 'high'], [3], new Array(1), ['medium', 'high', 'xhigh', 'max']]) {
+    await assert.rejects(addModel('codex', 'custom-model', efforts), /强度/);
+  }
+  for (const channel of ['grok', 'cursor', 'deepseek', 'bad', '__proto__', null]) {
+    await assert.rejects(addModel(channel, 'custom-model', ['high']), /只有 Codex/);
+  }
+  assert.ok(!(await readdir(c.home)).includes('config.json'));
+});
+
+test('手动模型不算下线，查询不误报不在名单；整份保存默认保留，只有显式取消才撤下', async t => {
+  const c = await registry(t); await cache(c.home, []);
+  const model = 'custom-model', who = 'codex-custom-model';
+  await addModel('codex', model, ['high']);
+  await keepModels('codex', ['gpt-6-astra']);
+  let read = await readSettings(); assert.ok(keptWhos.includes(who));
+  assert.doesNotThrow(() => checkChoice(read.workers, selection(`${who}:high`)));
+  const queried = await queryModels(query);
+  assert.equal(queried[0].current.find(m => m.who === who)!.present, null);
+  // 名单后来也出现同名模型，仍以手动填写的强度为准。
+  await cache(c.home, [fresh(model)]);
+  const v = await buildView(), entry = v.models.channels.find(c => c.channel === 'codex')!.models.find(m => m.who === who)!;
+  assert.equal(entry.manual, true); assert.equal(entry.gone, false); assert.deepEqual(entry.efforts, ['high']);
+  const result = await c.cli(['models'], { XAGENTS_QUERY_EXEC: join(root, 'test/fixtures/quota/query.ts') });
+  assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /custom-model.*保留，手动添加/);
+  assert.ok(!result.stdout.includes('custom-model（不在列表中）'));
+  assert.equal((await c.cli(['models', 'add', model])).code, 1);
+  const before = await readFile(join(c.home, 'config.json'), 'utf8');
+  for (const dropped of [[model, model], ['gpt-6-astra'], ['unknown'], new Array(1)]) await assert.rejects(keepModels('codex', [], dropped));
+  await assert.rejects(keepModels('codex', [model], [model]));
+  await assert.rejects(keepModels('grok', [], [model]));
+  assert.equal(await readFile(join(c.home, 'config.json'), 'utf8'), before);
+  await keepModels('codex', ['gpt-6-astra'], [model]);
+  read = await readSettings(); assert.ok(read.models.extra[who]?.manual); assert.ok(!keptWhos.includes(who));
+  assert.throws(() => checkChoice(read.workers, selection(`${who}:high`)), /没有保留/);
+  await keepModels('codex', ['gpt-6-astra']); assert.ok(!keptWhos.includes(who));
+  await keepModels('codex', [model]); assert.ok(keptWhos.includes(who));
+  // 手动项也是最后一位时，明确取消仍不能绕过至少保留一位的底线。
+  for (const channel of ['grok', 'cursor', 'deepseek']) await keepModels(channel, []);
+  await assert.rejects(keepModels('codex', [], [model]), /至少保留一位/);
+});
+
+test('手动来源不能用于其他通道或放宽强度/快速版；重新装载恢复普通模型下线检查', async t => {
+  const c = await registry(t);
+  const entries = {
+    ...extra('codex', fresh('gpt-custom')),
+    ...extra('grok', fresh('grok-5')),
+    ...extra('codex', fresh('gpt-invalid')),
+    ...extra('codex', fresh('gpt-fast')),
+    ...extra('codex', fresh('gpt-marker')),
+  };
+  entries['codex-custom'].manual = true;
+  entries['grok-grok-5'].manual = true;
+  entries['codex-invalid'].manual = true; entries['codex-invalid'].efforts = ['high', 'max'] as never[];
+  entries['codex-fast'].manual = true; entries['codex-fast'].fast = { suffix: '-fast' };
+  entries['codex-marker'].manual = false as never;
+  await writeFile(join(c.home, 'config.json'), JSON.stringify({ models: { extra: entries } }));
+  const read = await readSettings(); assert.deepEqual(Object.keys(read.models.extra), ['codex-custom']);
+  await cache(c.home, []);
+  await readSettings(); assert.doesNotThrow(() => checkChoice(read.workers, selection('codex-custom:high')));
+  loadRoster(extra('codex', fresh('gpt-custom'))); setModelsCatalog(await readModelsCache());
+  assert.throws(() => checkChoice(read.workers, selection('codex-custom:high')), /已经不在/);
+});
+
+test('手动添加和保留/设置并发更新不丢状态，独立进程派活能用名单以外的模型', async t => {
+  const c = await registry(t, true); assert.equal((await c.add()).code, 0);
+  await cache(c.home, []);
+  await Promise.all([addModel('codex', 'custom-model', ['high']), keepModels('codex', []), writeSettings({ notifications: false })]);
+  const read = await readSettings(); assert.equal(read.notifications, false); assert.ok(read.models.extra['codex-custom-model'].manual);
+  assert.ok(keptWhos.includes('codex-custom-model'));
+  const result = await c.cli(['run', c.task, '--summary', '手动模型派活', '--who', 'codex-custom-model:high']);
+  assert.equal(result.code, 0, result.stderr);
+  const done = await until(async () => (await c.jobs())[0], j => j?.state === 'done' || j?.state === 'failed');
+  assert.equal(done.state, 'done', done.error); assert.equal(done.model, 'custom-model');
+  const observed = JSON.parse(await readFile(join(c.home, 'jobs', done.id, 'observed.json'), 'utf8'));
+  assert.equal(observed.args[observed.args.indexOf('-m') + 1], 'custom-model');
+  assert.deepEqual((await readdir(c.home)).filter(n => n === '.lock' || n.endsWith('.tmp')), []);
 });

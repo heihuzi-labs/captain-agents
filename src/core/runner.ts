@@ -6,7 +6,7 @@ import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { jobDir } from './paths.ts';
-import { updateJob, finish, listJobs } from './job.ts';
+import { updateJob, finish, listJobs, readJob } from './job.ts';
 import type { Job } from './job.ts';
 import { LiveProgress } from './live.ts';
 import { writeAtomic, hasCode, readOptional } from './fsx.ts';
@@ -16,18 +16,19 @@ import { SleepMonitor } from './sleeps.ts';
 import { readQuotaCache } from './quota.ts';
 import { collectRealSteps } from './real.ts';
 import { cursorToken, resumeCommand, selection } from './workers.ts';
-import { workerEnv } from './env.ts';
+import { workerEnv, passEnv } from './env.ts';
+import { assertTreeControl, killTree, treeSpawn } from './platform.ts';
 
-export function killGroup(pid: number | undefined, signal: NodeJS.Signals) {
-  if (!pid || pid <= 0) return;
-  try { process.kill(-pid, signal); }
-  catch (e) { if (!hasCode(e, 'ESRCH')) throw e; }
+// 停掉选手（或准备命令）带出来的所有进程。since 是起它的时间，只有 Windows 用得上（见 platform.ts）。
+export function killGroup(pid: number | undefined, signal: 'SIGTERM' | 'SIGKILL', since?: number, exitedAt?: number, bornBy?: number) {
+  killTree(pid, signal, since, exitedAt, bornBy);
 }
 export async function reconcileSafely() {
   try { await listJobs(true); }
   catch (e) { console.error(`修正任务状态失败：${(e as Error).message}。请运行 xagents status --all 重试。`); }
 }
-async function watch(id: string, progress: LiveProgress, signal: AbortSignal) {
+// onStop：任务记录里出现“请求停止”时调用。Windows 上看管进程收不到停止信号，靠这里每 2 秒看一次。
+async function watch(id: string, progress: LiveProgress, signal: AbortSignal, onStop: () => void) {
   const sleeps = new SleepMonitor(id);
   while (!signal.aborted) {
     try { await sleep(2000, undefined, { signal }); }
@@ -37,11 +38,12 @@ async function watch(id: string, progress: LiveProgress, signal: AbortSignal) {
       const slept = await sleeps.sample();
       await progress.sample();
       if (await progress.persist() || slept) await reconcileSafely();
+      if ((await readJob(id)).stopRequested) onStop();
     } catch (e) { console.error(`读取任务进度失败：${(e as Error).message}，下次采集重试。`); }
   }
 }
 export async function runWorker(id: string) {
-  let stopping = false, workerPid: number | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+  let stopping = false, workerPid: number | undefined, workerSince: number | undefined, workerExitedAt: number | undefined, timer: ReturnType<typeof setTimeout> | undefined;
   let job: Job | undefined, progress: LiveProgress | undefined, code: number | null = null, failure: string | undefined;
   let fatalFailure: string | undefined;
   const message = (error: unknown) => {
@@ -50,7 +52,7 @@ export async function runWorker(id: string) {
   };
   const addFailure = (text: string) => { failure = failure ? `${failure} ${text}` : text; };
   const killWorker = () => {
-    try { killGroup(workerPid, 'SIGKILL'); }
+    try { killGroup(workerPid, 'SIGKILL', workerSince, workerExitedAt); }
     catch (error) { addFailure(`停止选手进程组失败：${message(error)}`); }
   };
   let wakeFatal!: () => void;
@@ -67,9 +69,12 @@ export async function runWorker(id: string) {
   const stop = () => {
     stopping = true;
     if (fatalFailure) { killWorker(); return; }
-    killGroup(workerPid, 'SIGTERM');
+    // 已经在收尾就不重复（Windows 上每次都要读一遍进程列表）。
+    if (timer) return;
+    try { killGroup(workerPid, 'SIGTERM', workerSince, workerExitedAt); }
+    catch (error) { addFailure(`停止选手进程组失败：${message(error)}`); }
     // 某些选手不响应 SIGTERM，宽限后仍必须收尾整个组。
-    timer ??= setTimeout(() => killGroup(workerPid, 'SIGKILL'), 1000);
+    timer = setTimeout(killWorker, 1000);
   };
   process.on('uncaughtException', uncaught);
   process.on('unhandledRejection', unhandled);
@@ -99,7 +104,8 @@ export async function runWorker(id: string) {
       if (input) handles.push(input);
       if (!stopping && !fatalFailure) {
         // 名字带密钥字样的环境变量不交给选手（规则在 env.ts）；平台设的照给，这件活点名不要的再去掉。
-        const env = externalEnvironment(workerEnv(process.env, cmd.env, cmd.unset));
+        // 点名放行的变量（主人的 Codex 配置里放钥匙的那一个）：过滤之后再补回，只给选手的主程序；值不进任务记录。
+        const env = passEnv(externalEnvironment(workerEnv(process.env, cmd.env, cmd.unset)), cmd.pass, process.env, [...Object.keys(cmd.env), ...(cmd.unset ?? [])]);
         // Cursor 的登录在隔离外现取，只放进这次进程的环境，不进任务记录（见 workers.ts 的 cursorToken）。
         // 必须放在上面那步过滤之后：它的名字带 TOKEN，先加再过滤就会被去掉，Cursor 就成了没登录。
         // 替身模式下没指定假的 security 就不取，测试不碰真钥匙串。
@@ -107,20 +113,24 @@ export async function runWorker(id: string) {
         if (stopping || fatalFailure) return;
         // srt 和测试替身用平台 Node；外部选手直接启动，不带 Electron 开关。
         const launch = cmd.file === nodeRunner().file ? nodeCommand(cmd.args, env) : { ...cmd, env };
-        const child = spawn(launch.file, launch.args, { cwd: job.worktree, detached: true, env: launch.env, stdio: [input?.fd ?? 'ignore', output.fd, errors.fd] });
+        assertTreeControl();
+        workerSince = Date.now();
+        const child = spawn(launch.file, launch.args, { cwd: job.worktree, ...treeSpawn(), env: launch.env, stdio: [input?.fd ?? 'ignore', output.fd, errors.fd] });
         const spawned = new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
         workerPid = child.pid;
         const finished = new Promise<number | null>((resolve, reject) => {
           child.on('error', reject);
+          child.once('exit', () => { workerExitedAt = Date.now(); });
           child.on('close', resolve);
         });
         // 马上接上拒绝处理，避免登记过程中 spawn 失败产生未处理拒绝。
         finished.catch(() => {});
         await spawned;
-        await updateJob(id, j => { j.workerPid = workerPid; });
+        // 起选手之前就有人请求停止的（那时还没有选手进程可停），登记完马上停。
+        if ((await updateJob(id, j => { j.workerPid = workerPid; j.workerSince = workerSince; })).stopRequested) stop();
         releaseAwake = await keepAwake();
         progress = new LiveProgress(job);
-        polling = watch(id, progress, controller.signal);
+        polling = watch(id, progress, controller.signal, stop);
         // 在主流程等选手退出期间也及时接住采集任务的拒绝。
         polling.catch(unhandled);
         if (stopping) stop();

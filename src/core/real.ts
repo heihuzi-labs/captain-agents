@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { mkdir, mkdtemp, open, rename, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, rename, rm } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { active, readJob } from './job.ts';
@@ -49,10 +49,18 @@ async function screenshot(file: string): Promise<{ ext: string; data: Buffer }> 
   if (typeof file !== 'string') throw new Error('请填写截图路径。');
   const ext = extname(file).toLowerCase();
   if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) throw new Error('截图只支持 .png/.jpg/.jpeg/.webp。');
+  // Windows 不提供 O_NOFOLLOW：先拒绝链接，打开后再核对路径与句柄仍指向同一个普通文件。
+  const before = await lstat(file);
+  if (!before.isFile() || before.isSymbolicLink()) throw new Error('截图必须是普通图片文件，不能是符号链接。');
   const fd = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await fd.stat();
-    if (!stat.isFile()) throw new Error('截图必须是普通图片文件。');
+    const current = await lstat(file);
+    if (!stat.isFile() || !current.isFile() || current.isSymbolicLink()
+      || before.dev !== stat.dev || before.ino !== stat.ino
+      || current.dev !== stat.dev || current.ino !== stat.ino) {
+      throw new Error('截图文件刚被改过或不是普通图片文件，请重新选择。');
+    }
     if (stat.size > maxSize) throw new Error('每张截图不能超过 10 MB。');
     // 有界读取，文件在读取期间增长也不会越过大小限制。
     const buffer = Buffer.alloc(maxSize + 1);

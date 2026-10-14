@@ -1,5 +1,6 @@
 import { realpath, readdir } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
+import { relativeInside, samePath } from './platform.ts';
 import { paths, safeName } from './paths.ts';
 import { readJson, writeJson, withLock } from './fsx.ts';
 import { git } from './worktree.ts';
@@ -57,10 +58,10 @@ export async function findProject(name?: string, cwd = process.cwd()) {
   const matches: Project[] = [];
   for (const p of await listProjects()) {
     try {
-      if (await realpath(p.repo) === root) matches.push(p);
+      if (samePath(await realpath(p.repo), root)) matches.push(p);
       else {
         const other = await realpath((await git(p.repo, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
-        if (other === common) matches.push(p);
+        if (samePath(other, common)) matches.push(p);
       }
     } catch {
       // 已登记的仓库可能已删除或不再是 Git 仓库，不影响其他项目的识别。
@@ -74,13 +75,14 @@ export async function worktreePath(project: Project, id: string) {
   relativePath(project.worktreeRoot);
   for (const extra of project.denyReadExtra) relativePath(extra);
   const target = resolve(project.repo, project.worktreeRoot, `xa-${id}`);
+  const rel = relativeInside(project.repo, target);
+  if (rel === undefined) throw new Error('副本目录必须在仓库内，请修改 --worktree-root。');
   // 对已有父目录做 realpath，拒绝借符号链接把副本开到仓库外。
   let current = project.repo;
-  for (const segment of relative(project.repo, target).split('/').slice(0, -1)) {
+  for (const segment of rel.split(sep).slice(0, -1)) {
     current = join(current, segment);
     const resolved = await realpath(current).catch((e: NodeJS.ErrnoException) => { if (e.code === 'ENOENT') return current; throw e; });
-    const rel = relative(project.repo, resolved);
-    if (rel === '..' || rel.startsWith('../') || isAbsolute(rel)) throw new Error('副本目录通过符号链接指向了仓库外，请修改 --worktree-root。');
+    if (relativeInside(project.repo, resolved) === undefined) throw new Error('副本目录通过符号链接指向了仓库外，请修改 --worktree-root。');
   }
   return target;
 }

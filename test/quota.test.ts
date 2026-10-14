@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile, utimes, readdir, symlink, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { desktopView, context, root, until } from './helpers.ts';
+import { desktopView, context, fixture, root, until } from './helpers.ts';
 import { boardQuota, checkQuota, ensureQuota, executeQuery, parseCodexQuota, parseCursorQuota, parseGrokQuota, queryCodexQuota, queryQuota, quotaBar, quotaDelta, readQuotaCache } from '../src/core/quota.ts';
 import { formatQuota } from '../src/cli/quota.ts';
 import type { QueryCommand, QuotaSnapshot, QuotaSnapshots } from '../src/core/quota.ts';
@@ -23,6 +23,10 @@ async function local(t: Parameters<typeof context>[0]) {
   const c = await context(t, false);
   const old = process.env.XAGENTS_HOME; process.env.XAGENTS_HOME = c.home;
   t.after(() => { if (old === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = old; });
+  for (const [key, value] of Object.entries({ XAGENTS_FAKE_WORKER: fixture, CODEX_HOME: join(c.temp, 'codex-config') })) {
+    const previous = process.env[key]; process.env[key] = value;
+    t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+  }
   await ensureHome(); return c;
 }
 
@@ -75,7 +79,7 @@ test('会话按 mtime 看最新 20 份、取最后完整记录，不沿符号链
 
 test('三家互不影响，调用参数、协议、空目录与缓存正确；10 分钟内复用', async t => {
   const c = await local(t), commands: QueryCommand[] = [];
-  const options = { sessionsDir: join(c.temp, 'missing'), now: new Date(at), execute: async (cmd: QueryCommand) => {
+  const options = { windows: false, sessionsDir: join(c.temp, 'missing'), now: new Date(at), execute: async (cmd: QueryCommand) => {
     commands.push(cmd);
     if (cmd.file === 'grok') {
       assert.equal(cmd.timeoutMs, 20000); assert.deepEqual(cmd.args, ['agent', '--no-leader', 'stdio']);
@@ -267,7 +271,7 @@ test('给人看的时间是本地时间“10-04 01:00”，数据里仍是 ISO',
   assert.match(JSON.stringify(data), /\d{4}-\d\d-\d\dT/);
 });
 
-test('伪终端桥：程序拿到 60×140 的真终端，输入原样送达，收尾时交互程序一起退出', async t => {
+test('伪终端桥：程序拿到 60×140 的真终端，输入原样送达，收尾时交互程序一起退出', { skip: process.platform === 'win32' ? '只属于 macOS：Python pty 终端桥及进程组信号' : false }, async t => {
   if (spawnSync('python3', ['--version']).status !== 0) { t.skip('本机没有 python3'); return; }
   const c = await local(t), oldFake = process.env.XAGENTS_FAKE_WORKER, oldExec = process.env.XAGENTS_QUERY_EXEC;
   delete process.env.XAGENTS_FAKE_WORKER; delete process.env.XAGENTS_QUERY_EXEC;
@@ -279,7 +283,7 @@ test('伪终端桥：程序拿到 60×140 的真终端，输入原样送达，�
   await until(async () => !alive(Number(await readFile(marker, 'utf8'))));
 });
 
-test('伪终端桥收尾：先整组 SIGTERM 让程序自己删运行标记，不理的等宽限到了整组强杀', async t => {
+test('伪终端桥收尾：先整组 SIGTERM 让程序自己删运行标记，不理的等宽限到了整组强杀', { skip: process.platform === 'win32' ? '只属于 macOS：Python pty 终端桥及进程组信号' : false }, async t => {
   if (spawnSync('python3', ['--version']).status !== 0) { t.skip('本机没有 python3'); return; }
   const c = await local(t), oldFake = process.env.XAGENTS_FAKE_WORKER, oldExec = process.env.XAGENTS_QUERY_EXEC;
   delete process.env.XAGENTS_FAKE_WORKER; delete process.env.XAGENTS_QUERY_EXEC;
@@ -316,10 +320,10 @@ test('某一家这次查不到：保留那家上一次的数据和时间，写�
   await writeFile(join(dir, 'a.jsonl'), JSON.stringify(reachedLine) + '\n');
   await utimes(join(dir, 'a.jsonl'), new Date(at), new Date(at));
   const good = async (cmd: QueryCommand) => cmd.file === 'grok' ? sample('grok.json') : sample('cursor.txt');
-  const first = await queryQuota({ sessionsDir: dir, now: new Date(at), execute: good });
+  const first = await queryQuota({ windows: false, sessionsDir: dir, now: new Date(at), execute: good });
   assert.ok(first.providers.every(p => !p.error)); assert.equal(first.providers[0].reached, 'secondary');
   const later = new Date(Date.parse(at) + 3_600_000);
-  const second = await queryQuota({ sessionsDir: join(c.temp, 'missing'), now: later, execute: async cmd => { if (cmd.file === 'grok') throw new Error('查询超时'); return sample('cursor.txt'); } });
+  const second = await queryQuota({ windows: false, sessionsDir: join(c.temp, 'missing'), now: later, execute: async cmd => { if (cmd.file === 'grok') throw new Error('查询超时'); return sample('cursor.txt'); } });
   const [codex, grok, cursor] = second.providers;
   assert.match(codex.error!, /ENOENT|no such/i); assert.equal(codex.at, at); assert.equal(codex.bars[1].used, first.providers[0].bars[1].used); assert.equal(codex.reached, undefined);
   assert.equal(grok.error, '查询超时'); assert.equal(grok.at, at); assert.equal(grok.bars[0].used, first.providers[1].bars[0].used);
@@ -332,9 +336,9 @@ test('某一家这次查不到：保留那家上一次的数据和时间，写�
   assert.doesNotThrow(() => checkQuota(second, [{ who: 'codex' }, { who: 'grok' }]));
   assert.match(formatQuota(second), /Grok：这次没查到（查询超时）；上一次的数据：.*（数据时间 \d\d-\d\d \d\d:\d\d）/);
   // 上次也没有数据：照旧写查不到，不编数字。
-  const third = await queryQuota({ sessionsDir: join(c.temp, 'missing'), now: later, execute: async () => { throw new Error('坏了'); } });
+  const third = await queryQuota({ windows: false, sessionsDir: join(c.temp, 'missing'), now: later, execute: async () => { throw new Error('坏了'); } });
   await writeFile(join(c.home, 'cache/quota.json'), '{broken');
-  const fresh = await queryQuota({ sessionsDir: join(c.temp, 'missing'), now: later, execute: async () => { throw new Error('坏了'); } });
+  const fresh = await queryQuota({ windows: false, sessionsDir: join(c.temp, 'missing'), now: later, execute: async () => { throw new Error('坏了'); } });
   assert.ok(fresh.providers.every(p => p.error && p.at === null && p.bars.every(b => b.used === null)));
   assert.equal(third.providers[2].error, '坏了'); assert.equal(third.providers[2].bars[0].used, cursor.bars[0].used); // 连续失败仍保留最早那次的数据
   assert.match(formatQuota(fresh), /Codex：查不到/);

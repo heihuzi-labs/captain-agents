@@ -123,7 +123,7 @@ test('clean 接着已有 worktreeRemoved 记录清理；collect 保留补丁，v
   await assert.rejects(lstat(c.tmp), { code: 'ENOENT' });
 });
 
-test('clean 补权限后仍删不掉时先保存副本删除进度，修复后可以重试', async t => {
+test('clean 补权限后仍删不掉时先保存副本删除进度，修复后可以重试', { skip: process.platform === 'win32' ? '只属于 macOS：靠 chmod 000 造出读不了的文件夹，Windows 上没有权限位' : false }, async t => {
   const c = await finished(t);
   const unreadable = join(c.tmp, 'unreadable');
   try {
@@ -148,7 +148,7 @@ test('clean 补权限后仍删不掉时先保存副本删除进度，修复后�
   } finally { await restore(unreadable); }
 });
 
-test('clean 移动 Grok 会话失败只提醒，照样清理完成', async t => {
+test('clean 移动 Grok 会话失败只提醒，照样清理完成', { skip: process.platform === 'win32' ? '只属于 macOS：Grok 的会话文件夹名是按 macOS 上实测的写法算的；Windows 上不开 Grok 这一路' : false }, async t => {
   const c = await finished(t, 'grok:high');
   const home = join(c.temp, 'user-home');
   const session = join(home, '.grok/sessions', encodeURIComponent(await realpath(c.job.worktree)));

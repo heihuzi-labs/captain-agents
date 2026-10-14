@@ -2,11 +2,11 @@ import { describe, test } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { access, mkdir, readFile, readdir, writeFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { homedir } from 'node:os';
 import { context, until } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
-import { createChat, appendChatMessage, readChat, readMessages, sayInChat, chatDir, pendingForLead, REPORT_MAX } from '../src/core/chat.ts';
+import { createChat, appendChatMessage, readChat, readMessages, sayInChat, chatDir, pendingForLead, REPORT_MAX, updateChat } from '../src/core/chat.ts';
 import { wakeChat, stopChat, closeChat, cleanChat, reconcileChat } from '../src/core/chat-engine.ts';
 import { readJob, updateJob } from '../src/core/job.ts';
 import { jobDir } from '../src/core/paths.ts';
@@ -15,6 +15,7 @@ import { clean, stop } from '../src/core/commands.ts';
 import { dispatch } from '../src/core/dispatch.ts';
 import { git, removeWorktree } from '../src/core/worktree.ts';
 import { command, resumeCommand } from '../src/core/workers.ts';
+import { resumeMember } from '../src/core/wake.ts';
 import { sandbox } from '../src/core/sandbox.ts';
 
 async function setup(t: TestContext, reports: Record<string, string | string[]> = {}, modes: Record<string, string> = {}) {
@@ -123,7 +124,40 @@ describe('项目群聊推进', { concurrency: 1 }, () => {
     assert.equal((await c.jobs()).length, 1);
   });
 
-  test('续接重建两种隔离：新增禁读生效，首轮禁读删除后仍保留，只读和成员身份不变', async t => {
+  test('续接按路径比较仓库和群副本：接受等价写法，拒绝不同目录', async t => {
+    const c = await setup(t, { grok: ['第一轮完成', '第二轮完成'] });
+    const chat = await c.open();
+    await sayInChat(chat.id, '@Grok 第一轮', 'owner');
+    const first = await settled(chat.id), id = first.members[0].job!;
+    assert.ok(id, JSON.stringify(await readMessages(chat.id)));
+    const original = await readJob(id);
+    await until(async () => !alive(original.pid));
+    // 不同目录仍要拦住，不能把路径兼容变成给成员换副本的入口。
+    await updateJob(id, j => { j.worktree = c.repo; });
+    await sayInChat(chat.id, '@Grok 不能换副本', 'owner'); await settled(chat.id);
+    assert.match((await readMessages(chat.id)).at(-1)!.text, /成员任务与群登记不符/);
+    assert.equal((await readJob(id)).resume, undefined);
+    await updateJob(id, j => { j.worktree = original.worktree; j.repo = c.temp; });
+    await sayInChat(chat.id, '@Grok 不能换仓库', 'owner'); await settled(chat.id);
+    const refused = (await readMessages(chat.id)).map(m => m.text);
+    assert.ok(refused.some(text => /项目的仓库登记已经改变/.test(text)), JSON.stringify(refused.slice(-4)));
+    assert.equal((await readJob(id)).resume, undefined);
+    // Windows 同时覆盖 Git 的正斜杠写法；所有系统都覆盖未规范化的同一路径。
+    const equivalent = (path: string) => `${path.replaceAll('\\', '/')}/.`;
+    await updateJob(id, j => { j.worktree = original.worktree; j.repo = original.repo; });
+    await updateChat(chat.id, c => { c.worktree = equivalent(original.worktree); });
+    const projectFile = join(c.home, 'projects/测试.json');
+    const project = JSON.parse(await readFile(projectFile, 'utf8'));
+    await writeFile(projectFile, JSON.stringify({ ...project, repo: equivalent(original.repo) }));
+    await sayInChat(chat.id, '@Grok 等价路径继续', 'owner'); await settled(chat.id);
+    const resumed = await readJob(id);
+    assert.equal(resumed.state, 'done'); assert.equal(resumed.resume?.round, 2, JSON.stringify(await readMessages(chat.id)));
+    assert.equal(resumed.session, original.session);
+    assert.equal(resumed.rounds?.length, 2);
+    assert.equal((await c.jobs()).length, 1);
+  });
+
+  test('续接重建两种隔离：新增禁读生效，首轮禁读删除后仍保留，只读和成员身份不变', { skip: process.platform === 'win32' ? '只属于 macOS：续接时核对旧权限表这一套是按 macOS 的权限表测的；Windows 的权限表只写本机存在的路径，用例里的假路径都不存在' : false }, async t => {
     const c = await setup(t, { grok: '完成', deepseek: '完成' });
     const config = join(c.home, 'config.json'), projectFile = join(c.home, 'projects/测试.json');
     const deny = async (home: string, repo: string) => {
@@ -176,7 +210,7 @@ describe('项目群聊推进', { concurrency: 1 }, () => {
     assert.deepEqual(await readJob(id), old);
     assert.equal(await readFile(join(dir, 'observed.json'), 'utf8'), observedBefore);
     assert.deepEqual(await Promise.all(files.map(file => readFile(join(runtime, file), 'utf8'))), contents);
-    assert.deepEqual(await readdir(join(dir, 'runtime')), [old.runtime!.split('/').at(-1)]);
+    assert.deepEqual(await readdir(join(dir, 'runtime')), [basename(old.runtime!)]);
     await assert.rejects(access(join(dir, 'prompt-r2.md')));
     const events = (await readMessages(chat.id)).filter(m => m.kind === 'event' && /没能开始这一轮/.test(m.text));
     assert.equal(events.length, 1); assert.match(events[0].text, /第 2 轮运行包准备失败.*missing-worker/);
@@ -431,4 +465,21 @@ test('不设限通过 wake 叫醒 95% 的成员并续接，无需 force', async 
   await settled(chat.id);
   const job = await readJob(id);
   assert.equal(job.state, 'done'); assert.equal(job.rounds?.length, 2);
+});
+
+
+// 上一轮的选手进程号留在记录里的话，新一轮的看管进程登记新号之前有人 stop，就会照着旧号去找“留下的子孙”（Windows 上会找错）。
+test('叫醒下一轮时，上一轮的选手进程号不带进新一轮', async t => {
+  const c = await setup(t, { grok: ['第一轮完成', '第二轮完成'] });
+  const chat = await c.open();
+  await sayInChat(chat.id, '@Grok 第一轮', 'owner');
+  const id = (await settled(chat.id)).members[0].job!;
+  const stale = await updateJob(id, j => { j.workerPid = 2 ** 30; j.workerSince = 1; });
+  assert.equal(stale.state, 'done');
+  assert.equal(await resumeMember(stale, 2, '第二轮'), true);
+  // 这时新一轮的看管进程多半还没起选手：记录里要么没有选手进程号，要么已经是新的，总之不是旧的。
+  const queued = await readJob(id);
+  assert.notEqual(queued.workerPid, 2 ** 30); assert.notEqual(queued.workerSince, 1);
+  const done = await until(() => readJob(id), j => j.state !== 'queued' && j.state !== 'running', 45_000);
+  assert.equal(done.state, 'done'); assert.notEqual(done.workerPid, 2 ** 30);
 });

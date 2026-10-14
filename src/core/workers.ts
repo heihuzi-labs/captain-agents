@@ -1,7 +1,7 @@
 import { nodeRunner, externalEnvironment } from './node-runtime.ts';
 import { spawn } from 'node:child_process';
 import { access, mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
 import { homedir } from 'node:os';
 import { jobDir, paths, toolRoot } from './paths.ts';
 import { readOptional, withLock } from './fsx.ts';
@@ -17,6 +17,9 @@ import { codexEnvPolicy } from './env.ts';
 import type { Isolated } from './sandbox.ts';
 import { allowedEfforts, fastWhos, isWho, isolationOf, launchModel, spec, supportsFast, vendorOf, whos } from './roster.ts';
 import type { Effort } from './roster.ts';
+import { readdirSync, statSync } from 'node:fs';
+import { isWindows } from './platform.ts';
+import { codexEndpoint, official } from './endpoint.ts';
 
 const effortNames: Record<Effort, string> = { medium: '中档', high: '高档', xhigh: '超高档' };
 // --who 写法：选手:强度[:fast]。强度只开中档、高档、超高档，永远不拉满，也不开最低档；允许哪些由 roster 决定。
@@ -51,7 +54,8 @@ function deepseekArgs(env: Record<string, string>) {
 // 派 DeepSeek 活前在隔离外查一次登录；没登录就不派，提示主人自己登录（钥匙只有主人能拿到）。
 export async function checkDeepseekLogin(run: Executor = execute) {
   await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
-  const r = await run(codexPath(), ['login', 'status', ...DEEPSEEK_LOGIN], deepseekHome(), 20_000, undefined, deepseekEnv());
+  const status = codexLaunch(['login', 'status', ...DEEPSEEK_LOGIN]);
+  const r = await run(status.file, status.args, deepseekHome(), 20_000, undefined, deepseekEnv());
   if (r.exit !== 0 || r.timedOut || r.error || !/API key/i.test(r.output)) {
     throw new Error('DeepSeek 还没登录，这件没有派出。请主人在终端运行 xagents login deepseek，按提示粘贴 DeepSeek 的 API 钥匙。');
   }
@@ -62,7 +66,8 @@ export async function loginDeepseek(key: string) {
   if (!/^sk-[A-Za-z0-9_-]{8,}$/.test(key)) throw new Error('这不像 DeepSeek 的 API 钥匙（应以 sk- 开头），没有保存。');
   await mkdir(deepseekHome(), { recursive: true, mode: 0o700 });
   const ok = await new Promise<boolean>((done, fail) => {
-    const child = spawn(codexPath(), ['login', '--with-api-key', ...DEEPSEEK_LOGIN], { cwd: deepseekHome(), env: { ...externalEnvironment(), ...deepseekEnv() }, stdio: ['pipe', 'ignore', 'ignore'] });
+    const login = codexLaunch(['login', '--with-api-key', ...DEEPSEEK_LOGIN]);
+    const child = spawn(login.file, login.args, { cwd: deepseekHome(), env: { ...externalEnvironment(), ...deepseekEnv() }, stdio: ['pipe', 'ignore', 'ignore'] });
     child.once('error', fail); child.once('close', code => done(code === 0));
     child.stdin.end(key + '\n');
   });
@@ -102,7 +107,35 @@ export async function checkCursorLogin(run: Executor = execute) {
   catch (e) { throw new Error(`这件没有派出：${(e as Error).message}`); }
 }
 // 本机 Codex 不在 PATH 上，派活和查模型用同一个取路径的地方；XAGENTS_CODEX 可覆盖。
-export const codexPath = () => process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
+// Windows 上 Codex 程序可能在两处，只认 .exe（docs/design-windows.md 第 11.4 节）：
+// 一是官方安装脚本装的命令行（实测，docs/research/windows-codex-sandbox-2026-10-12.md）；
+// 二是 Codex 桌面应用自己放的那一份：应用把程序放在 <本机应用数据>\OpenAI\Codex\bin\<一串十六进制>\codex.exe，每个版本一个文件夹，取最新的。
+// 桌面应用安装包里的那一份（Program Files\WindowsApps 下）系统不让直接运行，不用它。两处都没有时返回第一处，报错里好写明该装到哪。
+export function windowsCodexPath(local: string, list: (dir: string) => string[] = dir => readdirSync(dir), modified: (file: string) => number | null = file => { try { const s = statSync(file); return s.isFile() ? s.mtimeMs : null; } catch { return null; } }): string {
+  const cli = win32.join(local, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe');
+  if (modified(cli) !== null) return cli;
+  const bin = win32.join(local, 'OpenAI', 'Codex', 'bin');
+  let names: string[] = [];
+  try { names = list(bin); } catch { /* 没装桌面应用 */ }
+  const found = names.filter(name => /^[0-9a-f]{8,64}$/i.test(name)).map(name => { const file = win32.join(bin, name, 'codex.exe'); return { file, at: modified(file) }; })
+    .filter((x): x is { file: string; at: number } => x.at !== null).sort((a, b) => b.at - a.at || a.file.localeCompare(b.file));
+  return found[0]?.file ?? cli;
+}
+export const codexPath = () => process.env.XAGENTS_CODEX || (isWindows
+  ? windowsCodexPath(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'))
+  : '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex');
+// XAGENTS_CODEX 指向 .cjs / .mjs 脚本（测试替身）时用 Node 来跑：Windows 上不能直接启动脚本文件。
+export function codexLaunch(args: string[]): { file: string; args: string[] } {
+  const file = codexPath();
+  return /\.[cm]js$/.test(file) ? { file: process.execPath, args: [file, ...args] } : { file, args };
+}
+// Windows 上 Codex 有三种隔离做法，只有“管理员装一次、换专用账户来跑”的那种够得着底线（design-windows.md 4.1），启动时明写用它。
+// 不写的话，可写副本会被悄悄降成只读。
+export const WINDOWS_SANDBOX = ['-c', 'windows.sandbox="elevated"'];
+// 没装加固时（2026-10-13 起是缺省，docs/design-windows.md 第 12 节）：Codex 自带的、不用安装的那种隔离，权限表不带禁读名单。
+// 流水线三台机器实测：什么都不装就能把活做完；隔离里的命令写得进副本和任务临时目录，写不进家目录；外网和本机端口不拦，钥匙文件不禁读。
+// 必须明写：什么做法都不写时，命令根本跑不起来。带着禁读名单它会直接拒绝。
+export const WINDOWS_PLAIN = ['-c', 'windows.sandbox="unelevated"'];
 // runtime：这一轮运行包的目录（run-package.ts）；srt 的设置文件和联网小程序都从包里取。
 export async function command(job: Job, text: string, project: Isolated, runtime?: string): Promise<Command> {
   const dir = jobDir(job.id), env: Record<string, string> = {}, tmp = jobTmpDir(job);
@@ -110,16 +143,22 @@ export async function command(job: Job, text: string, project: Isolated, runtime
   const unset = [...(vendorOf(job.who) === 'deepseek' ? KEY_VARS : []), ...(network ? ['NODE_USE_SYSTEM_CA'] : [])];
   // 联网任务避免读取系统钥匙串，npm 缓存只写任务专用临时目录（负责人隔离实测）。
   if (network) env.npm_config_cache = join(tmp, 'npm-cache');
-  let file: string, args: string[];
+  let file: string, args: string[], pass: string[] = [];
   // 每件活一个专用临时目录，选手只能写它（见 sandbox.ts 的 jobTmpDir）。
   await mkdir(tmp, { recursive: true });
   if (isolationOf(job.who) === 'codex') {
-    // Codex 的 :workspace 放开的是 $TMPDIR，所以把它指到任务的 tmp。
+    // Codex 的 :workspace 放开的是 $TMPDIR，所以把它指到任务的 tmp。Windows 上临时目录按 TEMP、TMP 算，一并指过去。
     env.TMPDIR = tmp;
+    if (isWindows) { env.TEMP = tmp; env.TMP = tmp; }
     file = codexPath();
     const deepseek = vendorOf(job.who) === 'deepseek';
     const disable = ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories'];
-    args = ['exec', '--ignore-user-config', ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : []), '-c', codexEnvPolicy(deepseek ? KEY_VARS : []), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
+    // 用户的 Codex 连的是哪个接口，原样带上（--ignore-user-config 会把它一起丢掉，接自定义接口的人就派不出活）。
+    // 钥匙放在环境变量里的：只把配置里点名的那一个交给 Codex 主程序，并明写不给它跑的命令（docs/design-scan.md 规则二）。
+    const endpoint = deepseek ? official : await codexEndpoint();
+    const hardened = !isWindows || await (await import('./selfcheck.ts')).windowsHardened();
+    if (endpoint.envKey) pass = [endpoint.envKey];
+    args = ['exec', '--ignore-user-config', ...(isWindows ? (hardened ? WINDOWS_SANDBOX : WINDOWS_PLAIN) : []), ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : endpoint.args), '-c', codexEnvPolicy(deepseek ? KEY_VARS : pass), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network, undefined, !hardened), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
   } else {
     file = nodeRunner().file;
     // 替身模式仍传入完整参数；无需安装或执行真正的 srt。
@@ -147,7 +186,7 @@ export async function command(job: Job, text: string, project: Isolated, runtime
     file = nodeRunner().file;
     args = [resolve(process.env.XAGENTS_FAKE_WORKER), ...args];
   }
-  return { file, args, env, ...(unset.length ? { unset } : {}), ...(isolationOf(job.who) === 'cursor' ? { login: 'cursor' as const } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
+  return { file, args, env, ...(unset.length ? { unset } : {}), ...(pass.length ? { pass } : {}), ...(isolationOf(job.who) === 'cursor' ? { login: 'cursor' as const } : {}), stdin: isolationOf(job.who) === 'codex' ? 'prompt' : 'ignore', output: 'run.log' };
 }
 // Grok 的登录每 6 小时换一次新令牌、旧令牌作废；写回 ~/.grok/auth.json 要在 ~/.grok 里新建临时文件，选手隔离里做不到。
 // 所以派 Grok 活前先在隔离外刷新：剩不到 5 小时就换新，选手干活期间用不着自己刷新（跑着的选手会直接用磁盘上的新令牌）。

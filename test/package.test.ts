@@ -1,14 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, posix, win32 } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { relativeInside } from '../src/core/platform.ts';
 import { desktopPath, resolveToolRoot } from '../src/core/paths.ts';
-import { externalPackages } from '../scripts/check-desktop-bundle.mjs';
+import { externalPackages, runtimeLoads } from '../scripts/check-desktop-bundle.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
@@ -16,23 +17,36 @@ const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
 test('桌面 PATH：只追加存在的目录，保留原顺序，重复调用不重复追加', async t => {
   const home = await mkdtemp(join(tmpdir(), 'xagents-path-'));
   t.after(() => rm(home, { recursive: true, force: true }));
-  const local = join(home, '.local/bin'), grok = join(home, '.grok/bin');
-  await mkdir(local, { recursive: true });
+  const posixHome = '/test-home', local = posix.join(posixHome, '.local/bin'), grok = posix.join(posixHome, '.grok/bin');
+  const native = (file: string) => join(home, posix.relative(posixHome, file));
+  const directory = (file: string) => {
+    if (relativeInside(posixHome, file, posix) === undefined) return false;
+    try { return statSync(native(file)).isDirectory(); } catch { return false; }
+  };
+  await mkdir(native(local), { recursive: true });
   await mkdir(join(home, '.grok'));
-  await writeFile(grok, '这是文件，不是目录');
+  await writeFile(native(grok), '这是文件，不是目录');
   const original = `/usr/bin:/bin:${local}:/custom/bin`;
-  const first = desktopPath(original, home);
+  const first = desktopPath(original, posixHome, directory, posix);
   assert.deepEqual(first.split(':').slice(0, 4), original.split(':'));
   assert.equal(first.split(':').filter(p => p === local).length, 1);
   assert.ok(!first.split(':').includes(grok));
-  assert.equal(desktopPath(first, home), first);
-  await rm(grok); await mkdir(grok);
+  assert.equal(desktopPath(first, posixHome, directory, posix), first);
+  await rm(native(grok)); await mkdir(native(grok));
   // 固定系统目录用替身，测试结果不取决于机器是否装了 Homebrew。
   const existing = new Set([local, grok, '/opt/homebrew/bin']);
   const hasDirectory = (path: string) => existing.has(path);
-  assert.equal(desktopPath(original, home, hasDirectory), `${original}:${grok}:/opt/homebrew/bin`);
-  assert.equal(desktopPath(undefined, home, hasDirectory), `${local}:${grok}:/opt/homebrew/bin`);
-  assert.equal(desktopPath('', home, () => false), '');
+  assert.equal(desktopPath(original, posixHome, hasDirectory, posix), `${original}:${grok}:/opt/homebrew/bin`);
+  assert.equal(desktopPath(undefined, posixHome, hasDirectory, posix), `${local}:${grok}:/opt/homebrew/bin`);
+  assert.equal(desktopPath('', posixHome, () => false, posix), '');
+});
+
+test('Windows 桌面 PATH：保留分号、盘符和原顺序，不探测或追加 macOS 目录', () => {
+  const original = 'C:\\Windows\\System32;D:\\tools;C:/Users/owner/bin;';
+  const unexpected = () => { throw new Error('Windows 不应探测 macOS 目录'); };
+  assert.equal(desktopPath(original, 'C:\\Users\\owner', unexpected, win32), original);
+  assert.equal(desktopPath(undefined, 'C:\\Users\\owner', unexpected, win32), '');
+  assert.equal(desktopPath('', 'C:\\Users\\owner', unexpected, win32), '');
 });
 
 test('平台根目录：源码、开发构建、打包后台及运行快照各取自己的平台', async t => {
@@ -60,6 +74,10 @@ test('打包配置：中文名、固定应用标识、图标、独立平台资�
   assert.equal(config.mac.icon, 'build/icon.icns'); assert.equal(config.mac.identity, null);
   assert.deepEqual(config.mac.target, [{ target: 'dir', arch: ['arm64', 'x64'] }]);
   assert.deepEqual(config.win.target, [{ target: 'nsis', arch: ['x64'] }]);
+  assert.equal(config.win.executableName, 'captain-agents');
+  assert.equal(config.nsis.oneClick, false);
+  assert.equal(config.nsis.perMachine, false);
+  assert.equal(config.nsis.allowToChangeInstallationDirectory, true);
   // 安装包文件名按共用下载桶的约定起，流水线和发版脚本都认这个名字。
   assert.equal(config.nsis.artifactName, 'captain-agents_${version}_windows-x64.${ext}');
   assert.deepEqual(config.files.filter((p: string) => !p.startsWith('!')), ['out/main/**', 'out/preload/**', 'out/renderer/**', 'package.json']);
@@ -103,7 +121,20 @@ test('构建产物检查：允许 Electron 和 Node，拒绝外部包和不能�
     ['react', 'react-dom', '@anthropic-ai/sandbox-runtime', 'another', 'index.js：无法静态确认的动态依赖']);
 });
 
-test('安装脚本语法正确，旧版只移到废纸篓；步骤失败即停', async () => {
+test('构建产物检查：数得出运行时按位置加载模块的地方；主进程的产物里正好只有放行的那一处', async () => {
+  assert.equal(runtimeLoads('import { createRequire } from "node:module"; const require2 = createRequire(import.meta.url); require2("node:fs");'), 0);
+  assert.equal(runtimeLoads('import { createRequire } from "node:module"; const a = createRequire(join(from, "package.json"))(from); function f() { return createRequire$1(x)(y); }'), 2);
+  // 源代码里也只有这一处这么写。
+  const hits: string[] = [];
+  for (const dir of ['src/core', 'src/cli', 'app/main', 'app/preload']) {
+    for (const name of await readdir(join(root, dir))) {
+      if (name.endsWith('.ts') && /createRequire\([^)]*\)\)?\(/.test(await readFile(join(root, dir, name), 'utf8'))) hits.push(`${dir}/${name}`);
+    }
+  }
+  assert.deepEqual(hits, ['src/core/native-windows.ts']);
+});
+
+test('安装脚本语法正确，旧版只移到废纸篓；步骤失败即停', { skip: process.platform === 'win32' ? '只属于 macOS：install-app.sh 安装 .app 并识别 macOS 进程' : false }, async () => {
   const path = join(root, 'scripts/install-app.sh'), source = await readFile(path, 'utf8');
   const result = spawnSync('bash', ['-n', path], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
@@ -115,7 +146,7 @@ test('安装脚本语法正确，旧版只移到废纸篓；步骤失败即停',
   for (const stage of stages) { const next = source.indexOf(stage); assert.ok(next > position, stage); position = next; }
 });
 
-test('安装脚本只匹配开发版和已装版主进程，不匹配其他 Electron、辅助进程或 shell 命令', async () => {
+test('安装脚本只匹配开发版和已装版主进程，不匹配其他 Electron、辅助进程或 shell 命令', { skip: process.platform === 'win32' ? '只属于 macOS：install-app.sh 安装 .app 并识别 macOS 进程' : false }, async () => {
   const source = await readFile(join(root, 'scripts/install-app.sh'), 'utf8');
   // 不设语言环境时 macOS 的 ps 会把中文路径转义成 M-f…，匹配不上“派活工作台”，旧进程就关不掉（2026-09-30 踩过）。
   assert.match(source, /LC_ALL=en_US\.UTF-8 ps -axo/);

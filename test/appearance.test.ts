@@ -72,3 +72,20 @@ test('外观：切换时给 nativeTheme.themeSource 赋值并换窗口底色；�
   const tokens = await readFile(resolve('app/renderer/styles/tokens.css'), 'utf8'), [light, dark] = tokens.split('@media (prefers-color-scheme: dark)');
   assert.equal(new RegExp(`--bg:\\s*${WINDOW_BACKGROUND.light};`).test(light), true); assert.equal(new RegExp(`--bg:\\s*${WINDOW_BACKGROUND.dark};`).test(dark), true);
 });
+
+test('外观：Windows 上右上角窗口按钮的底色透明、符号色跟着深浅走，高度同顶栏；别的系统不碰这一层', async () => {
+  const { syncBackground, titleBarOverlay, WINDOW_BACKGROUND, TITLEBAR_SYMBOL, TITLEBAR_CLEAR, TOPBAR_HEIGHT } = await import('../app/main/appearance.ts');
+  assert.deepEqual(titleBarOverlay(false), { color: TITLEBAR_CLEAR, symbolColor: TITLEBAR_SYMBOL.light, height: TOPBAR_HEIGHT });
+  assert.deepEqual(titleBarOverlay(true), { color: TITLEBAR_CLEAR, symbolColor: TITLEBAR_SYMBOL.dark, height: TOPBAR_HEIGHT });
+  const css = await (await import('node:fs/promises')).readFile(new URL('../app/renderer/styles/tokens.css', import.meta.url), 'utf8');
+  assert.ok(css.includes(`--text: ${TITLEBAR_SYMBOL.light}`) && css.includes(`--text: ${TITLEBAR_SYMBOL.dark}`), '符号色和 tokens.css 的 --text 一致');
+  assert.ok(css.includes(`--topbar-h: ${TOPBAR_HEIGHT}px`), '高度和 tokens.css 的 --topbar-h 一致');
+  const calls: unknown[] = [];
+  const window = { isDestroyed: () => false, setBackgroundColor: (c: string) => calls.push(['bg', c]), setTitleBarOverlay: (o: unknown) => calls.push(['overlay', o]) };
+  syncBackground({ shouldUseDarkColors: true }, window, true);
+  assert.deepEqual(calls, [['bg', WINDOW_BACKGROUND.dark], ['overlay', titleBarOverlay(true)]]);
+  calls.length = 0; syncBackground({ shouldUseDarkColors: false }, window, false);
+  assert.deepEqual(calls, [['bg', WINDOW_BACKGROUND.light]]);
+  calls.length = 0; syncBackground({ shouldUseDarkColors: false }, { ...window, isDestroyed: () => true }, true);
+  assert.deepEqual(calls, []);
+});

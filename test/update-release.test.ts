@@ -10,7 +10,7 @@ test('发布 CLI：生成权限 600 的密钥、不覆盖，签好的多平台�
   const c = await context(t, false), privateFile = join(c.temp, 'private.pem'), publicFile = join(c.temp, 'public.txt');
   const generate = () => exec(process.execPath, ['scripts/release/generate-update-key.mjs', privateFile, publicFile], root);
   const first = await generate(); assert.equal(first.code, 0, first.stderr);
-  assert.equal((await stat(privateFile)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal((await stat(privateFile)).mode & 0o777, 0o600);
   const raw = (await readFile(publicFile, 'utf8')).trim(); assert.equal(Buffer.from(raw, 'base64').length, 32);
   const key = createPrivateKey(await readFile(privateFile)); assert.equal(key.asymmetricKeyType, 'ed25519');
   assert.ok(verify(null, Buffer.from('test'), createPublicKey(key), sign(null, Buffer.from('test'), key)));

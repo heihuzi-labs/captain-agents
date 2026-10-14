@@ -1,0 +1,6 @@
+# Text files are checked out with LF on every system: tests compare file contents and
+# byte counts, and the shell scripts must not get CRLF on Windows.
+* text=auto eol=lf
+*.png binary
+*.icns binary
+*.ico binary

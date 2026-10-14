@@ -1,0 +1,284 @@
+// Windows 上 Codex 自带隔离的探针（docs/design-windows.md 第 4 节的依据）。只在 Windows 上跑，不需要登录 Codex。
+// 用法：node scripts/probe/windows-codex.mjs <codex.exe> <结果.json>
+// 外层（本文件不带参数 --inner 时）在隔离外准备目录、测试文件、监听口和命名管道，再用
+// `codex sandbox` 在各种设置下跑内层（同一个文件带 --inner），把内层报回的结果汇总成一份 JSON。
+// 内层只报“成没成”和错误码，不输出文件内容、变量值。测试条目和目录都是随机名，结束后清掉。
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const MARK = 'XAGENTS_WINDOWS_PROBE:';
+const SECRET_WORDS = ['KEY', 'TOKEN', 'SECRET', 'PASS', 'CREDENTIAL', 'AUTH', 'COOKIE', 'PRIVATE'];
+
+function run(file, args, { cwd, env, timeout = 120_000 } = {}) {
+  return new Promise(resolve => {
+    const started = Date.now();
+    let child;
+    try { child = spawn(file, args, { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (e) { resolve({ exit: null, error: String(e.message), stdout: '', stderr: '', ms: 0 }); return; }
+    let stdout = '', stderr = '', timedOut = false, error;
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, timeout);
+    child.stdout.on('data', b => { stdout = (stdout + b).slice(-200_000); });
+    child.stderr.on('data', b => { stderr = (stderr + b).slice(-200_000); });
+    child.once('error', e => { error = e.message; });
+    child.once('close', exit => {
+      clearTimeout(timer);
+      resolve({ exit, stdout, stderr, ms: Date.now() - started, ...(timedOut ? { timedOut } : {}), ...(error ? { error } : {}) });
+    });
+  });
+}
+
+// ---------- 内层：在隔离里跑 ----------
+async function inner(spec) {
+  const out = {};
+  const code = e => e?.code || e?.message || 'error';
+  const attempt = async (name, fn) => {
+    try { out[name] = { ok: true, ...(await fn()) }; }
+    catch (e) { out[name] = { ok: false, code: code(e) }; }
+  };
+  const writeNew = async dir => {
+    const file = path.join(dir, `probe-${randomUUID()}.txt`);
+    await fs.writeFile(file, 'probe', { flag: 'wx' });
+    await fs.rm(file, { force: true }).catch(() => {});
+    return {};
+  };
+  const connect = (options, ms = 4000) => new Promise((resolve, reject) => {
+    const socket = net.connect(options);
+    const timer = setTimeout(() => { socket.destroy(); reject(Object.assign(new Error('timeout'), { code: 'TIMEOUT' })); }, ms);
+    socket.once('connect', () => { clearTimeout(timer); socket.destroy(); resolve({}); });
+    socket.once('error', e => { clearTimeout(timer); reject(e); });
+  });
+
+  // 隔离里的专用账户查不了 os.userInfo()（实测报 ENOMEM），所以每一项单独取、取不到就记下错误码。
+  const safe = fn => { try { return fn(); } catch (e) { return `!${code(e)}`; } };
+  out.identity = { user: safe(() => os.userInfo().username), envUser: process.env.USERNAME ?? null, home: safe(() => os.homedir()), envProfile: process.env.USERPROFILE ?? null,
+    cwd: safe(() => process.cwd()), temp: process.env.TEMP ?? null, tmp: process.env.TMP ?? null, tmpdir: safe(() => os.tmpdir()), codexHome: process.env.CODEX_HOME ?? null };
+  out.envSecretNames = Object.keys(process.env).filter(name => SECRET_WORDS.some(w => name.toUpperCase().includes(w))).sort();
+  out.envNames = Object.keys(process.env).sort();
+
+  for (const [name, dir] of Object.entries(spec.write)) await attempt(`write:${name}`, () => writeNew(dir));
+  for (const [name, file] of Object.entries(spec.read)) await attempt(`read:${name}`, async () => { await (await fs.open(file, 'r')).close(); return {}; });
+  for (const [name, dir] of Object.entries(spec.list)) await attempt(`list:${name}`, async () => ({ entries: (await fs.readdir(dir)).length }));
+  await attempt('overwrite:outside-file', async () => { await (await fs.open(spec.outsideFile, 'r+')).close(); return {}; });
+  await attempt('hardlink:outside-file', async () => {
+    const link = path.join(spec.write.tmp, `link-${randomUUID()}`);
+    await fs.link(spec.outsideFile, link);
+    await fs.rm(link, { force: true }).catch(() => {});
+    return {};
+  });
+  await attempt('net:internet', () => connect({ host: '1.1.1.1', port: 443 }));
+  await attempt('net:listener', () => connect({ host: '127.0.0.1', port: spec.port }));
+  await attempt('net:listener-v6', () => connect({ host: '::1', port: spec.port6 }));
+  for (const [name, host] of Object.entries(spec.lanHosts)) await attempt(`net:listener-lan:${name}`, () => connect({ host, port: spec.portAny }));
+  const curl = await run('curl.exe', ['--noproxy', '*', '--connect-timeout', '2', '--max-time', '4', '-s', '-o', 'NUL', '-w', '%{http_code}', `http://127.0.0.1:${spec.httpPort}/`], { timeout: 15_000 });
+  out['net:listener-curl'] = { ok: curl.exit === 0, exit: curl.exit, head: (curl.stdout + ' ' + curl.stderr).trim().slice(0, 200) };
+  await attempt('pipe:outer', () => connect({ path: spec.pipe }));
+  await attempt('net:listen-local', () => new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => server.close(() => resolve({})));
+  }));
+  for (const [name, command] of Object.entries(spec.commands)) {
+    const r = await run(command[0], command.slice(1), { timeout: 20_000 });
+    out[`cmd:${name}`] = { ok: r.exit === 0, exit: r.exit, ...(r.error ? { code: r.error } : {}), head: (r.stdout || r.stderr).trim().split(/\r?\n/).slice(0, 3).join(' | ').slice(0, 300) };
+  }
+  // 凭据库：外面放了一个随机名的测试条目，这里只看列不列得出它的名字。
+  const listed = await run('cmdkey.exe', ['/list'], { timeout: 20_000 });
+  out['credential:list'] = { ok: listed.exit === 0, exit: listed.exit, seesProbe: listed.stdout.includes(spec.credential) };
+  console.log(MARK + JSON.stringify(out));
+}
+
+// ---------- 外层：在隔离外准备并汇总 ----------
+const toml = value => '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+
+async function outer(codex, resultFile) {
+  if (process.platform !== 'win32') throw new Error('这份探针只在 Windows 上跑。');
+  const self = fileURLToPath(import.meta.url);
+  const id = randomUUID().slice(0, 8);
+  const home = os.homedir();
+  const result = { at: new Date().toISOString(), os: `${os.type()} ${os.release()} ${os.version()}`, arch: process.arch, node: process.version, user: os.userInfo().username, cases: {} };
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'xagents-probe-'));
+  const base = await fs.realpath(temp);
+  const worktree = path.join(base, 'worktree'), tmp = path.join(base, 'job-tmp'), codexHome = path.join(base, 'codex-home');
+  const outside = path.join(base, 'outside');
+  for (const dir of [worktree, tmp, codexHome, outside]) await fs.mkdir(dir);
+  const outsideFile = path.join(outside, 'existing.txt'); await fs.writeFile(outsideFile, 'outside');
+  // 家目录里：一个不在禁读名单上的普通文件，一个探针专用的“密钥”目录（权限表里禁读）。
+  const plain = path.join(home, `xagents-probe-plain-${id}.txt`); await fs.writeFile(plain, 'plain');
+  const secretDir = path.join(home, `.xagents-probe-secret-${id}`); await fs.mkdir(secretDir);
+  const secret = path.join(secretDir, 'secret.txt'); await fs.writeFile(secret, 'secret');
+  // 盘符根下三个文件夹，分别允许“所有人”“已登录用户”“本机用户组”修改，看隔离挡不挡得住。
+  const shared = {};
+  for (const [name, sid] of [['everyone', '*S-1-1-0'], ['authenticated', '*S-1-5-11'], ['users', '*S-1-5-32-545']]) {
+    const dir = path.join(path.parse(home).root, `xagents-probe-${name}-${id}`);
+    await fs.mkdir(dir);
+    const r = await run('icacls.exe', [dir, '/grant', `${sid}:(OI)(CI)M`]);
+    shared[name] = { dir, granted: r.exit === 0 };
+  }
+  const credential = `xagents-probe-${id}`;
+  const cred = await run('cmdkey.exe', [`/generic:${credential}`, '/user:probe', `/pass:${randomUUID()}`]);
+  result.credentialCreated = cred.exit === 0;
+
+  const server = net.createServer(s => s.destroy()), server6 = net.createServer(s => s.destroy()), pipeServer = net.createServer(s => s.destroy());
+  const serverAny = net.createServer(s => s.destroy());
+  const http = (await import('node:http')).createServer((_, res) => res.end('ok'));
+  await new Promise(r => serverAny.listen(0, '0.0.0.0', r));
+  await new Promise(r => http.listen(0, '127.0.0.1', r));
+  const lanHosts = Object.fromEntries(Object.entries(os.networkInterfaces()).flatMap(([name, list]) => (list ?? []).filter(a => a.family === 'IPv4' && !a.internal).map(a => [name.replace(/[^\w-]/g, '_'), a.address])));
+  // 防火墙现状：三个配置文件开没开，Codex 装的那条“拦本机回环”的规则长什么样。
+  const fw = async args => { const r = await run('netsh.exe', args, { timeout: 30_000 }); return (r.stdout + r.stderr).trim().slice(0, 4000); };
+  result.firewall = { profiles: await fw(['advfirewall', 'show', 'allprofiles', 'state']) };
+  const pipe = `\\\\.\\pipe\\xagents-probe-${id}`;
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  await new Promise(r => server6.listen(0, '::1', r)).catch(() => {});
+  await new Promise(r => pipeServer.listen(pipe, r));
+
+  const spec = {
+    write: { worktree, tmp, home, outside, 'user-temp': path.join(home, 'AppData', 'Local', 'Temp'), 'windows-temp': path.join(process.env.SystemRoot || 'C:\\Windows', 'Temp'),
+      public: path.join(path.parse(home).root, 'Users', 'Public'), programdata: process.env.ProgramData || 'C:\\ProgramData', 'drive-root': path.parse(home).root,
+      'startup-folder': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'), 'codex-home': codexHome,
+      'shared-everyone': shared.everyone.dir, 'shared-authenticated': shared.authenticated.dir, 'shared-users': shared.users.dir },
+    read: { 'home-plain': plain, 'home-secret': secret, 'outside-file': outsideFile, self, 'codex-auth': path.join(codexHome, 'auth.json'), 'codex-session': path.join(codexHome, 'sessions', 'one.jsonl') },
+    list: { home, 'home-secret-dir': secretDir, appdata: path.join(home, 'AppData', 'Roaming'), localappdata: path.join(home, 'AppData', 'Local'),
+      'credentials-roaming': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Credentials'), 'credentials-local': path.join(home, 'AppData', 'Local', 'Microsoft', 'Credentials'),
+      'protect-roaming': path.join(home, 'AppData', 'Roaming', 'Microsoft', 'Protect'), 'codex-home': codexHome, worktree },
+    outsideFile, port: server.address().port, port6: server6.address()?.port ?? 1, portAny: serverAny.address().port, httpPort: http.address().port, lanHosts, pipe, credential,
+    commands: { node: [process.execPath, '--version'], git: ['git.exe', '--version'], whoami: ['whoami.exe'], 'whoami-groups': ['whoami.exe', '/groups', '/fo', 'csv', '/nh'],
+      powershell: ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', '1+1'],
+      // Windows 上 Python 的 asyncio 起事件循环时要在本机回环上连自己一下：拦了回环它还能不能用。
+      'python-asyncio': ['python.exe', '-c', 'import asyncio; asyncio.run(asyncio.sleep(0)); print("asyncio ok")'] },
+  };
+  const specFile = path.join(worktree, 'spec.json'); await fs.writeFile(specFile, JSON.stringify(spec));
+  const probe = path.join(worktree, 'probe.mjs'); await fs.copyFile(self, probe);
+
+  const env = { ...process.env, CODEX_HOME: codexHome, TEMP: tmp, TMP: tmp, TMPDIR: tmp, XAGENTS_PROBE_API_KEY: randomUUID() };
+  const version = await run(codex, ['--version'], { env });
+  result.codex = (version.stdout || version.stderr).trim();
+
+  const profile = (extend, extra = '', rules = []) =>
+    `permissions.xa={extends="${extend}",filesystem={${[[secretDir, 'deny'], [':tmpdir', 'read'], [tmp, 'write'], ...rules].map(([p, v]) => `${toml(p)}="${v}"`).join(',')}}${extra}}`;
+  const envPolicy = `shell_environment_policy.exclude=[${SECRET_WORDS.map(w => `"*${w}*"`).join(',')}]`;
+  const innerCommand = ['--', process.execPath, probe, '--inner', specFile];
+  const brief = r => ({ exit: r.exit, ms: r.ms, ...(r.timedOut ? { timedOut: true } : {}), ...(r.error ? { error: r.error } : {}), stdout: r.stdout.replace(new RegExp(`^${MARK}.*$`, 'm'), '').trim().slice(-3000), stderr: r.stderr.trim().slice(-3000) });
+  const sandboxCase = async (name, mode, args) => {
+    const r = await run(codex, [...(mode ? ['-c', `windows.sandbox="${mode}"`] : []), 'sandbox', ...args, ...innerCommand], { cwd: worktree, env, timeout: 180_000 });
+    const line = r.stdout.split(/\r?\n/).find(l => l.startsWith(MARK));
+    let probes = null;
+    try { probes = line ? JSON.parse(line.slice(MARK.length)) : null; } catch { /* 留空，原始输出在 run 里 */ }
+    result.cases[name] = { mode, args, run: brief(r), probes };
+    console.log(`[${name}] 退出码 ${r.exit}，${probes ? '拿到探针结果' : '没有探针结果'}，用时 ${r.ms} 毫秒`);
+  };
+
+  try {
+    // 不在隔离里跑一遍，作对照：下面每一项在隔离外本来是什么结果。
+    const plainRun = await run(process.execPath, [probe, '--inner', specFile], { cwd: worktree, env });
+    const plainLine = plainRun.stdout.split(/\r?\n/).find(l => l.startsWith(MARK));
+    result.cases['outside-sandbox'] = { run: brief(plainRun), probes: plainLine ? JSON.parse(plainLine.slice(MARK.length)) : null };
+
+    // 没装隔离时直接用，会怎样（是否弹窗、是否报错、是否悄悄降级）。
+    await sandboxCase('before-setup:elevated', 'elevated', ['-P', ':workspace', '-C', worktree]);
+    const setup = await run(codex, ['sandbox', 'setup', '--elevated', '--current-user'], { cwd: worktree, env, timeout: 300_000 });
+    result.setup = brief(setup);
+    console.log(`[setup] 退出码 ${setup.exit}，用时 ${setup.ms} 毫秒`);
+    result.setupFiles = await fs.readdir(codexHome, { recursive: true }).catch(e => [String(e.code)]);
+    result.configAfterSetup = await fs.readFile(path.join(codexHome, 'config.toml'), 'utf8').catch(() => null);
+
+    await sandboxCase('elevated:workspace-builtin', 'elevated', ['-P', ':workspace', '-C', worktree]);
+    await sandboxCase('elevated:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    await sandboxCase('elevated:xa-readonly', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':read-only'), '-c', envPolicy]);
+    await sandboxCase('elevated:xa-network-on', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', ',network={enabled=true}'), '-c', envPolicy]);
+    // 换一个空的 Codex 文件夹（DeepSeek 就是这样）：隔离还认不认，要不要再装一次。
+    const otherHome = path.join(base, 'codex-home-2'); await fs.mkdir(otherHome);
+    const saved = env.CODEX_HOME; env.CODEX_HOME = otherHome;
+    await sandboxCase('elevated:other-codex-home', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    const setup2 = await run(codex, ['sandbox', 'setup', '--elevated', '--current-user'], { cwd: worktree, env, timeout: 300_000 });
+    result.setupOtherHome = brief(setup2);
+    await sandboxCase('elevated:other-codex-home-after-setup', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    env.CODEX_HOME = saved;
+    // 装过第二个文件夹以后，第一个还好不好用（两个文件夹共用同一对专用账户）。
+    await sandboxCase('elevated:first-home-again', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    // 对照：另外两种做法和“什么都不写”。只为记录它们为什么不能用。
+    await sandboxCase('unelevated:xa-write', 'unelevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    await sandboxCase('unset:xa-write', null, ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    // 补救试验：给离线专用账户加“拦本机回环”的系统过滤规则，再跑一遍；最后撤掉，确认恢复原样。
+    const fence = action => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(path.dirname(self), '..', '..', 'sandbox', 'windows', 'loopback-fence.ps1'), '-Action', action], { timeout: 120_000 });
+    result.fenceInstall = brief(await fence('install'));
+    console.log(`[fence install] 退出码 ${result.fenceInstall.exit} ${result.fenceInstall.stdout} ${result.fenceInstall.stderr.slice(0, 500)}`);
+    await sandboxCase('fenced:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    await sandboxCase('fenced:xa-readonly', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':read-only'), '-c', envPolicy]);
+    await sandboxCase('fenced:xa-network-on', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', ',network={enabled=true}'), '-c', envPolicy]);
+    const fencedOutside = await run(process.execPath, [probe, '--inner', specFile], { cwd: worktree, env });
+    const fencedLine = fencedOutside.stdout.split(/\r?\n/).find(l => l.startsWith(MARK));
+    result.cases['fenced:outside-sandbox'] = { run: brief(fencedOutside), probes: fencedLine ? JSON.parse(fencedLine.slice(MARK.length)) : null };
+    result.fenceInstallAgain = brief(await fence('install'));
+    result.fenceRemove = brief(await fence('remove'));
+    console.log(`[fence remove] 退出码 ${result.fenceRemove.exit} ${result.fenceRemove.stdout} ${result.fenceRemove.stderr.slice(0, 500)}`);
+    await sandboxCase('unfenced:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    // Codex 自己的文件夹怎么禁读：隔离要用里面的帮手程序，整个禁掉可能连隔离都起不来。三种写法各试一次。
+    await fs.writeFile(path.join(codexHome, 'auth.json'), '{"probe":true}');
+    await fs.mkdir(path.join(codexHome, 'sessions'), { recursive: true }); await fs.writeFile(path.join(codexHome, 'sessions', 'one.jsonl'), '{}');
+    await sandboxCase('codex-home:not-denied', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    await sandboxCase('codex-home:deny-all', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[codexHome, 'deny']]), '-c', envPolicy]);
+    await sandboxCase('codex-home:deny-all-but-helpers', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[codexHome, 'deny'], [path.join(codexHome, '.sandbox-bin'), 'read'], [path.join(codexHome, '.sandbox'), 'read']]), '-c', envPolicy]);
+    await sandboxCase('codex-home:deny-files', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace', '', [[path.join(codexHome, 'auth.json'), 'deny'], [path.join(codexHome, 'sessions'), 'deny'], [path.join(codexHome, 'config.toml'), 'deny'], [path.join(codexHome, 'does-not-exist.json'), 'deny'], [path.join(home, '.xagents-probe-missing-dir'), 'deny']]), '-c', envPolicy]);
+    // 两件活互不相干吗：隔离里都是同一个专用账户，上一件活放开的写权限会不会留给下一件。
+    // 第二件活用另一个副本、另一个临时目录，去写第一件活的副本和临时目录（都必须写不进），也读一读（读得到是意料之中）。
+    const worktree2 = path.join(base, 'worktree-2'), tmp2 = path.join(base, 'job-tmp-2');
+    await fs.mkdir(worktree2); await fs.mkdir(tmp2);
+    const spec2 = { ...spec, write: { worktree: worktree2, tmp: tmp2, 'first-worktree': worktree, 'first-tmp': tmp, home, 'shared-authenticated': shared.authenticated.dir },
+      read: { 'first-worktree-file': specFile }, list: { 'first-worktree': worktree }, commands: {} };
+    const specFile2 = path.join(worktree2, 'spec.json'); await fs.writeFile(specFile2, JSON.stringify(spec2));
+    const probe2 = path.join(worktree2, 'probe.mjs'); await fs.copyFile(self, probe2);
+    const profile2 = `permissions.xa={extends=":workspace",filesystem={${[[secretDir, 'deny'], [':tmpdir', 'read'], [tmp2, 'write']].map(([p, v]) => `${toml(p)}="${v}"`).join(',')}}}`;
+    for (const [name, home2] of [['second-job:same-codex-home', codexHome], ['second-job:other-codex-home', otherHome]]) {
+      const env2 = { ...env, CODEX_HOME: home2, TEMP: tmp2, TMP: tmp2, TMPDIR: tmp2 };
+      const r = await run(codex, ['-c', 'windows.sandbox="elevated"', 'sandbox', '-P', 'xa', '-C', worktree2, '-c', profile2, '-c', envPolicy, '--', process.execPath, probe2, '--inner', specFile2], { cwd: worktree2, env: env2, timeout: 180_000 });
+      const line = r.stdout.split(/\r?\n/).find(l => l.startsWith(MARK));
+      result.cases[name] = { run: brief(r), probes: line ? JSON.parse(line.slice(MARK.length)) : null };
+      console.log(`[${name}] 退出码 ${r.exit}`);
+    }
+    result.aclAfter = {};
+    for (const [name, dir] of [['worktree', worktree], ['worktree2', worktree2], ['tmp', tmp], ['secret', secretDir]]) result.aclAfter[name] = (await run('icacls.exe', [dir])).stdout.trim().slice(0, 1500);
+    result.capSid = await fs.readFile(path.join(codexHome, 'cap_sid'), 'utf8').catch(() => null);
+    result.denyState = await fs.readFile(path.join(codexHome, '.sandbox', 'deny_read_acl_state.json'), 'utf8').catch(() => null);
+    // 一次装齐的脚本：换两个新的 Codex 文件夹，走“提权后调用”的那条路（流水线的机器本来就是管理员，不会弹窗）。
+    const homes = [path.join(base, 'setup-home-1'), path.join(base, 'setup-home-2')];
+    for (const dir of homes) await fs.mkdir(dir);
+    const setupResult = path.join(base, 'setup-result.json'); await fs.writeFile(setupResult, '');
+    const setupScript = path.join(path.dirname(self), '..', '..', 'sandbox', 'windows', 'setup.ps1');
+    const quote = value => "'" + value.replaceAll("'", "''") + "'";
+    const elevated = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',${quote('"' + setupScript + '"')},'-Result',${quote('"' + setupResult + '"')},'-Codex',${quote('"' + codex + '"')},'-User',${quote('"' + os.userInfo().username + '"')},'-CodexHomes',${quote('"' + homes.join('|') + '"')}); exit $p.ExitCode`], { timeout: 300_000 });
+    result.setupScript = { run: brief(elevated), result: await fs.readFile(setupResult, 'utf8').then(JSON.parse).catch(e => String(e.message)) };
+    console.log(`[setup.ps1] 退出码 ${elevated.exit} ${JSON.stringify(result.setupScript.result).slice(0, 1500)}`);
+    env.CODEX_HOME = homes[1];
+    await sandboxCase('setup-script:xa-write', 'elevated', ['-P', 'xa', '-C', worktree, '-c', profile(':workspace'), '-c', envPolicy]);
+    env.CODEX_HOME = codexHome;
+    const removed = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', setupScript, '-Result', setupResult, '-Remove'], { timeout: 120_000 });
+    result.setupScriptRemove = { run: brief(removed), result: await fs.readFile(setupResult, 'utf8').then(JSON.parse).catch(e => String(e.message)) };
+    result.sandboxLogs = {};
+    for (const name of await fs.readdir(path.join(codexHome, '.sandbox')).catch(() => [])) {
+      if (name.endsWith('.log')) result.sandboxLogs[name] = (await fs.readFile(path.join(codexHome, '.sandbox', name), 'utf8').catch(() => '')).slice(-5000);
+    }
+    result.firewall.loopbackRule = await fw(['advfirewall', 'firewall', 'show', 'rule', 'name=codex_sandbox_offline_block_loopback_tcp', 'verbose']);
+    result.firewall.outboundRule = await fw(['advfirewall', 'firewall', 'show', 'rule', 'name=codex_sandbox_offline_block_outbound', 'verbose']);
+    const users = await run('net.exe', ['user']);
+    result.localUsers = users.stdout.split(/\s+/).filter(name => /sandbox/i.test(name));
+  } finally {
+    server.close(); server6.close(); pipeServer.close(); serverAny.close(); http.close();
+    await run('cmdkey.exe', [`/delete:${credential}`]);
+    for (const file of [plain]) await fs.rm(file, { force: true }).catch(() => {});
+    for (const dir of [secretDir, ...Object.values(shared).map(s => s.dir)]) await fs.rm(dir, { recursive: true, force: true }).catch(e => { result.cleanupErrors = [...(result.cleanupErrors ?? []), `${dir}: ${e.code}`]; });
+    await fs.writeFile(resultFile, JSON.stringify(result, null, 2));
+    await fs.rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(e => console.log(`临时目录没删干净：${e.code}`));
+  }
+}
+
+const args = process.argv.slice(2);
+if (args[0] === '--inner') await inner(JSON.parse(await fs.readFile(args[1], 'utf8')));
+else if (args.length === 2) await outer(path.resolve(args[0]), path.resolve(args[1]));
+else { console.error('用法：node scripts/probe/windows-codex.mjs <codex.exe> <结果.json>'); process.exitCode = 2; }
