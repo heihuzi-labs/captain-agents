@@ -26,7 +26,7 @@ test('应用和核心源代码不使用显式 any', async () => {
 
 test('选手清单只在 roster.ts 里写一份：其他源代码不再并列写选手名', async () => {
   for (const dir of ['src', 'app']) for (const name of await readdir(dir, { recursive: true })) {
-    if (!/\.(tsx?|html)$/.test(name) || name === 'core/roster.ts') continue;
+    if (!/\.(tsx?|html)$/.test(name) || /^core[\\/]roster\.ts$/.test(name)) continue;
     assert.doesNotMatch(await readFile(resolve(dir, name), 'utf8'), /cursor-(grok|opus|sonnet)/, `${dir}/${name}`);
   }
 });

@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compareVersions, verifyFeed } from '../../app/main/update-feed.ts';
 
-// 存放约定（各应用共用一个公开下载桶）：<应用英文名>/<通道>/<版本号>/<应用英文名>_<版本号>_<系统>-<架构>.zip
+// 存放约定：<应用英文名>/<通道>/<版本号>/<应用英文名>_<版本号>_<系统>-<架构>，Windows 用 .exe，其余用 .zip。
 const APP = 'captain-agents', BUCKET = 'heihuzi-prod-tokyo-downloads', REGION = 'ap-northeast-1';
 const SYSTEMS = { darwin: 'macos', win32: 'windows', linux: 'linux' };
 
@@ -14,7 +14,7 @@ export function storeKey(version, platform, channel = 'stable') {
   const at = platform.indexOf('-'), system = SYSTEMS[platform.slice(0, at)], arch = platform.slice(at + 1);
   if (at < 1 || !Object.hasOwn(SYSTEMS, platform.slice(0, at)) || !['x64', 'arm64'].includes(arch)) throw new Error(`不认识的平台：${platform}`);
   if (channel !== 'stable' && channel !== 'beta') throw new Error('通道只能是 stable 或 beta。');
-  return `${APP}/${channel}/${version}/${APP}_${version}_${system}-${arch}.zip`;
+  return `${APP}/${channel}/${version}/${APP}_${version}_${system}-${arch}.${system === 'windows' ? 'exe' : 'zip'}`;
 }
 export function publicUrl(key) { return `https://${BUCKET}.oss-${REGION}.aliyuncs.com/${key}`; }
 

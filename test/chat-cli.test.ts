@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chatContext, putChat, sampleChat, say } from './chat-helpers.ts';
 import { readMessages, appendChatMessage } from '../src/core/chat.ts';
 import { waitForJobs, chatOwnerActions } from '../src/core/wait.ts';
@@ -72,7 +73,7 @@ test('chat wait 正在等群时，别群的主人新动作退出码 3', async t 
   const c = await chatContext(t);
   await putChat(c.home, sampleChat('busy-chat', { busy: { who: 'grok', job: 'member-job', message: 1, since: 'now' } }));
   await putChat(c.home, sampleChat('other-chat'));
-  const child = spawn(process.execPath, ['--import', join(root, 'test/fixtures/chat-engine-hook.mjs'), join(root, 'src/cli/cli.ts'), 'chat', 'wait', 'busy-chat'], {
+  const child = spawn(process.execPath, ['--import', pathToFileURL(join(root, 'test/fixtures/chat-engine-hook.mjs')).href, join(root, 'src/cli/cli.ts'), 'chat', 'wait', 'busy-chat'], {
     cwd: root, env: { ...c.env, XAGENTS_CHAT_TEST_READY: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '', error = '';

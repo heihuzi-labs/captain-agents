@@ -38,6 +38,7 @@
 - 平台根目录统一在 `src/core/paths.ts` 的 `resolveToolRoot()` / `toolRoot`：asar 中的后台根据 Electron 自带的 `process.resourcesPath` 找 `platform`，缺目录明确报错；开发构建、源码 CLI 和运行快照继续取自己的根目录。根目录不接受外部环境变量覆盖，已有快照不会切回安装目录的另一版本。
 - 起平台进程统一用 `src/core/node-runtime.ts` 的 `nodeRunner()` / `nodeCommand()`：普通 Node 用 `process.execPath`；Electron 用同一程序加 `ELECTRON_RUN_AS_NODE=1`。入口 `node-entry.ts` 随后清掉开关、把 `process.defaultApp` 设为真（否则 srt 用的参数解析库按 Electron 的习惯把脚本路径当成用户参数，srt 会在隔离里再套一层自己，实测启动失败）并执行目标脚本；推进进程再起看管进程、看管进程再起 srt 时都重新设置，选手拿不到这个变量。自检仅调整启动方式，探针正文不变。
 - **命令行后台**：`app/main/cli-launcher.ts` 提供 `cliLauncherStatus()` 和 `installCliLauncher({ replace?: boolean })`。状态是 `installed`（当前应用的完整启动脚本）、`missing`、`other`（包括源码链接、悬空链接、其他应用位置的脚本）；开发版状态为 `other`，安装报“开发版不安装命令行”。安装在锁内写临时可执行文件再改名，路径和参数正确引用，已有其他文件必须显式选择替换。脚本只用应用自带运行时执行平台中的 `bin/xagents`，同位置更新后自然就是新版。
+- **自动装上**（2026-10-12 主人定）：打包后的应用每次启动时看一眼启动脚本——还没装的自动装上，应用换了位置的跟着重写；终端里已经有一个别的 `xagents`（不是本应用写的）时什么都不动，等主人在设置里确认替换。出错只记日志，不影响启动。开发版不装。
 - **命令行的界面**：设置 → 通用 → 命令行（[界面规范](ui-spec.md) 第 18 节），通过桥上的 `cliStatus()` / `cliInstall(replace)` 调上面两个函数；开发版显示“开发版不安装命令行”。
 - 开发的人照旧使用源码 `bin/xagents`、`npm run dev`、`npm run build && npx electron .` 和 `npm run install-app`。安装脚本只停窗口主进程，避免把同一可执行程序启动的平台后台进程也停掉。
 - `scripts/check-desktop-bundle.mjs` 保留原有外部依赖检查，并检查平台必需文件、srt 依赖完整且没有符号链接。`npm run pack` 顺序是构建 → 准备平台 → 检查 → builder。
@@ -74,7 +75,7 @@
 ### 4.4 怎么发布
 
 - 版本号开始认真用（`package.json` 的 `version`，从 0.2.0 起）。
-- 发布流水线（GitHub Actions，在公开仓库 heihuzi-labs/captain-agents 上）：打标签触发 → 构建 Mac 苹果芯片版 → 本地签名 → 打成 zip → 算大小和 SHA-256 → 生成并签名清单 → 自己先验一遍 → 放到发布位置。
+- 发布流水线（GitHub Actions，在公开仓库 heihuzi-labs/captain-agents 上）：打标签触发 → 构建 Mac 版 → 开发者签名、公证（2026-10-14 前是本地签名） → 打成 zip → 算大小和 SHA-256 → 生成并签名清单 → 自己先验一遍 → 放到发布位置。
 - **每次发版都是对外动作，由主人点头**（或者主人自己打标签），负责人不自己发。
 - 负责人平时在本机验收新版仍然用 `npm run install-app`，不走发布。
 
@@ -196,10 +197,27 @@ ready → 用户点重启 → 独立安装小程序 → 新版打开
 
 发布操作、密钥责任和验收步骤见 [发布清单](release-checklist.md)。
 
+### 4.9 Windows：直接运行 NSIS 安装程序（2026-10-14）
+
+代码已实现，待 Windows 探针流水线验收；macOS 的解压、应用验签、备份和回退步骤不变。
+
+- 和 Mac 共用清单签名、HTTPS 主机名单、桶优先/发布页兜底、慢速换源、半包清理与大小/SHA-256 核对。清单平台名是 `win32-x64`，正式构建目标是 `win-x64`；包名固定为 `captain-agents_<版本>_windows-x64.exe`。不解压、不做 Authenticode 核对；主人已定暂不买 Windows 签名证书，信任来自自己的 Ed25519 签名清单。
+- 仅正常安装目录开放：可执行文件名为 `captain-agents.exe`，旁边有 NSIS 的 `Uninstall captain-agents.exe` 和 `resources/app.asar`。解压的 `win-unpacked` 没有卸载程序，拒绝更新；UNC、根目录、链接路径、不可写目录也给“请手动安装”的原因。位置可以自选，不硬编码盘符或用户目录；路径核对用 Windows 的大小写、分隔符规则。写权限实际创建并移除空目录来确认，不依赖 Windows 上不可靠的 `access(W_OK)`。
+- 下载沿用原有 `.part` → 完整文件的原子改名，完整文件保留正式 EXE 名。额外核对文件名与清单版本，并读取 PE 的 DOS/COFF/可选头和 RT_VERSION 资源，确认是 Windows 可执行文件，内嵌文件版本等于 `<清单版本>.0`。NSIS 的引导程序本身是 32 位 PE，里面的应用仍为 x64。任何一项失败都删除这份下载。
+- 点“重启以完成更新”时重新判断安装目录、重算文件大小和 SHA-256、复核 PE 及版本。直接 `spawn(安装程序, 参数)`，不经过 PowerShell 或 cmd，`spawn` 成功才让旧应用退出。参数为 `/S --updated --force-run /currentuser /D=<当前安装目录>`；`/D=` 必须最后、不能加引号（即使目录含空格）。因此使用 `windowsVerbatimArguments: true`，参数仅由后台生成，窗口不能传路径或参数。
+- **模板依据**：electron-builder 26.15.3 的 `templates/nsis/multiUser.nsh:50–54,93–97` 实际用 `/D` 覆盖安装位置，`:102–141` 说明最后/无引号并手动读出含空格的目录；`assistedInstaller.nsh:129–133` 的 `/currentuser` 强制按用户装；`installSection.nsh:105–109` 仅在静默安装且带 `--force-run` 时自动运行；`common.nsh:123–132` 打开新版并传 `--updated`。`/S` 为 NSIS 静默开关，`uninstaller.nsh:12–18` 也显式解析它。
+- **必须替换默认进程检查**：`installSection.nsh:33–37` 和 `uninstaller.nsh:1–2` 都会调用检查。默认 `include/allowOnlyOneInstallerInstance.nsh:32–42,45–100,105–164` 会启动 PowerShell/cmd、短暂等旧应用退出后强杀同目录进程，违反“不在后台启动 PowerShell”，也可能杀掉后台任务。`build/installer.nsh` 用 NSIS 原生 nsProcess 插件覆盖 `customCheckAppRunning`，安装器和新生成的卸载器共用；更新最多等待 60 秒，有任何同名应用进程仍活着则停止安装，不杀进程。因此 Windows 的就绪文案提醒先等活结束；macOS 原文案不变。已经发出去、没有在线更新功能的 Windows 版仍需手动装上第一版带此能力的安装包，其旧卸载程序内置的旧检查无法由新应用改写。
+- 新版启动时清理 `updates` 里的下载 EXE；NSIS 会先打开新版再结束自身，删除遇到占用时最多重试约 15 秒。NSIS 自己在用户应用数据中留的安装器缓存不是本应用的下载目录；沿用打包工具默认行为。Windows 的安装失败处理由 NSIS 完成，不承诺 Mac 独立安装脚本的废纸篓备份和自动回退。
+- `latest.json` 继续用 `{url,size,sha256}`，`latest-v2.json` 继续用 `{urls,size,sha256}`，两份清单都可含 Windows 包。已发布 0.2.0/0.2.1 的旧解析器和 0.2.2/0.2.3 的新解析器都逐条检查通用平台名和大小/哈希，并只选择自己的 `darwin-*`；没有扩展名限制，不会因为新增 `win32-x64` 而拒收。已用这两份历史解析器、测试密钥、含三平台的签名清单验证验签、解析和两种 Mac 选包，不需要删掉旧清单的 Windows 条目。
+
+Windows 参数还有一个容易漏掉的细节：`windowsVerbatimArguments` 也会关闭 `argv[0]` 的自动引用，因此启动选项另外传 `argv0: '"<安装程序路径>"'`，保证下载目录含空格时 NSIS 仍能准确读参数；`file` 仍传未引用的真实路径供系统选定唯一程序。依据是 [libuv 的 make_program_args 与 CreateProcessW 实现](https://github.com/libuv/libuv/blob/v1.x/src/win/process.c#L490-L551)。
+
+Windows 的完整检查脚本是 `test/e2e/update-windows.ts`，由 `windows-probe.yml` 的 `online-update` 作业执行：只准在一次性 Windows runner 上跑，用临时测试密钥打 0.0.81/0.0.82 两个安装程序，装到含中文、空格和 `&` 的自选位置；起两份正常 HTTPS 测试下载站，真实点检查、下载和重启，核对坏签名、坏包、断开、换源、自动打开新版、平台版本和下载清理，上传结果和截图。不使用正式机密、不发布。macOS 隔离中没跑 Windows 端到端与真实窗口冒烟；新增脚本的实际结果须由负责人跑流水线后记录。
+
 ## 5. 现在不做的
 
-- **苹果开发者签名和公证**：现在是本地签名。应用自己下载的更新不带“来自互联网”的标记，替换后能正常打开，所以更新这条路不依赖它。但新用户**第一次**从网上下载安装时仍会被系统拦一下（新系统上要到“系统设置 → 隐私与安全性”里点“仍要打开”，老系统上右键打开），这要等做开发者签名和公证才能解决，算在“做成产品”那一步里，不在这次范围。
-- **Intel Mac 和 Windows**：清单的格式一开始就按“多平台”设计，但这次只出苹果芯片版。
+- **苹果开发者签名和公证**：2026-10-14 起发版的 Mac 包带开发者签名并经过公证（做法见 [release-checklist.md](release-checklist.md) 的“苹果签名和公证”），新用户从网上下载后可以直接打开。应用内更新照旧只用 `codesign --verify --deep --strict` 核对解开的应用，本地签名的老版本更新到正式签名的新版本能过这道核对。系统按签名记住的那些许可（比如通知）在第一次换成正式签名时可能要再点一次允许。
+- **更多平台**：Intel Mac 已上线；Windows 已补代码并加入正式发版目标，实际安装更新待 Windows 流水线验证（第 4.9 节）；Linux 未做。
 - 灰度放量、强制更新：清单里留“最低支持版本”一个字段，放量先不做。
 
 ## 6. 定下来的做法（负责人定，主人随时可以改）

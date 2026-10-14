@@ -1,3 +1,6 @@
+import { listedProviders, listedWho, unlistedProviders } from './listed.ts';
+import type { ListedOptions } from './listed.ts';
+import { codexEndpoint } from './endpoint.ts';
 import { readModelsCache, viewModels } from './models.ts';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -22,7 +25,7 @@ import { teamTasks } from './team-tasks.ts';
 import type { View, ViewJob, ViewTeam, ViewChat } from './view-types.ts';
 
 // 只读取登记处；不修正任务、不查远程额度、不触发自检。
-export async function buildView(): Promise<View> {
+export async function buildView(options: ListedOptions = {}): Promise<View> {
   const settings = await readSettings();
   const models = viewModels(settings.models, await readModelsCache());
   const p = paths();
@@ -55,7 +58,8 @@ export async function buildView(): Promise<View> {
   }
   batches.sort((a, b) => b.started.localeCompare(a.started));
   const { columns, keepAwake, notifications, storage, limits, archivedProjects, workers: policy } = settings;
-  const quota = await readQuotaCache();
+  const listed = await listedProviders(options), endpoint = await codexEndpoint();
+  const quota = await readQuotaCache(endpoint);
   const registered = (await readdir(p.projects).catch(error => { if (hasCode(error, 'ENOENT')) return []; throw error; })).filter(n => n.endsWith('.json')).map(n => n.slice(0, -5));
   const labels = new Map<string, string>();
   for (const name of registered) {
@@ -69,8 +73,9 @@ export async function buildView(): Promise<View> {
     dashboard: ranges.flatMap(range => ['', ...projectNames].map(project => dashboard(jobs, range, project))),
     storage: { slimmedJobs: slimmed.length, freedBytes: slimmed.reduce((sum, job) => sum + job.slimmed!.bytes, 0), due: slimCandidates(jobs, storage.days).length },
     updated: new Date().toISOString(), selfcheck: await readSelfcheck(),
-    roster: keptWhos.map(who => ({ who, name: spec(who).name, model: spec(who).shown, efforts: allowedEfforts(who), fastSupported: supportsFast(who) })),
-    stats: stats(jobs), profiles: profiles(jobs), quota: boardQuota(quota), quotaAt: quota?.queriedAt ?? null, workers: { ...workers }, projects: projectNames.map(name => ({ name, label: labels.get(name) ?? name, archived: archived.has(name) })), jobs: rows, batches,
+    unlisted: unlistedProviders(listed),
+    roster: keptWhos.filter(who => listedWho(listed, who)).map(who => ({ who, name: spec(who).name, model: spec(who).shown, efforts: allowedEfforts(who), fastSupported: supportsFast(who) })),
+    stats: stats(jobs), profiles: profiles(jobs), quota: boardQuota(quota).filter(p => listed.some(l => l.icon === p.icon && l.reason === null) && !(p.icon === 'codex' && endpoint.custom)), quotaAt: quota?.queriedAt ?? null, workers: { ...workers }, projects: projectNames.map(name => ({ name, label: labels.get(name) ?? name, archived: archived.has(name) })), jobs: rows, batches,
     teams: await viewTeams(),
     chats,
     models,
@@ -175,7 +180,7 @@ function toViewTeam(team: Team, channel: ChannelMessage[]): ViewTeam | null {
   if (team.phase !== 'write' && team.phase !== 'review') return null;
   if (typeof team.title !== 'string' || typeof team.kind !== 'string' || typeof team.created !== 'string') return null;
   if (typeof team.round !== 'number' || typeof team.maxRounds !== 'number' || typeof team.maxMinutes !== 'number') return null;
-  const lost = team.state === 'running' && !alive(team.pid);
+  const lost = team.state === 'running' && !alive(team.pid, team.pidSince);
   const review = [...channel].reverse().find(message => message.kind === 'review');
   return {
     id: team.id, mode: 'pair', project: typeof team.project === 'string' ? team.project : '', title: team.title,

@@ -34,7 +34,7 @@ const quotaLine = (q: Quota | undefined) => {
 // 设置里的“选手与模型”：按厂家分组（Codex、Grok、Cursor、DeepSeek），组内是一张对齐的表，一行一个模型：
 // 模型 | 中档 | 高档 | 超高档 | 快速版 | 启用。关掉的模型整行变淡，强度和快速版点不动但保留原值。改动交给 change，由设置页统一排队保存。
 export function WorkerSettings({ view, values, error, change }: {
-  view: Pick<View, 'roster' | 'workers' | 'quota' | 'models'>; values: Values['workers'] | undefined; error: string;
+  view: Pick<View, 'roster' | 'workers' | 'quota' | 'models' | 'unlisted'>; values: Values['workers'] | undefined; error: string;
   change: (who: Roster['who'], patch: Change) => void;
 }) {
   const rows = view.roster.map(entry => ({ entry, policy: policyOf(entry, values) }));
@@ -54,8 +54,8 @@ export function WorkerSettings({ view, values, error, change }: {
   const picked = channels.find(c => c.channel === picking);
   return <div className="wk">
     {error && <p role="alert" className="notice notice-bad">{error}</p>}
-    <p className="wk-hint">关掉的不会被派活；派活时只在勾选的强度里选。最高档不开放。{fresh > 0 && `发现了 ${fresh} 个新模型，在“管理模型”里选要不要保留。`}</p>
-    <div className="wk-cols"><span>模型</span><span>中档</span><span>高档</span><span>超高档</span><span title={FAST_HINT}>快速版</span><span>启用</span></div>
+    {rows.length > 0 && <><p className="wk-hint">关掉的不会被派活；派活时只在勾选的强度里选。最高档不开放。{fresh > 0 && `发现了 ${fresh} 个新模型，在“管理模型”里选要不要保留。`}</p>
+    <div className="wk-cols"><span>模型</span><span>中档</span><span>高档</span><span>超高档</span><span title={FAST_HINT}>快速版</span><span>启用</span></div></>}
     {groups.map(group => {
       const quota = view.quota.find(q => q.icon === group.icon);
       const channel = channelOf(group.icon), news = channel?.models.filter(m => m.fresh).length ?? 0;
@@ -78,6 +78,8 @@ export function WorkerSettings({ view, values, error, change }: {
         </div>;
       })}</SettingGroup>;
     })}
+    {/* 没列出来的厂家（这台电脑上没找到程序，或这种系统上平台还关不住它）：一行淡色小字写原因（docs/ui-spec.md 第 10 节）。 */}
+    {view.unlisted.length > 0 && <p className="wk-unlisted">{view.unlisted.map(u => u.reason).join('；')}。</p>}
     {picked && <ModelPicker key={picked.channel} channel={picked} updated={view.models.at} close={() => setPicking(null)} />}
   </div>;
 }

@@ -1,8 +1,10 @@
 import { test } from 'node:test';
+import { isWindows, killTree, shell, treeSpawn } from '../src/core/platform.ts';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, access, mkdir, symlink, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { context, until, desktopView } from './helpers.ts';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { context, until, desktopView, killLeftover } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -10,7 +12,7 @@ import { root } from './helpers.ts';
 import { ensureHome } from '../src/core/paths.ts';
 import { PLATFORM_SWITCHES } from '../src/core/env.ts';
 import { reserveJob } from '../src/core/ids.ts';
-import { createJob } from '../src/core/job.ts';
+import { createJob, updateJob } from '../src/core/job.ts';
 import { codexPermissions } from '../src/core/sandbox.ts';
 
 test('四家同批派发到完成、共同起点、收集、diff、清理与记录保留', async t => {
@@ -28,6 +30,8 @@ test('四家同批派发到完成、共同起点、收集、diff、清理与记�
   assert.equal(batch.summary, '完成本次测试任务');
   assert.equal(new Set(jobs.map(j => j.base)).size, 1); assert.equal(jobs[0].base, c.base);
   for (const j of jobs) {
+    assert.equal(typeof j.pidSince, isWindows ? 'number' : 'undefined');
+    assert.equal(typeof j.queuedSince, isWindows ? 'number' : 'undefined');
     assert.equal(j.state, 'done'); assert.equal(j.exit, 0); assert.ok(j.seconds! >= 0);
     assert.equal(j.usage?.read, 100); assert.equal(j.usage?.cached, 60); assert.equal(j.usage?.out, 12);
     await access(j.worktree); assert.equal(await c.git(['rev-parse', j.branch]), c.base);
@@ -40,7 +44,7 @@ test('四家同批派发到完成、共同起点、收集、diff、清理与记�
     if (j.who === 'codex') {
       // 权限里带着登记处下 DeepSeek 文件夹的禁读，要按派活时的登记处来算。
       const oldHome = process.env.XAGENTS_HOME; process.env.XAGENTS_HOME = c.home;
-      try { assert.ok(observed.args.includes(codexPermissions(j, { denyReadExtra: ['.data'] }, join(dir, 'tmp')))); }
+      try { assert.ok(observed.args.includes(codexPermissions(j, { denyReadExtra: ['.data'] }, join(dir, 'tmp'), false, undefined, process.platform === 'win32'))); }
       finally { if (oldHome === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = oldHome; }
       assert.ok(!observed.args.includes('-s'));
       assert.ok(!observed.args.some((arg: string) => arg.includes('sandbox_mode')));
@@ -145,7 +149,8 @@ test('看管进程被 SIGKILL 后 status 判失联，wait 失败，stop 收掉�
   assert.equal((await c.cli(['status', j.id])).code, 0);
   assert.equal((await c.jobs())[0].state, 'lost'); assert.equal((await desktopView(c.home)).jobs[0].state, 'lost');
   assert.equal((await c.cli(['wait', j.id])).code, 1);
-  assert.equal((await c.cli(['clean', j.id])).code, 1);
+  // macOS：看管进程没了，选手还在，清理要先拒绝。Windows：系统把选手跟着看管进程一起收走了，没有残留可拒绝。
+  if (!isWindows) assert.equal((await c.cli(['clean', j.id])).code, 1);
   assert.equal((await c.cli(['stop', j.id])).code, 0); await until(async () => !alive(j.workerPid));
   assert.equal((await c.cli(['clean', j.id])).code, 0);
 });
@@ -209,9 +214,11 @@ test('clean --done 保留采用任务，路径穿越和额外参数被拒绝', a
   await access(j.worktree); assert.equal((await c.jobs()).filter(j => j.cleaned).length, 1);
   for (const args of [['status', '../outside'], ['clean', jobs[0].id, '--done'], ['board', 'extra'], ['run', c.task, '--summary', '完成本次测试任务', '--who'], ['project', 'add', '../outside', c.repo], ['project', 'add', 'bad', c.repo, '--worktree-root', '../bad']]) assert.equal((await c.cli(args)).code, 1, args.join(' '));
 });
+// 准备命令里的程序路径要加引号：Windows 上不加的话，Git 的 sh 会把路径里的反斜杠吃掉，命令成了“找不到程序”，
+// 准备阶段一闪就结束，下面两条要测的“准备还在跑”就不成立了（以前读进程列表慢，正好把这个毛病盖住）。
 test('setup 尚未结束时 stop 也能终止准备进程，不启动选手', async t => {
   const c = await context(t);
-  await c.add(['--setup', `${process.execPath} -e 'setInterval(() => {}, 1000)'`]);
+  await c.add(['--setup', `'${process.execPath}' -e 'setInterval(() => {}, 1000)'`]);
   const child = spawn(process.execPath, [join(root, 'src/cli/cli.ts'), 'run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { cwd: c.repo, env: c.env, stdio: 'ignore' });
   t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
   const ended = once(child, 'close');
@@ -222,18 +229,24 @@ test('setup 尚未结束时 stop 也能终止准备进程，不启动选手', as
   assert.equal(alive(j.setupPid), false); assert.equal((await c.cli(['clean', j.id])).code, 0);
 });
 test('派发进程准备期间被杀后登记不永远排队，可停止残留准备进程', async t => {
-  const c = await context(t);
-  await c.add(['--setup', `${process.execPath} -e 'setInterval(() => {}, 1000)'`]);
+  const c = await context(t), started = join(c.temp, 'setup-started').replaceAll('\\', '/');
+  // 准备命令真的跑起来了才写这个文件：只看“准备进程已登记”就动手，Windows 上偶尔赶在它起子进程之前，什么都没留下。
+  await c.add(['--setup', `'${process.execPath}' -e 'require("fs").writeFileSync(process.argv[1], ""); setInterval(() => {}, 1000)' '${started}'`]);
   const child = spawn(process.execPath, [join(root, 'src/cli/cli.ts'), 'run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { cwd: c.repo, env: c.env, stdio: 'ignore' });
   const ended = once(child, 'close');
   t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
   const j = await until(async () => (await c.jobs())[0], j => Boolean(j?.setupPid));
+  await until(async () => access(started).then(() => true, () => false), ok => ok);
   child.kill('SIGKILL'); await ended;
   assert.equal((await c.cli(['status'])).code, 0); assert.equal((await c.jobs())[0].state, 'failed');
-  assert.equal((await c.cli(['clean', j.id])).code, 1);
-  assert.equal((await c.cli(['stop', j.id])).code, 0);
+  // 准备进程还留着（Windows 上系统只带走派发进程直接起的那一个，它起的还在跑）：先 stop 才能清理。
+  const early = await c.cli(['clean', j.id]);
+  assert.equal(early.code, 1); assert.match(early.stderr, /准备进程仍在/);
+  const stopped = await c.cli(['stop', j.id]);
+  assert.equal(stopped.code, 0, stopped.stderr);
   await until(async () => !alive(j.setupPid));
-  assert.equal((await c.cli(['clean', j.id])).code, 0);
+  const cleaned = await c.cli(['clean', j.id]);
+  assert.equal(cleaned.code, 0, cleaned.stderr);
 });
 test('从仓库子目录和现有工作副本能匹配项目，拒绝指向仓库外的副本目录', async t => {
   const c = await context(t); await c.add();
@@ -262,6 +275,41 @@ test('看管进程尚未安装信号处理器时 stop 仍记为 stopped', async 
   assert.equal((await c.jobs())[0].state, 'stopped');
 });
 
+// 看管进程被直接杀掉（或电脑重启）以后过了很久才来 stop 的情况：记录里的选手早就不在了，只能去找它留下的子孙。
+// 这里真的造一个“最上面那个没了、它起的还活着”的选手，任务记录直接写成失联，用结束时间的早晚来分“留下的”和“后来无关的”。
+test('失联的活 stop：只收出生在结束时间之前的子孙；Windows 上晚于它出生的当作后来用了同一个进程号的无关进程，不碰；clean 在收走之前拒绝', async t => {
+  const c = await context(t);
+  process.env.XAGENTS_HOME = c.home; await ensureHome();
+  const file = join(c.temp, 'orphan.pid');
+  const code = 'require("fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)';
+  const sh = shell(`'${process.execPath}' -e '${code}' '${file.replaceAll('\\', '/')}'; true`);
+  // 记录里把起选手的时间写早 6 秒：选手一会儿就被结束，它的进程号可能马上被并排跑的别的测试拿去用；
+  // 出生在“起选手之后 5 秒内”的同号进程会被认成选手本人（platform.ts 的 treeOf），写早了就不会。
+  const since = Date.now() - 6000;
+  const worker = spawn(sh.file, sh.args, { ...treeSpawn(), stdio: 'ignore' });
+  let orphan = 0;
+  t.after(() => { try { killTree(worker.pid, 'SIGKILL', since, undefined, Date.now()); } catch {} killLeftover(orphan); });
+  orphan = Number(await until(() => readFile(file, 'utf8').catch(() => '')));
+  assert.ok(orphan > 0 && orphan !== worker.pid);
+  process.kill(worker.pid!, 'SIGKILL'); await until(async () => !alive(worker.pid));
+  assert.equal(alive(orphan), true, '选手起的那个还活着');
+  const id = await reserveJob('codex', c.task), at = (ms: number) => new Date(ms).toISOString();
+  // 第一遍：结束时间比留下的那个出生早一分钟，相当于“这个进程是活结束很久以后才出生的”。
+  await createJob({ id, batch: 'batch', who: 'codex', model: 'gpt-6-astra', effort: 'high', repo: c.repo, worktree: join(c.repo, 'unused'), base: c.base, branch: `xa/${id}`, project: '测试', kind: '实现', title: '失联很久', summary: '测试说明', mode: 'workspace-write',
+    state: 'lost', created: at(since - 120_000), started: at(since - 120_000), ended: at(since - 60_000), pid: 2 ** 30, workerPid: worker.pid, workerSince: since });
+  const first = await c.cli(['stop', id]); assert.equal(first.code, 0, first.stderr);
+  assert.equal((await c.jobs())[0].state, 'stopped');
+  if (isWindows) { await sleep(300); assert.equal(alive(orphan), true, '出生晚于期限的不是这件活留下的，不能碰'); }
+  // 第二遍：同一条记录改回失联，结束时间是现在（留下的那个出生在它之前）。
+  await updateJob(id, j => { j.state = 'lost'; j.ended = at(Date.now()); delete j.stopRequested; });
+  if (isWindows) {
+    const early = await c.cli(['clean', id]);
+    assert.equal(early.code, 1); assert.match(early.stderr, /失联后选手可能仍在运行/);
+  }
+  const second = await c.cli(['stop', id]); assert.equal(second.code, 0, second.stderr);
+  await until(async () => !alive(orphan));
+  assert.equal((await c.jobs())[0].state, 'stopped');
+});
 test('三份样本分段写入：status、桌面视图看到两次动作变化，退出与 collect 都能完整收集', async t => {
   const c = await context(t); await c.add();
   const run = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high', '--who', 'grok:high', '--who', 'cursor-opus:high', '--who', 'cursor-grok:high'], { XA_TEST_MODE: 'stream' });
@@ -389,7 +437,7 @@ test('项目显示名：登记时 --label，或用 project label 单独改；只
   assert.deepEqual((await buildView()).projects.find(p => p.name === '测试'), { name: '测试', label: '画布创作站', archived: false });
 });
 
-test('清理 Grok 活时，它在 ~/.grok/sessions 下的会话文件夹一起移进废纸篓；别的会话文件夹不动', async t => {
+test('清理 Grok 活时，它在 ~/.grok/sessions 下的会话文件夹一起移进废纸篓；别的会话文件夹不动', { skip: isWindows ? '只属于 macOS：Grok 的会话文件夹名是按 macOS 上实测的写法算的；Windows 上不开 Grok 这一路' : false }, async t => {
   const c = await context(t);
   assert.equal((await c.add()).code, 0);
   assert.equal((await c.cli(['run', c.task, '--summary', '会话文件夹清理', '--who', 'grok:high', '--who', 'codex:high'])).code, 0);
@@ -428,7 +476,7 @@ test('选手一律看不到名字带密钥字样的环境变量，别的照常�
   }
 });
 
-test('Cursor 的登录由看管进程在隔离外现取，只进选手进程的环境，不进任务记录；取不到就失败', async t => {
+test('Cursor 的登录由看管进程在隔离外现取，只进选手进程的环境，不进任务记录；取不到就失败', { skip: isWindows ? '只属于 macOS：测的是从 macOS 钥匙串取 Cursor 的登录；Windows 上还不开 Cursor 这一路' : false }, async t => {
   const c = await context(t);
   assert.equal((await c.add([])).code, 0);
   // 假的 security：只认 Cursor 登录那一项，打印一个两个月后才过期的假令牌。

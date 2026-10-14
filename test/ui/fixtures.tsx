@@ -10,6 +10,7 @@ export const fixtureView = (): View => ({
   settings: { keepAwake: true, notifications: true, storage: { slim: true, days: 14 }, limits: { maxRunning: 12, quotaStop: 80 }, workers: structuredClone(workerPolicies) },
   storage: { slimmedJobs: 0, freedBytes: 0, due: 0 },
   dashboard: [],
+  unlisted: [],
   roster: whos.map(who => ({ who, name: spec(who).name, model: spec(who).shown, efforts: allowedEfforts(who), fastSupported: supportsFast(who) })),
   updated: new Date().toISOString(),
   selfcheck: {
@@ -111,6 +112,8 @@ export const connectFixture = (): ConnectStatus[] => [
 ];
 export const fixtureBridge = (extra: Partial<XaBridge> = {}): XaBridge => ({
   cliStatus: vi.fn(async () => 'unavailable' as const), cliInstall: vi.fn(async () => 'installed' as const),
+  isolationFix: vi.fn(async () => {}),
+  places: vi.fn(async () => ({ app: 'C:\\Apps\\captain-agents', data: 'C:\\Users\\me\\.xagents' })), openPlace: vi.fn(async () => {}),
   appInfo: vi.fn(async () => ({ version: '0.1.0', update: { phase: 'off' as const, reason: '这个版本不带在线更新' }, autoCheck: true })),
   onUpdate: () => () => {}, updateCheck: vi.fn(async () => ({ phase: 'off' as const, reason: '这个版本不带在线更新' })),
   updateDownload: vi.fn(async () => {}), updateRestart: vi.fn(async () => {}),
@@ -120,7 +123,7 @@ export const fixtureBridge = (extra: Partial<XaBridge> = {}): XaBridge => ({
   decide: vi.fn(async () => {}), comment: vi.fn(async () => {}), redo: vi.fn(async () => {}), stop: vi.fn(async () => {}),
   chatCreate: vi.fn(async () => 'test-chat'), chatSay: vi.fn(async () => {}), chatStop: vi.fn(async () => {}), chatRename: vi.fn(async () => {}),
   teamSay: vi.fn(async () => {}), teamStop: vi.fn(async () => {}),
-  modelsRefresh: vi.fn(async () => {}), modelsKeep: vi.fn(async () => {}),
+  modelsRefresh: vi.fn(async () => {}), modelsKeep: vi.fn(async () => {}), modelsAdd: vi.fn(async () => {}),
   getSettings: vi.fn(async () => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, workers: structuredClone(workerPolicies), networkAllowed: false })),
   setSettings: vi.fn(async patch => ({ keepAwake: true, notifications: true, appearance: 'system' as const, openAtLogin: false, storage: { slim: true, days: 14 as const }, limits: { maxRunning: 12, quotaStop: 80 as const }, networkAllowed: false, ...patch, workers: { ...structuredClone(workerPolicies), ...patch.workers } })),
   setNetworkAllowed: vi.fn(async () => { throw new Error('测试没有准备联网保存'); }),

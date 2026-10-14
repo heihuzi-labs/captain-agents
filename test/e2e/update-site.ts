@@ -28,7 +28,7 @@ createServer({ cert: readFileSync(cert), key: readFileSync(key) }, async (reques
   }
   const size = statSync(file).size;
   response.writeHead(200, { 'Content-Length': size });
-  const zip = name.endsWith('.zip'), corrupt = zip && has('corrupt'), cut = zip && has('cut'), slow = zip && has('slow');
+  const zip = name.endsWith('.zip') || name.endsWith('.exe'), corrupt = zip && has('corrupt'), cut = zip && has('cut'), slow = zip && has('slow');
   let first = true, sent = 0;
   for await (const chunk of createReadStream(file, { highWaterMark: slow ? 64 * 1024 : 4 * 1024 * 1024 })) {
     if (response.destroyed) return;

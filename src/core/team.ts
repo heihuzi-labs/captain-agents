@@ -30,6 +30,7 @@ export type Team = {
   state: TeamState; reason?: TeamReason; note?: string;
   created: string; ended?: string;
   // 推进小队的后台进程（隔离外）。
+  pidSince?: number;                 // Windows 上推进进程的出生时间；旧记录可以没有
   pid?: number;
   // 派活时带的真实环境检查说明，转交给写手的任务（见 dispatch 的 --real）。
   real?: boolean | string;

@@ -10,7 +10,7 @@ test('发布 CLI：生成权限 600 的密钥、不覆盖，签好的多平台�
   const c = await context(t, false), privateFile = join(c.temp, 'private.pem'), publicFile = join(c.temp, 'public.txt');
   const generate = () => exec(process.execPath, ['scripts/release/generate-update-key.mjs', privateFile, publicFile], root);
   const first = await generate(); assert.equal(first.code, 0, first.stderr);
-  assert.equal((await stat(privateFile)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal((await stat(privateFile)).mode & 0o777, 0o600);
   const raw = (await readFile(publicFile, 'utf8')).trim(); assert.equal(Buffer.from(raw, 'base64').length, 32);
   const key = createPrivateKey(await readFile(privateFile)); assert.equal(key.asymmetricKeyType, 'ed25519');
   assert.ok(verify(null, Buffer.from('test'), createPublicKey(key), sign(null, Buffer.from('test'), key)));
@@ -46,7 +46,7 @@ test('传到共用下载桶：对不上清单不传，已有的不覆盖，传�
   await generateUpdateKey(priv, pub); await writeFile(zip, 'real package'); await writeFile(other, 'another one'); await writeFile(notes, '说明');
   await makeUpdate({ version: '0.3.0', minimumVersion: '0.2.0', packages: [{ platform: 'darwin-arm64', file: zip }], notes, baseUrls: ['https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/0.3.0/', 'https://updates.example.invalid/v0.3.0/'], privateKey: priv, out: manifest });
   const publicKey = (await readFile(pub, 'utf8')).trim(), key = 'captain-agents/stable/0.3.0/captain-agents_0.3.0_macos-arm64.zip';
-  assert.equal(storeKey('0.3.0', 'darwin-arm64'), key); assert.equal(storeKey('0.3.0', 'win32-x64', 'beta'), 'captain-agents/beta/0.3.0/captain-agents_0.3.0_windows-x64.zip');
+  assert.equal(storeKey('0.3.0', 'darwin-arm64'), key); assert.equal(storeKey('0.3.0', 'win32-x64', 'beta'), 'captain-agents/beta/0.3.0/captain-agents_0.3.0_windows-x64.exe');
   assert.throws(() => storeKey('0.3.0', 'solaris-x64'), /平台/); assert.throws(() => storeKey('0.3.0', 'darwin-arm64', 'nightly'), /通道/);
   const sizeAndHash = async (file: string) => { const data = await readFile(file); return { size: data.length, sha256: createHash('sha256').update(data).digest('hex') }; };
   const store = new Map<string, string>(), uploads: string[] = [];
@@ -193,7 +193,7 @@ test('发版流水线的输入：配置只读一处，门槛拦住错标签、�
   const root = join(c.temp, 'repo'), packages = join(c.temp, 'packages'), out = join(c.temp, 'feeds');
   for (const dir of [join(root, 'release/notes'), packages, out]) await mkdir(dir, { recursive: true });
   const config = { feeds: ['https://store.example.invalid/latest-v2.json', 'https://pages.example.invalid/latest-v2.json'], hosts: ['files.example.invalid'], publicKey,
-    minimumVersion: '0.2.0', targets: ['mac-arm64', 'mac-x64'], downloadBases: ['https://store.example.invalid/{version}/', 'https://pages.example.invalid/v{version}/'], legacyBase: 'https://pages.example.invalid/v{version}/' };
+    minimumVersion: '0.2.0', targets: ['mac-arm64', 'mac-x64', 'win-x64'], downloadBases: ['https://store.example.invalid/{version}/', 'https://pages.example.invalid/v{version}/'], legacyBase: 'https://pages.example.invalid/v{version}/' };
   await writeFile(join(root, 'release/config.json'), JSON.stringify(config)); await writeFile(join(root, 'package.json'), JSON.stringify({ version: '0.3.0' }));
   const inputs = await readInputs(root);
   await assert.rejects(checkRelease(inputs, 'v0.3.1', env), /对不上/);
@@ -206,10 +206,15 @@ test('发版流水线的输入：配置只读一处，门槛拦住错标签、�
   await writeFile(join(packages, packageName('0.3.0', 'mac-arm64')), 'arm package');
   await assert.rejects(buildFeed(inputs, packages, out, env), /应当正好是/);
   await writeFile(join(packages, packageName('0.3.0', 'mac-x64')), 'intel package');
+  await assert.rejects(buildFeed(inputs, packages, out, env), /应当正好是/);
+  await writeFile(join(packages, packageName('0.3.0', 'win-x64')), 'windows installer');
   const built = await buildFeed(inputs, packages, out, env);
-  assert.deepEqual(built.files, ['captain-agents_0.3.0_macos-arm64.zip', 'captain-agents_0.3.0_macos-x64.zip', 'latest-v2.json', 'latest.json']);
+  assert.deepEqual(built.files, ['captain-agents_0.3.0_macos-arm64.zip', 'captain-agents_0.3.0_macos-x64.zip', 'captain-agents_0.3.0_windows-x64.exe', 'latest-v2.json', 'latest.json']);
   const feed = verifyFeed(await readFile(join(out, 'latest-v2.json')), publicKey), legacy = verifyLegacyFeed(await readFile(join(out, 'latest.json')), publicKey);
-  assert.equal(feed.version, '0.3.0'); assert.equal(feed.minimumVersion, '0.2.0'); assert.deepEqual(Object.keys(feed.packages), ['darwin-arm64', 'darwin-x64']);
+  assert.equal(feed.version, '0.3.0'); assert.equal(feed.minimumVersion, '0.2.0'); assert.deepEqual(Object.keys(feed.packages), ['darwin-arm64', 'darwin-x64', 'win32-x64']);
+  assert.deepEqual(Object.keys(legacy.packages), Object.keys(feed.packages));
+  assert.ok(feed.packages['win32-x64'].urls.every(url => url.endsWith('captain-agents_0.3.0_windows-x64.exe')));
+  assert.equal(legacy.packages['win32-x64'].sha256, feed.packages['win32-x64'].sha256);
   assert.deepEqual(feed.packages['darwin-x64'].urls, ['https://store.example.invalid/0.3.0/captain-agents_0.3.0_macos-x64.zip', 'https://pages.example.invalid/v0.3.0/captain-agents_0.3.0_macos-x64.zip']);
   assert.equal(legacy.packages['darwin-arm64'].url, 'https://pages.example.invalid/v0.3.0/captain-agents_0.3.0_macos-arm64.zip');
   assert.equal(legacy.packages['darwin-arm64'].sha256, feed.packages['darwin-arm64'].sha256);
@@ -218,4 +223,29 @@ test('发版流水线的输入：配置只读一处，门槛拦住错标签、�
   await assert.rejects(buildFeed(inputs, packages, join(c.temp, 'feeds2'), env), /应当正好是/);
   await writeFile(join(root, 'release/config.json'), JSON.stringify({ ...config, targets: ['mac-arm64', 'mac-arm64'] }));
   await assert.rejects(readInputs(root), /targets/);
+});
+
+test('Windows 发版：EXE 签进两份清单、桶路径是 exe、上传后原样核对；平台扩展名不能混用', async t => {
+  const { makeUpdate } = await import('../scripts/release/make-update.mjs');
+  const { publishStore, storeKey, publicUrl } = await import('../scripts/release/publish-store.mjs');
+  const { generateUpdateKey } = await import('../scripts/release/generate-update-key.mjs');
+  const c = await context(t, false), privateKey = join(c.temp, 'private.pem'), pub = join(c.temp, 'public.txt');
+  await generateUpdateKey(privateKey, pub);
+  const publicKey = (await readFile(pub, 'utf8')).trim(), file = join(c.temp, 'captain-agents_0.3.0_windows-x64.exe');
+  const manifest = join(c.temp, 'latest-v2.json'), notes = join(c.temp, 'notes');
+  await writeFile(file, 'signed installer bytes'); await writeFile(notes, 'Windows 更新');
+  const options = { version: '0.3.0', minimumVersion: '0.1.0', notes, privateKey, packages: [{ platform: 'win32-x64', file }],
+    baseUrls: ['https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/0.3.0/', 'https://github.com/owner/repo/releases/download/v0.3.0/'],
+    legacyBaseUrl: 'https://github.com/owner/repo/releases/download/v0.3.0/', out: manifest, legacyOut: join(c.temp, 'latest.json') };
+  const feed = await makeUpdate(options), legacy = verifyLegacyFeed(await readFile(options.legacyOut), publicKey);
+  assert.ok(legacy.packages['win32-x64'].url.endsWith('.exe')); assert.equal(legacy.packages['win32-x64'].sha256, feed.packages['win32-x64'].sha256);
+  const key = storeKey('0.3.0', 'win32-x64'), url = publicUrl(key); let uploaded = false;
+  const result = await publishStore({ manifest, publicKey, packages: options.packages }, {
+    remote: async (address: string) => { assert.equal(address, url); return uploaded ? feed.packages['win32-x64'] : null; },
+    upload: async (source: string, target: string, opts: { overwrite: boolean }) => { assert.equal(source, file); assert.equal(target, key); assert.equal(opts.overwrite, false); uploaded = true; },
+  });
+  assert.equal(result.items[0].state, '已上传，公网取回核对一致');
+  await assert.rejects(makeUpdate({ ...options, packages: [{ platform: 'darwin-x64', file }] }), /\.zip/);
+  const zip = join(c.temp, 'windows.zip'); await writeFile(zip, 'wrong extension');
+  await assert.rejects(makeUpdate({ ...options, packages: [{ platform: 'win32-x64', file: zip }] }), /\.exe/);
 });

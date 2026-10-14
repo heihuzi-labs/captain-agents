@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readIcon } from '../app/main/icons.ts';
-import { httpsLink, productionCsp, securePreferences, trustedSender } from '../app/main/security.ts';
+import { httpsLink, productionCsp, samePage, securePreferences, trustedSender } from '../app/main/security.ts';
 import { loadBounds, saveBounds } from '../app/main/window-state.ts';
 import { watchRegistry } from '../app/main/watch.ts';
 import { settingsActions, settingsPatch, teamActions, chatActions } from '../app/main/actions.ts';
@@ -120,6 +120,14 @@ test('安全白名单：拒绝外部进程、子 frame 和页面伪造，只允�
   assert.equal(trustedSender({ ...event, sender: {} } as IpcMainInvokeEvent, window, mainFrame.url), false);
   assert.equal(trustedSender({ ...event, senderFrame: { url: mainFrame.url } } as IpcMainInvokeEvent, window, mainFrame.url), false);
   assert.equal(trustedSender(event, window, 'file:///other.html'), false);
+  // 本地页面按文件比：转义写法不同、Windows 上大小写不同都是同一个文件；别的文件、带查询串或 #、别的协议都不认。
+  const page = 'file:///C:/Users/RUNNER~1/AppData/Local/Temp/xa%20win/%E4%B8%AD%E6%96%87%20App%20&%20tools/captain-agents/resources/app.asar/out/renderer/index.html';
+  const node = 'file:///C:/Users/RUNNER%7E1/AppData/Local/Temp/xa%20win/%E4%B8%AD%E6%96%87%20App%20&%20tools/captain-agents/resources/app.asar/out/renderer/index.html';
+  assert.equal(samePage(page, node, true), true);
+  assert.equal(samePage(page.replace('C:/Users', 'c:/users'), node, true), true);
+  assert.equal(samePage(page.replace('C:/Users', 'c:/users'), node, false), false, 'macOS 上大小写不同算两个文件');
+  for (const other of [page.replace('index.html', 'other.html'), page + '?x=1', page + '#a', page.replace('file:', 'https:'), 'file://host/C:/x/index.html', undefined]) assert.equal(samePage(other, node, true), false);
+  assert.equal(samePage('file:///Users/a/%E4%B8%AD%E6%96%87/index.html', 'file:///Users/a/中文/index.html', false), true);
   const html = await readFile(resolve('app/renderer/index.html'), 'utf8');
   assert.ok(html.includes(productionCsp));
   assert.doesNotMatch(productionCsp, /unsafe-inline|unsafe-eval|https?:/);

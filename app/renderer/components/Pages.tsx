@@ -114,6 +114,8 @@ function QuotaCards({ view }: { view: View }) {
     setError('');
     window.xa.refreshQuota().then(() => setDoneAt(Date.now())).catch(e => setError(errorReason(e))).finally(() => setBusy(false));
   };
+  // 只有可信的额度才有卡片（没列出来的厂家、连的不是官方接口的 Codex 没有）；一家都没有时整节不出现。
+  if (!view.quota.length) return null;
   return <><div className="sec-head"><h3 className="sec">额度</h3><span className="sec-tools">{cooling && !busy && <span className="faint">刚刷新过</span>}<Button size="sm" disabled={busy || cooling} onClick={refresh}>{busy ? '正在刷新…' : '刷新'}</Button></span></div>{error && <p role="alert" className="muted">没能刷新：{error}</p>}<div className="quota-cards">{view.quota.map(q => {
       const old = q.at != null && (now - Date.parse(q.at)) / 1000 > QUOTA_STALE_SECONDS;
       return <div className="panel qcard" key={q.name}><div className="crow"><WorkerIcon name={q.icon} /><span className="who">{q.name}</span><span className="faint when">{q.plan}</span></div>{q.bars.map((b, i) => <div key={i}><div className="bar-top"><span>{b.label}</span>{b.used == null ? <span className="faint">查不到</span> : <b>{b.approx ? '不到 ' : ''}{b.used}%</b>}</div><div className="qtrack"><i className={quotaLevel(b.used, view.settings.limits?.quotaStop)} style={{
@@ -154,7 +156,7 @@ export function Stats({
     stat: view.stats.find(s => s.who === who && s.kind === kind && s.fast === fast),
     profile: profiles.find(p => p.who === who && p.kind === kind && p.fast === fast)
   })).filter(p => p.stat || p.profile);
-  return <div className="page"><h1>表现</h1><p className="sub">这段时间做了多少、做得怎样、花了多少。token 是三家各自报的数，额度是各家套餐的百分点；不到 3 件的淡显，还不能下结论。</p><Dashboard view={view} /><QuotaCards view={view} /><h3 className="sec">选手 × 活的类型</h3><p className="muted dash-note">全部时间的积累；点一格看最近的评语。</p><div className="panel scroll-x"><table><thead><tr><th>选手</th>{kinds.map(k => <th key={k}>{k}</th>)}</tr></thead><tbody>{whos.map(w => {
+  return <div className="page"><h1>表现</h1><p className="sub">这段时间做了多少、做得怎样、花了多少。token 是各家自己报的数，额度是各家套餐的百分点；不到 3 件的淡显，还不能下结论。</p><Dashboard view={view} /><QuotaCards view={view} /><h3 className="sec">选手 × 活的类型</h3><p className="muted dash-note">全部时间的积累；点一格看最近的评语。</p><div className="panel scroll-x"><table><thead><tr><th>选手</th>{kinds.map(k => <th key={k}>{k}</th>)}</tr></thead><tbody>{whos.map(w => {
             const open = kinds.flatMap(k => partsOf(w, k).map(part => ({ kind: k, part }))).find(({ kind, part }) => partKey(w, kind, part.fast) === opened);
             return <Fragment key={w}><tr><th><WorkerIdentity who={w} workers={view.workers} detail="model" /></th>{kinds.map(k => {
               const parts = partsOf(w, k);

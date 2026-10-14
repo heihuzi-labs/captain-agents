@@ -10,6 +10,7 @@ import type { Job } from '../src/core/job.ts';
 import { writeJson } from '../src/core/fsx.ts';
 import { reconcileSafely } from '../src/core/runner.ts';
 import { notices } from '../app/main/notifications.ts';
+import { processMatches } from '../src/core/platform.ts';
 
 async function registry(t: TestContext) {
   const home = await mkdtemp(join(tmpdir(), 'xa-view-state-'));
@@ -54,6 +55,19 @@ test('判断保留存活任务、准备任务、已结束任务和主动停下�
   assert.equal(interruption(job('stopped', { stopRequested: true }), () => false)?.state, 'stopped');
   assert.equal(interruption(job('queued', { state: 'queued' }), () => false)?.state, 'failed');
   assert.equal(interruption(job('queued', { state: 'queued', queuedBy: 123 }), pid => pid === 123), undefined);
+});
+
+test('失联判断传递看管和派发进程的出生时间；重用者不挡失联，老记录兼容', () => {
+  const rows = [{ pid: 10, parent: 1, created: 100_000 }, { pid: 20, parent: 1, created: 200_000 }];
+  const probe = (pid: number | undefined, since?: number) => processMatches(rows, pid, since);
+  const running = job('reused', { pid: 10, pidSince: 1000 });
+  assert.equal(interruption(running, probe)?.state, 'lost');
+  assert.equal(interruption({ ...running, pidSince: undefined }, probe), undefined);
+  const queued = { ...running, state: 'queued' as const, queuedBy: 20, queuedSince: 1000 };
+  assert.equal(interruption(queued, probe)?.state, 'failed');
+  assert.equal(interruption({ ...queued, queuedSince: 200_000 }, probe), undefined, '真正的派发进程仍在时等待准备');
+  assert.equal(interruption({ ...queued, queuedSince: undefined }, probe), undefined, '旧派发记录按号认');
+  assert.equal(interruption({ ...queued, pidSince: 100_000 }, probe), undefined, '真正的看管进程已接手');
 });
 
 test('坏任务和坏批次逐条跳过，其余记录照常显示且坏文件保持原样', async t => {

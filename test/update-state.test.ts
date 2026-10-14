@@ -23,6 +23,7 @@ function fakeClock() {
 test('开发版、缺地址、缺公钥固定 off；其它平台 off，不调用网络', async () => {
   const base = { development: false, packaged: true, feed: 'https://example.invalid/latest.json', publicKey, platform: 'darwin' };
   assert.equal(updateOffReason(base), undefined);
+  assert.equal(updateOffReason({ ...base, platform: 'win32' }), undefined);
   for (const change of [{ development: true }, { packaged: false }, { feed: '' }, { publicKey: '' }, { platform: 'linux' }]) {
     const reason = updateOffReason({ ...base, ...change }); assert.ok(reason);
     const time = fakeClock(); let calls = 0;
@@ -135,4 +136,20 @@ test('错误的打包清单配置不影响创建更新器，检查显示配置�
     assert.equal(state.checked.phase, 'error'); assert.match(state.checked.message, /更新配置不正确/);
     assert.equal(state.after.version, '0.1.0');
   }
+});
+test('现在不能装（Windows 上还有活在跑）：照实报原因，不重启，更新仍是已就绪，原因消失后能装', async () => {
+  let reason: string | undefined = '还有 1 件活在跑。Windows 上它们用着应用的程序文件，等做完再更新。';
+  const { updater, restarted } = fixture({ blocker: async () => reason });
+  await updater.check(); await updater.download();
+  await assert.rejects(updater.restart(), /还有 1 件活在跑/);
+  assert.deepEqual(restarted, []); assert.equal(updater.info().update.phase, 'ready');
+  reason = undefined; await updater.restart(); assert.deepEqual(restarted, ['staged', '0.2.0']);
+});
+test('Windows 的“有活在跑”检查：没派过活（登记处文件夹都没有）时不拦', async t => {
+  const { mkdtemp, rm } = await import('node:fs/promises'); const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
+  const home = await mkdtemp(join(tmpdir(), 'xa-blocker-')); const before = process.env.XAGENTS_HOME;
+  process.env.XAGENTS_HOME = join(home, 'missing');
+  t.after(async () => { if (before === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = before; await rm(home, { recursive: true, force: true }); });
+  const { windowsUpdateBlocker } = await import('../app/main/update-runtime.ts');
+  assert.equal(await windowsUpdateBlocker(), undefined);
 });

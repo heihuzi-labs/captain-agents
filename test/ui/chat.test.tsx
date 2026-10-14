@@ -194,6 +194,18 @@ test('顶栏的成员按钮：任何宽度都写着群里有几位（负责人�
     expect(screen.queryByRole('complementary', { name: '群信息' })).toBeNull();
   } finally { vi.unstubAllGlobals(); }
 });
+test('成员栏的开合只管当前这个群：换一个群回到默认，再换回来也是默认', async () => {
+  mount(chatView({}, { title: '另一个项目的修复', project: 'sub', messages: [] }));
+  const people = () => screen.getByRole('button', { name: '成员 3 位' });
+  const tab = (name: string) => within(screen.getByRole('tablist', { name: '群聊' })).getAllByRole('tab').find(t => t.textContent?.includes(name))!;
+  await screen.findByRole('button', { name: '成员 3 位' });
+  fireEvent.click(people());
+  expect(people().getAttribute('aria-expanded')).toBe('false');
+  fireEvent.click(tab('另一个项目的修复'));
+  expect(people().getAttribute('aria-expanded')).toBe('true'); expect(screen.getByRole('complementary', { name: '群信息' })).toBeTruthy();
+  fireEvent.click(tab('派活工作台'));
+  expect(people().getAttribute('aria-expanded')).toBe('true');
+});
 test('输入框：打 @ 弹出成员候选，回车填进去；Enter 发送走 chatSay，Shift+Enter 不发', async () => {
   mount(chatView());
   const box = await screen.findByRole('textbox', { name: '发消息' }) as HTMLTextAreaElement;

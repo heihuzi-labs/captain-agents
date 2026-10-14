@@ -1,4 +1,6 @@
-import { nodeCommand } from './node-runtime.ts';
+import { checkListed, listedProviders } from './listed.ts';
+import { backgroundEnvironment, nodeCommand } from './node-runtime.ts';
+import { processSince, backgroundSpawn, samePath } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { open, realpath } from 'node:fs/promises';
 import { join, resolve, basename, extname } from 'node:path';
@@ -15,7 +17,7 @@ import { selection, srtPath, refreshGrokLogin, checkDeepseekLogin, checkCursorLo
 import { prepareRun, usePreparedRun } from './run-package.ts';
 import { reconcileSafely } from './runner.ts';
 import { installIcons } from './icons.ts';
-import { ensureSelfcheck } from './selfcheck.ts';
+import { ensurePlatform, ensureSelfcheck } from './selfcheck.ts';
 import { ensureQuota, checkQuota } from './quota.ts';
 import { readSettings, extraDenyRead } from './settings.ts';
 import { checkChoice } from './policy.ts';
@@ -30,11 +32,11 @@ export async function launch(job: Job, cli: string) {
   try {
     await updateJob(job.id, async current => {
       if (current.state !== 'queued') return;
-      const node = nodeCommand([cli, job.id], { ...process.env, XAGENTS_HOME: paths().home });
-      const child = spawn(node.file, node.args, { detached: true, stdio: ['ignore', fd.fd, fd.fd], env: node.env });
+      const node = nodeCommand([cli, job.id], backgroundEnvironment());
+      const child = spawn(node.file, node.args, { ...backgroundSpawn(), stdio: ['ignore', fd.fd, fd.fd], env: node.env });
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      current.pid = child.pid;
       child.unref();
+      current.pidSince = processSince(child.pid); current.pid = child.pid;
     });
   } finally { await fd.close(); }
 }
@@ -46,6 +48,7 @@ export async function dispatch(file: string, options: RunOptions, start: typeof 
   if (!options.who.length) throw new Error('还没选择选手，请加上 --who codex:xhigh（可以重复）。');
   const { workers, archivedProjects, limits, networkAllowed } = await readSettings();
   const chosen = options.who.map(selection);
+  checkListed(await listedProviders(), chosen);
   for (const choice of chosen) checkChoice(workers, choice);
   const kind = options.kind || '实现';
   if (!['修复', '实现', '审查', '调研', '测量'].includes(kind)) throw new Error('--kind 只允许修复、实现、审查、调研、测量，请修改后重试。');
@@ -70,10 +73,11 @@ export async function dispatch(file: string, options: RunOptions, start: typeof 
   if (chat) {
     if (chosen.length !== 1) throw new Error('群共用副本一次只能派一位成员。');
     const expected = await worktreePath(project, `chat-${chat.id}`);
-    if (chat.state !== 'open' || chat.project !== project.name || chat.repo !== project.repo || chat.base !== base
-      || chat.branch !== `xa/chat-${chat.id}` || chat.worktree !== expected || options.worktree !== expected
-      || await realpath(expected) !== expected
-      || (await git(expected, ['rev-parse', '--show-toplevel'])).trim() !== expected
+    // 路径一律用 samePath 比：Windows 上 git 报的是正斜杠，登记里是反斜杠，盘符大小写也可能不同。
+    if (chat.state !== 'open' || chat.project !== project.name || !samePath(chat.repo, project.repo) || chat.base !== base
+      || chat.branch !== `xa/chat-${chat.id}` || !samePath(chat.worktree, expected) || !samePath(options.worktree!, expected)
+      || !samePath(await realpath(expected), expected)
+      || !samePath((await git(expected, ['rev-parse', '--show-toplevel'])).trim(), expected)
       || (await git(expected, ['symbolic-ref', '--short', 'HEAD'])).trim() !== chat.branch) {
       throw new Error('群副本与登记不符或群已收起，不能派活。');
     }
@@ -88,7 +92,7 @@ export async function dispatch(file: string, options: RunOptions, start: typeof 
   checkQuota(quota, chosen, options.force, limits.quotaStop);
   if (chosen.some(s => isolationOf(s.who) !== 'codex') && !process.env.XAGENTS_FAKE_WORKER) await srtPath();
   // 替身不会启动任何真实选手，不把测试结果写成隔离通过。
-  if (!process.env.XAGENTS_FAKE_WORKER) await ensureSelfcheck();
+  if (!process.env.XAGENTS_FAKE_WORKER) { ensurePlatform(chosen.map(s => isolationOf(s.who))); await ensureSelfcheck(); }
   await installIcons();
   const jobs: Job[] = [];
   await withLock(join(paths().cache, 'dispatch'), async () => {
@@ -105,7 +109,7 @@ export async function dispatch(file: string, options: RunOptions, start: typeof 
           ...(network ? { network: true as const } : {}),
           ...(options.team ? { team: { ...options.team } } : {}),
           ...(options.chat ? { chat: { ...options.chat } } : {}),
-          kind, title, summary, state: 'queued', created: now.toISOString(), queuedBy: process.pid };
+          kind, title, summary, state: 'queued', created: now.toISOString(), queuedBy: process.pid, queuedSince: processSince(process.pid) };
         await createJob(Object.assign(job, { quota_before: quota })); jobs.push(job);
       }
     } catch (e) {

@@ -1,5 +1,6 @@
 import { open } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import nodePath, { posix, win32 } from 'node:path';
+import { relativeInside } from './platform.ts';
 import { StringDecoder } from 'node:string_decoder';
 import { hasCode } from './fsx.ts';
 import type { Activity, Who, Usage, Timing } from './job.ts';
@@ -41,13 +42,25 @@ export class StreamParser {
   private say = '';
   private fallback = '';
   private tools = new Map<string, { from: number; to?: number }>();
+  private pathImplementation: typeof nodePath;
 
   // 输出格式跟着隔离走（同一家命令行的几位选手格式一样），不按选手名写死。
   format: Isolation;
-  constructor(who: Who, worktree = '') { this.who = who; this.format = isolationOf(who); this.worktree = worktree ? resolve(worktree) : ''; }
+  constructor(who: Who, worktree = '') {
+    this.who = who; this.format = isolationOf(who);
+    // 日志可能来自另一种系统：绝对路径按自身格式解释，不能给 /Users/... 补上本机盘符。
+    this.pathImplementation = /^(?:[a-z]:[\\/]|[\\/]{2})/i.test(worktree) ? win32 : worktree.startsWith('/') ? posix : nodePath;
+    this.worktree = worktree ? this.pathImplementation.resolve(worktree) : '';
+  }
   private path(value: unknown) {
     const s = text(value);
-    return s && this.worktree && isAbsolute(s) ? relative(this.worktree, s) || '.' : s;
+    if (!s || !this.worktree) return s;
+    const implementation = this.pathImplementation;
+    const candidate = s.replace(/\\/g, '/');
+    // Windows 的单斜杠路径没有盘符，不猜它属于日志中的哪个盘。
+    if (!implementation.isAbsolute(candidate) || (implementation === win32 && !/^(?:[a-z]:\/|\/\/)/i.test(candidate))) return s;
+    const rel = relativeInside(this.worktree, candidate, implementation);
+    return rel === undefined ? s : rel.split(implementation.sep).join('/') || '.';
   }
   private input(value: unknown) {
     const args = object(value);
@@ -55,13 +68,16 @@ export class StreamParser {
     const searches = ['pattern', 'query', 'search_term', 'searchTerm', 'globPattern', 'searchPattern', 'regex', 'url'].map(k => text(args[k])).filter(Boolean);
     return [...new Set([...paths, ...searches])].join('、');
   }
-  private add(kind: Activity['kind'], value: string, at: string) {
+  private add(kind: Activity['kind'], value: string, at: string, shortenPaths = true) {
     let s = value;
-    if (this.worktree) {
-      s = s.replaceAll(this.worktree + '/', '');
-      const root = this.worktree.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      s = s.replace(new RegExp(root + '(?=$|[\\s\'"`,;:)\\]])', 'g'), '.');
+    if (this.worktree && shortenPaths) {
+      // 先取完整路径再判断包含关系，避免误改 repo-other、外部路径里的 /repo 或 repo/../outside。
+      // 带引号的路径可以有空格；未加引号的路径在空白、命令和正文标点处结束。
+      s = s.replace(/(["'`])((?:[a-z]:[\\/]|[\\/])[^\r\n]*?)\1|(^|[\s=(,;\[{])((?:[a-z]:[\\/]|[\\/])[^\s"'`,;:)\]}|&<>]*)/gi,
+        (_match, quote: string | undefined, quoted: string | undefined, prefix: string | undefined, bare: string | undefined) =>
+          quote ? quote + this.path(quoted) + quote : (prefix || '') + this.path(bare));
     }
+    // 结构化字段已由 path() 处理；不要再把带空格的外部文件名当成一段命令切开。
     s = Array.from(s.replace(/\s+/gu, ' ').trim()).slice(0, 200).join('');
     if (!s) return;
     this.activity.push({ at, kind, text: s });
@@ -100,7 +116,7 @@ export class StreamParser {
         this.tool(item.id, row.type === 'item.completed', at, true);
       }
       if (row.type === 'item.started' && item.type === 'command_execution') this.add('cmd', unwrapCommand(text(item.command)), at);
-      if (row.type === 'item.completed' && item.type === 'file_change' && Array.isArray(item.changes)) this.add('edit', item.changes.map((c: unknown) => this.path(object(c).path)).filter(Boolean).join('、'), at);
+      if (row.type === 'item.completed' && item.type === 'file_change' && Array.isArray(item.changes)) this.add('edit', item.changes.map((c: unknown) => this.path(object(c).path)).filter(Boolean).join('、'), at, false);
       if (row.type === 'item.completed' && item.type === 'agent_message') this.add('say', text(item.text), at);
       if (row.type === 'turn.completed' && row.usage) {
         const u = object(row.usage);
@@ -114,8 +130,8 @@ export class StreamParser {
         this.flushSay(at); this.tailText = '';
         const args = object(row.rawInput);
         if (row.kind === 'execute') this.add('cmd', text(args.command), at);
-        else if (row.kind === 'edit') this.add('edit', this.path(args.file_path) || this.path(args.path) || this.path(args.target_file), at);
-        else this.add('read', this.input(args) || text(row.title), at);
+        else if (row.kind === 'edit') this.add('edit', this.path(args.file_path) || this.path(args.path) || this.path(args.target_file), at, false);
+        else this.add('read', this.input(args) || text(row.title), at, false);
       }
       if (row.type === 'end') {
         this.flushSay(at);
@@ -133,8 +149,8 @@ export class StreamParser {
           if (entry) {
             const [name, call] = entry, args = object(object(call).args);
             if (name === 'shellToolCall') this.add('cmd', text(args.command), at);
-            else if (name === 'editToolCall') this.add('edit', this.path(args.path), at);
-            else this.add('read', this.input(args) || text(object(call).description) || name, at);
+            else if (name === 'editToolCall') this.add('edit', this.path(args.path), at, false);
+            else this.add('read', this.input(args) || text(object(call).description) || name, at, false);
           }
         }
       }

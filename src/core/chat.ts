@@ -25,6 +25,7 @@ export type Chat = {
   hopLimit: number;                   // 选手之间连续交接最多几次（中间没有主人或负责人说话），到了就停下等负责人；缺省 4
   state: 'open' | 'closed';
   created: string; closed?: string;
+  pidSince?: number;                 // Windows 上推进进程的出生时间；旧记录可以没有
   pid?: number;                       // 推进这个群的后台进程（隔离外），没活干就退出
   busy?: { who: Who; job: string; message: number; since: string };  // 现在谁在动手、因为哪条消息
   queue: { who: Who; message: number; hop: number }[];                // 排队等动手的

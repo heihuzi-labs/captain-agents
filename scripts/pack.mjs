@@ -16,12 +16,17 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const target = process.argv[2] ?? hostTarget();
   if (!Object.hasOwn(TARGETS, target)) { console.error(`不认识的打包目标：${target}。可以写：${Object.keys(TARGETS).join('、')}。`); process.exit(1); }
   const root = fileURLToPath(new URL('../', import.meta.url));
+  // 苹果正式签名：流水线给了证书（CSC_LINK、CSC_KEY_PASSWORD）和证书名（XA_MAC_IDENTITY）才签，
+  // 带加固运行时；公证由流水线自己做（build.yml），这里关掉打包工具的公证。没给就照旧不签，流水线再做本地签名。
+  // 打包工具要的证书名不带“Developer ID Application: ”这个前缀，带了它会报错。
+  const identity = (process.env.XA_MAC_IDENTITY ?? '').replace(/^Developer ID Application:\s*/, '').trim();
+  const signing = target.startsWith('mac-') && identity ? [`-c.mac.identity=${identity}`, '-c.mac.hardenedRuntime=true', '-c.mac.notarize=false'] : [];
   const steps = [
     ['node_modules/electron-vite/bin/electron-vite.js', 'build'],
-    ['scripts/prepare-platform.mjs'],
-    ['scripts/check-desktop-bundle.mjs'],
+    ['scripts/prepare-platform.mjs', target],
+    ['scripts/check-desktop-bundle.mjs', target],
     // --publish never：打包工具在流水线里会自作主张去发布；发不发版只由发版流程决定。
-    ['node_modules/electron-builder/cli.js', ...TARGETS[target], '--publish', 'never'],
+    ['node_modules/electron-builder/cli.js', ...TARGETS[target], ...signing, '--publish', 'never'],
   ];
   for (const [script, ...args] of steps) {
     const result = spawnSync(process.execPath, [script, ...args], { cwd: root, stdio: 'inherit' });

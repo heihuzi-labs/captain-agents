@@ -1,4 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
+import { processSince, backgroundSpawn, stillRunning } from './platform.ts';
 import { engineEnvironment, engineSnapshot, foldRounds, killEngine, readReport, rememberSession, resumeMember, wakeGate } from './wake.ts';
 export { sessionFromOutput } from './wake.ts';
 import { spawn } from 'node:child_process';
@@ -17,7 +18,7 @@ import { findProject, worktreePath } from './project.ts';
 import { uncommitted } from './project-check.ts';
 import { checkQuota, ensureQuota } from './quota.ts';
 import { isolationOf, spec } from './roster.ts';
-import { ensureSelfcheck } from './selfcheck.ts';
+import { ensurePlatform, ensureSelfcheck } from './selfcheck.ts';
 import { extraDenyRead, readSettings } from './settings.ts';
 import {
   appendMessage, clipText, createTeam, editChannel, parseReplies, parseReview, readChannel, readTeam,
@@ -291,12 +292,12 @@ export async function launchEngine(id: string) {
   const fd = await open(join(teamDir(id), 'engine.log'), 'a', 0o600);
   try {
     await updateTeam(id, async current => {
-      if (current.state !== 'running' || alive(current.pid)) return;
+      if (current.state !== 'running' || alive(current.pid, current.pidSince)) return;
       const node = nodeCommand([entry, id], engineEnvironment());
-      const child = spawn(node.file, node.args, { detached: true, stdio: ['ignore', fd.fd, fd.fd], env: node.env });
+      const child = spawn(node.file, node.args, { ...backgroundSpawn(), stdio: ['ignore', fd.fd, fd.fd], env: node.env });
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      current.pid = child.pid;
       child.unref();
+      current.pidSince = processSince(child.pid); current.pid = child.pid;
     });
   } finally { await fd.close(); }
 }
@@ -310,8 +311,8 @@ export async function runTeam(id: string) {
   try {
     const team = await load(id);
     if (team.state !== 'running') return;
-    if (team.pid && team.pid !== process.pid && alive(team.pid)) { console.error('推进进程已经在跑，这个进程退出。'); return; }
-    await updateTeam(id, t => { if (t.state === 'running') t.pid = process.pid; });
+    if (team.pid && team.pid !== process.pid && alive(team.pid, team.pidSince)) { console.error('推进进程已经在跑，这个进程退出。'); return; }
+    await updateTeam(id, t => { if (t.state === 'running') { t.pidSince = processSince(process.pid); t.pid = process.pid; } });
     while (!stopping) {
       const current = await readTeam(id);
       if (current.state !== 'running') return;
@@ -374,7 +375,7 @@ export async function startTeam(file: string, options: TeamStartOptions): Promis
   if (!task) throw new Error('题目是空的。请写上要做的事再开队。');
   checkQuota(await ensureQuota(), [writer, reviewer], options.force, limits.quotaStop);
   if ([writer, reviewer].some(choice => isolationOf(choice.who) !== 'codex') && !process.env.XAGENTS_FAKE_WORKER) await srtPath();
-  if (!process.env.XAGENTS_FAKE_WORKER) await ensureSelfcheck();
+  if (!process.env.XAGENTS_FAKE_WORKER) { ensurePlatform([writer, reviewer].map(choice => isolationOf(choice.who))); await ensureSelfcheck(); }
   const id = await reserveTeam();
   const title = options.title || basename(file, extname(file));
   const team: Team = {
@@ -430,12 +431,12 @@ export async function continueTeam(id: string, note?: string): Promise<Team> {
 export async function stopTeam(id: string): Promise<Team> {
   const team = await load(id);
   if (team.state === 'ended') return team;
-  await killEngine(team.pid);
+  await killEngine(team.pid, team.pidSince);
   for (const jobId of [team.writer.job, team.reviewer.job]) {
     if (!jobId) continue;
     try {
       const job = await readJob(jobId);
-      if (active(job) || job.state === 'lost' || alive(job.pid) || alive(job.workerPid) || alive(job.setupPid)) await stop(jobId);
+      if (active(job) || job.state === 'lost' || alive(job.pid, job.pidSince) || stillRunning(job.workerPid, job.workerSince) || stillRunning(job.setupPid, job.setupSince)) await stop(jobId);
     } catch (e) { if (!hasCode(e, 'ENOENT')) throw e; }
   }
   await foldJobs(await readTeam(id));
@@ -445,10 +446,10 @@ export async function stopTeam(id: string): Promise<Team> {
   });
 }
 export async function reconcileTeam(team: Team): Promise<Team> {
-  if (team.state !== 'running' || !Number.isInteger(team.pid) || team.pid! <= 0 || alive(team.pid)) return team;
+  if (team.state !== 'running' || !Number.isInteger(team.pid) || team.pid! <= 0 || alive(team.pid, team.pidSince)) return team;
   let changed = false;
   const next = await updateTeam(team.id, current => {
-    if (current.state !== 'running' || alive(current.pid)) return;
+    if (current.state !== 'running' || alive(current.pid, current.pidSince)) return;
     changed = true;
     current.state = 'lead'; current.reason = 'lost';
     current.note = '推进小队的后台进程不在了。请查看 engine.log，确认没有残留选手后再加一轮或收场。';

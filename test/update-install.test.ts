@@ -12,11 +12,11 @@ const execute = promisify(execFile);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 async function fakeApp(path: string, content = '旧版') { await mkdir(join(path, 'Contents'), { recursive: true }); await writeFile(join(path, 'Contents/Info.plist'), '假 plist'); await writeFile(join(path, 'content'), content); }
 
-test('安装位置：开发、其它平台、异常路径、链接和不可用目录拒绝，正常 .app 可用', async t => {
+test('安装位置：开发、其它平台、异常路径、链接和不可用目录拒绝，正常 .app 可用', { skip: process.platform === 'win32' ? '只属于 macOS：.app 安装位置检查' : false }, async t => {
   const c = await context(t, false), app = join(await realpath(c.temp), '中文 App.app'), executable = join(app, 'Contents/MacOS/应用'); await fakeApp(app);
   assert.equal((await installationTarget(executable, true, 'darwin')).path, app);
   assert.match((await installationTarget(executable, false, 'darwin')).reason!, /不带在线更新/);
-  assert.match((await installationTarget(executable, true, 'win32')).reason!, /暂不支持/);
+  assert.match((await installationTarget(executable, true, 'linux')).reason!, /暂不支持/);
   for (const bad of ['/repo/node', '/repo/app/Contents/MacOS/Electron', 'relative.app/Contents/MacOS/app', '/x/AppTranslocation/X.app/Contents/MacOS/app']) assert.match((await installationTarget(bad, true, 'darwin')).reason!, /正常的/);
   const linked = join(c.temp, 'linked.app'); await symlink(app, linked);
   assert.match((await installationTarget(join(linked, 'Contents/MacOS/app'), true, 'darwin')).reason!, /符号链接/);
@@ -55,7 +55,7 @@ for (const fail of ['', '标识', '版本', '签名', '解压', '外链', '目�
   else { assert.equal(await prepareUpdate(file, c.temp, '0.2.0', run), app); assert.deepEqual(commands.at(-1), ['/usr/bin/codesign', '--verify', '--deep', '--strict', app]); }
   assert.ok(!(await readdir(c.temp)).includes('package.zip'));
 });
-for (const { fail, name } of [...['', 'copy', 'before-sign', 'after-sign', 'move', 'open'].map(fail => ({ fail, name: "中文 应用's $name.app" })), { fail: '', name: 'old.app' }]) test(`独立安装脚本${fail ? `在 ${fail} 失败后回退` : '成功换版并保留废纸篓旧版'}（${name}）`, async t => {
+for (const { fail, name } of [...['', 'copy', 'before-sign', 'after-sign', 'move', 'open'].map(fail => ({ fail, name: "中文 应用's $name.app" })), { fail: '', name: 'old.app' }]) test(`独立安装脚本${fail ? `在 ${fail} 失败后回退` : '成功换版并保留废纸篓旧版'}（${name}）`, { skip: process.platform === 'win32' ? '只属于 macOS：bash 安装器及 .app 换版回退' : false }, async t => {
   const c = await context(t, false), installed = join(c.temp, name), staged = join(c.temp, '新版 应用.app'), trash = join(c.temp, '假的 废纸篓');
   await fakeApp(installed); await fakeApp(staged, '新版');
   const log = join(c.temp, 'opened.log');
@@ -77,7 +77,7 @@ for (const { fail, name } of [...['', 'copy', 'before-sign', 'after-sign', 'move
   if (!fail) { const backups = await readdir(trash); assert.equal(backups.length, 1); assert.equal(await readFile(join(trash, backups[0], name, 'content'), 'utf8'), '旧版'); }
   assert.ok(!(await readdir(c.temp)).some(n => n.startsWith('.xagents-update-')));
 });
-test('安装小程序先等待旧进程退出，再接触安装目录', async t => {
+test('安装小程序先等待旧进程退出，再接触安装目录', { skip: process.platform === 'win32' ? '只属于 macOS：bash 安装器依赖系统 sleep 和应用包' : false }, async t => {
   const c = await context(t, false), installed = join(c.temp, 'old.app'), staged = join(c.temp, 'new.app'); await fakeApp(installed); await fakeApp(staged, '新版');
   const script = join(c.temp, 'install.sh');
   await writeFile(script, installerScript({ ditto: '/usr/bin/false', open: '/usr/bin/true' }));
@@ -92,7 +92,7 @@ test('安装小程序先等待旧进程退出，再接触安装目录', async t 
   assert.equal(closed, true); assert.equal(await readFile(join(installed, 'content'), 'utf8'), '旧版');
 });
 
-test('macOS 系统 ditto 生成的中文 ZIP 与 Framework 相对链接可被核对、解开', { skip: process.platform !== 'darwin' }, async t => {
+test('macOS 系统 ditto 生成的中文 ZIP 与 Framework 相对链接可被核对、解开', { skip: process.platform === 'win32' ? '只属于 macOS：系统 ditto 与 Framework 链接' : false }, async t => {
   const c = await context(t, false), source = join(c.temp, '源/中文 应用.app'), file = join(c.temp, 'system.zip'), destination = join(c.temp, '下载');
   await fakeApp(source, '新版');
   await mkdir(join(source, 'Contents/Frameworks/Example.framework/Versions/A'), { recursive: true });
@@ -113,7 +113,7 @@ test('macOS 系统 ditto 生成的中文 ZIP 与 Framework 相对链接可被核
 
 // 2026-10-10 真实验收抓到：Electron 后台里 Node 的文件函数把 .asar 当虚拟目录，检查和清理解开的应用时出错。
 // 所以这几步的文件函数必须可以换成 Electron 的 original-fs；清理失败也不能盖住真正的原因。
-test('解开并核对新版：逐个文件检查和清理都走传进来的文件函数；清理失败不盖住真正的原因', async t => {
+test('解开并核对新版：逐个文件检查和清理都走传进来的文件函数；清理失败不盖住真正的原因', { skip: process.platform === 'win32' ? '只属于 macOS：ditto 解包及 .app 文件检查' : false }, async t => {
   const { mkdtemp, mkdir, writeFile, lstat, readdir, realpath, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os'); const { join } = await import('node:path');
   const { execFile } = await import('node:child_process'); const { promisify } = await import('node:util');

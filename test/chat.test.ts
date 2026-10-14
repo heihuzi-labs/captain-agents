@@ -63,6 +63,8 @@ test('说话长度按码点、控制字符、收起拒绝、处理记号和叫�
 test('建群：main 起点、正确副本路径、setup、只读/快速、重复群号', async t => {
   const c = await chatContext(t, true);
   assert.equal((await c.add(['--setup', 'echo ready > setup-result.txt'])).code, 0);
+  // 同一分钟的重号和跨分钟的编号分开验证，不依赖 Git/setup 在一分钟内跑完。
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-14T07:00:59Z') });
   const chat = await createChat({ project: '测试', members: ['grok:high:fast:ro', 'deepseek:high'], title: ' 群名 ' });
   assert.equal(chat.title, '群名'); assert.equal(chat.base, c.base); assert.equal(chat.hopLimit, 4);
   assert.equal(chat.worktree, join(c.repo, '.worktrees', `xa-chat-${chat.id}`));
@@ -72,7 +74,12 @@ test('建群：main 起点、正确副本路径、setup、只读/快速、重复
   assert.equal((await readMessages(chat.id))[0].kind, 'event');
   const next = await createChat({ project: '测试', members: ['codex:high'] });
   assert.notEqual(next.id, chat.id); assert.match(next.id, /-2$/);
-  assert.equal((await listChats()).length, 2);
+  t.mock.timers.tick(1000);
+  const later = await createChat({ project: '测试', members: ['codex:high'] });
+  assert.equal(chat.id, '1014-1500-project');
+  assert.equal(next.id, `${chat.id}-2`);
+  assert.equal(later.id, '1014-1501-project');
+  assert.equal((await listChats()).length, 3);
   assert.deepEqual(await readdir(join(c.home, 'jobs')), [], '开群不创建伪成员任务');
 });
 

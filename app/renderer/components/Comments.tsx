@@ -4,6 +4,7 @@ import type { ViewJob } from '../../../src/core/view-types.ts';
 import { errorReason } from '../lib/errors.ts';
 import { awaitingReply, fmtTime } from '../lib/board.ts';
 import { Button, Section } from '../ui/index.ts';
+import { MOD } from '../ui/platform.ts';
 
 export const COMMENT_MAX = 500;
 // 给负责人留言：往来留言按时间排列，下面是输入框；⌘ 回车也能发送。
@@ -26,7 +27,7 @@ export function Comments({ job }: { job: ViewJob }) {
       <p>{c.by === 'lead' && <b>负责人：</b>}{c.text}</p><time>{fmtTime(c.at, true)}</time>
     </li>)}</ol>}
     {awaitingReply(job) && <p className="faint comment-wait">负责人还没回复</p>}
-    <textarea className="field" aria-label="给负责人的留言" rows={3} value={text} placeholder="写给负责人的话，⌘ 回车发送" onChange={e => setText(e.target.value)} onKeyDown={key} />
+    <textarea className="field" aria-label="给负责人的留言" rows={3} value={text} placeholder={`写给负责人的话，${MOD === '⌘' ? '⌘ ' : MOD}回车发送`} onChange={e => setText(e.target.value)} onKeyDown={key} />
     <div className="comment-bar">
       {tooLong ? <span className="over-limit">超出 {length - COMMENT_MAX} 字</span> : <span className="faint">最多 {COMMENT_MAX} 字</span>}
       <Button variant="primary" disabled={busy || !clean || tooLong} onClick={() => void send()}>发送</Button>

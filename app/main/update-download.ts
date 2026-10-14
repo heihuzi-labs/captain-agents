@@ -126,11 +126,12 @@ export function updateClient(options: { feed: string; hosts: string[]; version: 
       }
       throw new Error('清单地址须有 1–4 个。');
     },
-    async download(pkg: UpdatePackage, directory: string, progress: (received: number) => void): Promise<string> {
+    async download(pkg: UpdatePackage, directory: string, progress: (received: number) => void, name = 'package.zip'): Promise<string> {
+      if (!/^[a-zA-Z0-9_.-]+$/.test(name) || name === '.' || name === '..') throw new Error('更新包文件名不正常。');
       if (!Number.isSafeInteger(pkg.size) || pkg.size <= 0 || pkg.size > MAX_PACKAGE_SIZE || !/^[a-fA-F0-9]{64}$/.test(pkg.sha256)) throw new Error('安装包大小或 SHA-256 格式不对。');
       packageUrls(pkg.urls);
       await cleanPartialDownloads(directory);
-      const partial = join(directory, 'package.zip.part'), complete = join(directory, 'package.zip');
+      const partial = join(directory, name + '.part'), complete = join(directory, name);
       await rm(complete, { force: true });
       let firstSlow: string | undefined;
       const attempts = pkg.urls.map((address, index) => ({ address, fallback: index < pkg.urls.length - 1 }));

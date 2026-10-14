@@ -18,7 +18,8 @@ test('看管进程异常或未处理拒绝时先杀选手组，记录失败并�
     const names = ['uncaughtException', 'unhandledRejection', 'SIGINT', 'SIGTERM'];
     const before = names.map(name => process.listenerCount(name));
     const events = [], originalKill = process.kill.bind(process);
-    process.kill = (pid, signal) => { if (pid < 0 && signal === 'SIGKILL') events.push('kill'); return originalKill(pid, signal); };
+    // macOS 上停选手是对整个进程组发信号（负的进程号）；Windows 上是逐个结束进程树里的进程。
+    process.kill = (pid, signal) => { if ((pid < 0 || process.platform === 'win32') && signal === 'SIGKILL') events.push('kill'); return originalKill(pid, signal); };
     const timer = setInterval(() => {
       if (!existsSync(join(dir, 'grandchild.pid'))) return;
       clearInterval(timer); events.push('fatal');

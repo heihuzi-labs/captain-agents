@@ -4,8 +4,9 @@ import assert from 'node:assert/strict';
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { context, until } from './helpers.ts';
+import { context, until, killLeftover } from './helpers.ts';
 import { alive } from '../src/core/fsx.ts';
+import { isWindows, processSince } from '../src/core/platform.ts';
 import { readJob } from '../src/core/job.ts';
 import { jobDir } from '../src/core/paths.ts';
 import { writeSettings } from '../src/core/settings.ts';
@@ -33,7 +34,7 @@ async function setup(t: TestContext) {
     for (const name of names) {
       try {
         const team = JSON.parse(await readFile(join(c.home, 'teams', name, 'team.json'), 'utf8')) as { pid?: number };
-        if (team.pid) process.kill(team.pid, 'SIGKILL');
+        killLeftover(team.pid);
       } catch { /* 进程已经不在，或登记读不到 */ }
     }
   });
@@ -260,6 +261,8 @@ describe('推进引擎', { concurrency: 1 }, () => {
     const team = await open(c, { XA_TEST_MODE: 'hang' });
     const writer = await until(() => readJob(team.writer.job!), job => job.state === 'running' && typeof job.workerPid === 'number', 20000);
     const running = await until(() => readTeam(team.id), current => typeof current.pid === 'number' && alive(current.pid), 20000);
+    assert.equal(typeof running.pidSince, isWindows ? 'number' : 'undefined');
+    assert.equal(running.pidSince, processSince(running.pid));
     await assert.rejects(continueTeam(team.id), /还在推进/);
     const ended = await stopTeam(team.id);
     assert.equal(ended.state, 'ended');
