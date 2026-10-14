@@ -1,3 +1,7 @@
+import { listedProviders, listedWho, unlistedLine } from './listed.ts';
+import type { Listed, ListedOptions } from './listed.ts';
+import { codexEndpoint } from './endpoint.ts';
+import { customCodexQuotaLine } from './quota.ts';
 import { connectStatus, connectStateNames } from './connect.ts';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -38,8 +42,8 @@ function localTime(value: string | null | undefined) {
   return `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
-function workersSection(workers: Settings['workers']) {
-  const lines = keptWhos.map(who => {
+function workersSection(workers: Settings['workers'], listed: Listed) {
+  const lines = keptWhos.filter(who => listedWho(listed, who)).map(who => {
     const w = workers[who], s = spec(who);
     return `- ${s.name}（${who}）· ${s.shown}：${w.enabled ? '开启' : '已关闭，不能派'}；强度 ${w.efforts.map(e => effortNames[e]).join('、')}；快速版 ${w.fast ? '允许' : '未开放'}`;
   });
@@ -52,14 +56,14 @@ function quotaLine(entry: QuotaSnapshot['providers'][number]) {
   const bars = entry.bars.map(b => `${b.label} ${b.used === null ? '查不到' : `${b.approx ? '不到 ' : ''}${b.used}%`}，${localTime(b.reset)} 重置`).join('；');
   return `套餐 ${entry.plan ?? '未知'}；${bars}${entry.reached ? `；已触顶：${entry.reached}` : ''}${entry.onDemand ? `；按量付费 ${entry.onDemand}` : ''}（数据时间 ${localTime(entry.at)}）`;
 }
-async function quotaSection(quotaStop: QuotaStop) {
-  const snapshot = await readQuotaCache();
+async function quotaSection(quotaStop: QuotaStop, listed: Listed) {
+  const endpoint = await codexEndpoint(), snapshot = await readQuotaCache(endpoint);
   const head = ['### 各家额度（读的是缓存，不联网）', ''];
-  if (!snapshot) return [...head, '还没有额度数据，先运行 `xagents quota`。'].join('\n');
-  const lines = snapshot.providers.map(entry => !entry.error ? `- ${entry.name}：${quotaLine(entry)}`
+  if (!snapshot) return [...head, '还没有额度数据，先运行 `xagents quota`。', ...(endpoint.custom ? [customCodexQuotaLine] : [])].join('\n');
+  const lines = snapshot.providers.filter(p => listed.some(l => l.icon === p.icon && l.reason === null)).map(entry => !entry.error ? `- ${entry.name}：${quotaLine(entry)}`
     : entry.bars.some(b => b.used !== null) ? `- ${entry.name}：这次没查到（${entry.error}）；上一次的数据：${quotaLine(entry)}`
     : `- ${entry.name}：查不到（${entry.error}）`);
-  return [...head, `查询时间 ${localTime(snapshot.queriedAt)}。`, ...lines, '',
+  return [...head, `查询时间 ${localTime(snapshot.queriedAt)}。`, ...lines, ...(endpoint.custom ? [customCodexQuotaLine] : []), '',
     `${quotaStop === null ? '主人没有设停派线：`xagents run` 不按用量拒绝；某家额度触顶时仍会拒绝' : `某家本期额度用到 ${quotaStop}%，\`xagents run\` 会拒绝派给它`}；缓存超过 10 分钟，\`run\` 会先重新查。要最新数字，运行 \`xagents quota\`。`].join('\n');
 }
 
@@ -79,10 +83,10 @@ function profileLine(who: Who, rows: Profile[]) {
   const good = merge(r => r.good), bad = merge(r => r.bad);
   return `- ${name}：做过 ${count} 件，其中 ${rated} 件打了分，平均 ${average === null ? '—' : `${average.toFixed(1)} 分`}；优点 ${good.join('、') || '暂无'}；毛病 ${bad.join('、') || '暂无'}${rated < 3 ? '（样本少，仅供参考）' : ''}`;
 }
-function profilesSection(jobs: Job[]) {
+function profilesSection(jobs: Job[], listed: Listed) {
   const rows = profiles(jobs);
   return ['### 各家档案摘要（每位选手一行；分类型、分快速版的明细用 `xagents profiles`）', '',
-    ...whos.map(who => profileLine(who, rows.filter(r => r.who === who)))].join('\n');
+    ...whos.filter(who => listedWho(listed, who)).map(who => profileLine(who, rows.filter(r => r.who === who)))].join('\n');
 }
 
 // 和 xagents inbox 同一套判定（ownerActions），一行对应 inbox 表里的一行：同一件活的多条留言算一行。
@@ -122,11 +126,12 @@ async function connectionLine() {
 }
 
 // 手册末尾的“这台机器现在的情况”：只读登记处，不联网、不查额度、不改任何记录。
-export async function guideAppendix(): Promise<string> {
+export async function guideAppendix(options: ListedOptions = {}): Promise<string> {
   const jobs = await listJobs().catch(e => { if (hasCode(e, 'ENOENT')) return []; throw e; });
   const { archivedProjects, workers, limits } = await readSettings();
+  const listed = await listedProviders(options);
   return ['## 这台机器现在的情况', '', await connectionLine(), '',
     `派活限制：同时最多 ${limits.maxRunning} 件；${limits.quotaStop === null ? '额度不设停派线（主人在设置里关掉了）' : `额度用到 ${limits.quotaStop}% 停派`}（设置 → 选手与模型）`, '',
     ...(archivedProjects.length ? [`已归档项目：${archivedProjects.join('、')}。`, ''] : []),
-    workersSection(workers), '', await quotaSection(limits.quotaStop), '', profilesSection(jobs), '', jobsSection(jobs, limits.maxRunning)].join('\n') + '\n';
+    workersSection(workers, listed), '', await quotaSection(limits.quotaStop, listed), '', profilesSection(jobs, listed), '', jobsSection(jobs, limits.maxRunning), ...(unlistedLine(listed) ? ['', unlistedLine(listed)] : [])].join('\n') + '\n';
 }

@@ -109,10 +109,10 @@ test('设置里的“命令行”：没装给“安装”；已有别的要先�
   bridge(info({ phase: 'off', reason: '这个版本不带在线更新' }), { cliStatus: vi.fn(async () => 'missing' as const), cliInstall: vi.fn(async () => 'installed' as const) });
   render(<Settings close={() => {}} view={fixtureView()} />);
   let group = await screen.findByRole('region', { name: '命令行' });
-  expect(within(group).getByText(/还没安装/)).toBeTruthy();
+  expect(within(group).getByText(/负责派活的 AI.*现在还没安装，装上它们才能用。/)).toBeTruthy();
   await act(async () => { fireEvent.click(within(group).getByRole('button', { name: '安装' })); });
   expect(window.xa.cliInstall).toHaveBeenCalledWith(false);
-  expect(within(group).getByText(/已安装。终端里的 xagents 用的就是这个应用里的平台/)).toBeTruthy();
+  expect(within(group).getByText(/负责派活的 AI（比如 Claude、Codex）在终端里用 xagents 这个命令派活、查进度。已安装/)).toBeTruthy();
   expect(within(group).queryByRole('button')).toBeNull();
   cleanup(); resetUpdateForTest();
   bridge(info({ phase: 'off', reason: '' }), { cliStatus: vi.fn(async () => 'other' as const), cliInstall: vi.fn(async () => { throw new Error('目录写不进去'); }) });

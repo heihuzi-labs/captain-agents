@@ -2,7 +2,8 @@
 import { randomUUID } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative } from 'node:path';
+import { join } from 'node:path';
+import { expandHomePath, relativeInside } from './platform.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { readJson, writeJson } from './fsx.ts';
 import type { Command, Job } from './job.ts';
@@ -20,7 +21,7 @@ type SrtPolicy = { kind: 'srt'; denyRead: string[]; allowWrite: string[]; denyWr
 type Policy = CodexPolicy | SrtPolicy;
 const fail = (why: string): never => { throw new Error(`无法确认旧隔离约束一条没丢，拒绝续接：${why}`); };
 const unique = (items: string[]) => [...new Set(items)];
-const absolute = (path: string) => path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
+const absolute = (path: string) => expandHomePath(path, homedir());
 
 // 只识别平台曾生成的这套 TOML 写法；不能完整解析的旧权限表绝不猜测。
 // 从头一条一条往后认，认完条目后剩下的必须正好是结尾（带或不带联网那一段）。
@@ -67,8 +68,7 @@ function srtPolicy(value: unknown): SrtPolicy {
 const denied = (policy: Policy) => policy.kind === 'codex'
   ? [...policy.files].filter(([, p]) => p === 'deny').map(([p]) => p) : policy.denyRead;
 function contains(root: string, path: string) {
-  const rel = relative(root, path);
-  return !!rel && !isAbsolute(rel) && rel !== '..' && !rel.startsWith('../') ? rel : undefined;
+  return relativeInside(root, path) || undefined;
 }
 async function previousPolicy(job: Job): Promise<Policy> {
   if (!job.command) return fail('没有保存上一轮的命令。');
@@ -106,7 +106,8 @@ function checkEnvironment(old: Command, next: Command) {
   for (const [key, value] of Object.entries(old.env))
     if (next.env[key] !== value) return fail(`运行环境 ${key} 发生变化。`);
   if (old.unset?.some(key => !next.unset?.includes(key))) return fail('环境变量过滤少了旧条目。');
-  const policies = (cmd: Command) => cmd.args.filter(arg => arg.startsWith('shell_environment_policy='));
+  // 参数的实际写法是 shell_environment_policy.exclude=[…]（env.ts 的 codexEnvPolicy）。2026-10-12 以前这里按“=”去筛，一条都筛不到，这道核对等于没做。
+  const policies = (cmd: Command) => cmd.args.filter(arg => arg.startsWith('shell_environment_policy.'));
   if (!isDeepStrictEqual(policies(old), policies(next))) return fail('Codex 环境变量过滤无法证明兼容。');
   for (let i = 0; i < old.args.length; i++) {
     if (old.args[i] === '--disable' && !next.args.some((arg, n) => arg === '--disable' && next.args[n + 1] === old.args[i + 1]))
@@ -117,7 +118,8 @@ function checkEnvironment(old: Command, next: Command) {
 export type PreparedRun = { runtime: string; entry: string; command: Command; actual: Command; isolation: Isolation; round: number };
 export async function prepareRun(job: Job, text: string, project: Isolated, resume?: NonNullable<Job['resume']>): Promise<PreparedRun> {
   const round = resume?.round ?? 1;
-  const runtime = join('runtime', `r${round}-${randomUUID()}`), dir = join(jobDir(job.id), runtime);
+  // 记进任务记录的相对位置一律用 /，两种系统写出来的一样；用的时候再和任务目录拼。
+  const runtime = `runtime/r${round}-${randomUUID()}`, dir = join(jobDir(job.id), runtime);
   try {
     // “平台当前的版本”就是正在跑这段代码的这一份：派活的命令行是安装目录；群的推进进程每次启动都重拍快照（wake.ts 的
     // engineSnapshot），所以它自己就是当时的平台。包从 toolRoot 拍，规则用本进程里的生成器，代码和规则是同一版，不混用。
@@ -190,7 +192,7 @@ export function usePreparedRun(job: Job, prepared: PreparedRun) {
 export async function prunePackages(job: Pick<Job, 'id' | 'launches'>) {
   const keep = new Set((job.launches ?? []).slice(-2).map(l => l.runtime)), root = join(jobDir(job.id), 'runtime');
   for (const name of await readdir(root).catch(() => [] as string[])) {
-    if (!/^r\d+-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(name) || keep.has(join('runtime', name))) continue;
+    if (!/^r\d+-[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(name) || keep.has(`runtime/${name}`)) continue;
     await rm(join(root, name), { recursive: true, force: true });
   }
 }

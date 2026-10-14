@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { context, root } from './helpers.ts';
@@ -14,6 +14,8 @@ import type { Job } from '../src/core/job.ts';
 import { resumeMember } from '../src/core/wake.ts';
 
 const session = '01234567-89ab-cdef-0123-456789abcdef';
+// Windows 上这几条先跳过，Windows 的续接核对另补用例（docs/design-windows.md 4.6 记着这一条还没测）。
+const winTable = process.platform === 'win32' ? '只属于 macOS：续接时核对旧权限表这一套是按 macOS 的权限表测的；Windows 的权限表只写本机存在的路径，用例里的假路径都不存在' : false;
 const resume = { round: 2, prompt: 'prompt-r2.md' };
 async function setup(t: TestContext, who: Job['who'] = 'codex', extra: Partial<Job> = {}) {
   const c = await context(t, false);
@@ -30,7 +32,7 @@ async function setup(t: TestContext, who: Job['who'] = 'codex', extra: Partial<J
 }
 
 for (const who of ['codex', 'grok'] as const) {
-  test(`${who} 每轮命令等于当前生成器的结果再做原续接变形，只读保持，命令与包逐轮留痕`, async t => {
+  test(`${who} 每轮命令等于当前生成器的结果再做原续接变形，只读保持，命令与包逐轮留痕`, { skip: winTable }, async t => {
     const { job, first } = await setup(t, who);
     const second = await prepareRun(job, '第二轮', { denyReadExtra: ['new-secret'], denyReadHome: ['xa-new-secret'] }, resume);
     const fresh = await command(job, '第二轮', second.isolation, join(jobDir(job.id), second.runtime));
@@ -58,7 +60,7 @@ for (const who of ['codex', 'grok'] as const) {
       JSON.stringify({ round: 1, command: first.command, actual: first.actual, isolation: first.isolation }, null, 2) + '\n');
   });
 
-  test(`${who} 旧任务没有额外禁读输入记录，也从旧有效权限恢复后取并集`, async t => {
+  test(`${who} 旧任务没有额外禁读输入记录，也从旧有效权限恢复后取并集`, { skip: winTable }, async t => {
     const { job } = await setup(t, who);
     delete job.isolation; delete job.launches;
     const oldCommand = structuredClone(job.command);
@@ -86,7 +88,7 @@ test('切换成功后只留当前和上一轮的运行包，更早的删掉；�
 
 // 2026-10-10 真实探针抓到：联网开着时权限表结尾多一段 network，旧的解析把它吞进条目里，真实成员一律续接不了。
 for (const who of ['codex', 'grok'] as const) {
-  test(`${who} 联网开着派的任务：旧权限能完整核对，续接照常，联网状态不变`, async t => {
+  test(`${who} 联网开着派的任务：旧权限能完整核对，续接照常，联网状态不变`, { skip: winTable }, async t => {
     const { job } = await setup(t, who, { network: true, mode: 'workspace-write' });
     if (who === 'codex') assert.match(job.command!.args.find(a => a.startsWith('permissions.xa='))!, /,network=\{enabled=true\}\}$/);
     const second = await prepareRun(job, '第二轮', { denyReadExtra: ['new-secret'], denyReadHome: [] }, resume);
@@ -98,7 +100,7 @@ for (const who of ['codex', 'grok'] as const) {
   });
 }
 
-test('旧权限无法完整识别、旧禁读被读例外覆盖、网络不符，一律拒绝且不切换旧包', async t => {
+test('旧权限无法完整识别、旧禁读被读例外覆盖、网络不符，一律拒绝且不切换旧包', { skip: winTable }, async t => {
   const { job } = await setup(t);
   const original = structuredClone(job);
   const position = job.command!.args.findIndex(arg => arg.startsWith('permissions.xa='));
@@ -144,5 +146,28 @@ test('任务锁内确认上一轮看管进程已退出，存活时不准备下�
   } finally {
     // helpers 清理不能把测试进程当作看管进程停止。
     await updateJob(job.id, current => { delete current.pid; });
+  }
+});
+
+test('续接时主人的 Codex 配置换了放钥匙的变量：命令里“不给哪些变量”的名单变了，拒绝续接', { skip: winTable }, async t => {
+  const c = await context(t, false), codexHome = join(c.temp, 'codex-home'), config = join(codexHome, 'config.toml');
+  const keys = ['XAGENTS_HOME', 'XAGENTS_FAKE_WORKER', 'CODEX_HOME'];
+  const saved = keys.map(key => process.env[key]);
+  process.env.XAGENTS_HOME = c.env.XAGENTS_HOME!; process.env.XAGENTS_FAKE_WORKER = c.env.XAGENTS_FAKE_WORKER!; process.env.CODEX_HOME = codexHome;
+  t.after(() => keys.forEach((key, i) => { if (saved[i] === undefined) delete process.env[key]; else process.env[key] = saved[i]; }));
+  const relay = (envKey: string) => `model_provider = "relay"\n[model_providers.relay]\nbase_url = "https://relay.test/v1"\n${envKey ? `env_key = "${envKey}"\n` : ''}`;
+  await mkdir(codexHome, { recursive: true }); await writeFile(config, relay('RELAY_HANDLE'));
+  const job: Job = { ...selection('codex:high'), id: '1012-endpoint', batch: 'batch', project: '测试', repo: c.repo, worktree: c.repo, branch: 'xa/test', base: 'base', mode: 'read-only',
+    kind: '审查', title: '测试', summary: '测试运行包', state: 'done', created: 'T0', started: 'T0', ended: 'T1', session };
+  const first = await prepareRun(job, '第一轮', { denyReadExtra: [] });
+  usePreparedRun(job, first);
+  assert.deepEqual(first.command.pass, ['RELAY_HANDLE']);
+  // 配置没变：照常续接，接口那几项原样留在续接命令里。
+  const same = await prepareRun(job, '第二轮', { denyReadExtra: [] }, resume);
+  assert.ok(same.actual.args.includes('model_provider="relay"')); assert.deepEqual(same.command.pass, ['RELAY_HANDLE']);
+  // 换了变量名、或不再点名：上一轮不给命令的那个变量，这一轮命令就看得到了，不能悄悄续接。
+  for (const next of ['OTHER_HANDLE', '']) {
+    await writeFile(config, relay(next));
+    await assert.rejects(prepareRun(job, '第二轮', { denyReadExtra: [] }, resume), /环境变量过滤无法证明兼容/);
   }
 });

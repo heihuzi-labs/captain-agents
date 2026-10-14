@@ -1,4 +1,5 @@
 import { nodeCommand } from './node-runtime.ts';
+import { processSince, backgroundSpawn, samePath, stillRunning } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { open } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -111,7 +112,7 @@ async function finishBusy(chat: Chat) {
   const messages = await readMessages(chat.id);
   const work = messages.findLast(m => m.kind === 'work' && m.job === job.id);
   const turn = work?.turn ?? turnOf(job);
-  if (job.state === 'lost' || alive(job.workerPid) || alive(job.setupPid)) {
+  if (job.state === 'lost' || stillRunning(job.workerPid, job.workerSince) || stillRunning(job.setupPid, job.setupSince)) {
     const reason = job.state;
     await stop(job.id); // 先消灭残留选手，再让队列里的下一位接触共用副本。
     job = await readJob(job.id);
@@ -169,7 +170,7 @@ async function startNext(chat: Chat) {
     const body = promptBody(chat, member, source, messages);
     if (member.job) {
       const job = await rememberSession(await reconcile(await readJob(member.job)));
-      if (job.chat?.id !== chat.id || job.worktree !== chat.worktree || job.branch !== chat.branch
+      if (job.chat?.id !== chat.id || !samePath(job.worktree, chat.worktree) || job.branch !== chat.branch
         || member.readOnly && job.mode !== 'read-only') throw new Error('成员任务与群登记不符。');
       if (!job.session) throw new Error('没有找到会话号，不能续接，请负责人检查 run.log。');
       // 与首次派活共用并发额度锁，检查和预留队列席位之间不能被其他群抢走名额。
@@ -203,17 +204,18 @@ async function startNext(chat: Chat) {
 
 async function launchEngine(id: string) {
   const chat = await readChat(id);
-  if (chat.state !== 'open' || alive(chat.pid) || !chat.busy && !chat.queue.length) return;
+  if (chat.state !== 'open' || alive(chat.pid, chat.pidSince) || !chat.busy && !chat.queue.length) return;
   const fd = await open(join(chatDir(id), 'engine.log'), 'a', 0o600);
   try {
     await updateChat(id, async c => {
       // 在群的锁里：别处刚启动了推进进程就不再动；否则先把平台代码换成现在的，再启动。
-      if (alive(c.pid)) return;
+      if (alive(c.pid, c.pidSince)) return;
       const entry = await engineSnapshot(chatDir(id), 'chat-entry.ts', true);
       const node = nodeCommand([entry, id], engineEnvironment());
-      const child = spawn(node.file, node.args, { detached: true, stdio: ['ignore', fd.fd, fd.fd], env: node.env });
+      const child = spawn(node.file, node.args, { ...backgroundSpawn(), stdio: ['ignore', fd.fd, fd.fd], env: node.env });
       await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
-      c.pid = child.pid; child.unref();
+      child.unref();
+      c.pidSince = processSince(child.pid); c.pid = child.pid;
     });
   } finally { await fd.close(); }
 }
@@ -236,8 +238,8 @@ export async function runChat(id: string) {
     while (!ac.signal.aborted) {
       const again = await control(id, async () => {
         let chat = await readChat(id);
-        if (chat.state !== 'open' || chat.pid && chat.pid !== process.pid && alive(chat.pid)) return false;
-        await updateChat(id, c => { c.pid = process.pid; });
+        if (chat.state !== 'open' || chat.pid && chat.pid !== process.pid && alive(chat.pid, chat.pidSince)) return false;
+        await updateChat(id, c => { c.pidSince = processSince(process.pid); c.pid = process.pid; });
         await ingest(id);
         chat = await readChat(id);
         // 登记到一半的任务优先收拢，不再派第二件碰同一副本。
@@ -254,7 +256,7 @@ export async function runChat(id: string) {
         chat = await readChat(id);
         if (!chat.busy && !ac.signal.aborted) await startNext(chat);
         chat = await readChat(id);
-        if (!chat.busy && !chat.queue.length) { await updateChat(id, c => { delete c.pid; }); return false; }
+        if (!chat.busy && !chat.queue.length) { await updateChat(id, c => { delete c.pid; delete c.pidSince; }); return false; }
         return true;
       });
       if (!again || ac.signal.aborted) return;
@@ -272,16 +274,17 @@ export async function runChat(id: string) {
 
 async function stopLocked(id: string, closing: boolean) {
   const chat = await readChat(id);
-  await killEngine(chat.pid);
+  await killEngine(chat.pid, chat.pidSince);
   for (const job of await membersJobs(chat)) {
-    if (active(job) || job.state === 'lost' || alive(job.workerPid) || alive(job.pid) || alive(job.setupPid)) await stop(job.id);
+    // 看管进程写结束状态之前已停选手、存报告和副本改动。结束后保留的 pid 只是历史记录，Windows 上可能已被重用。
+    if (active(job) || job.state === 'lost' || stillRunning(job.workerPid, job.workerSince) || stillRunning(job.setupPid, job.setupSince)) await stop(job.id);
     await updateJob(job.id, foldRounds);
   }
   // 连同停止前尚未入队的消息一起消费，之后再 @ 可以正常开新一轮。
   const messages = await readMessages(id);
   await writeJson(stateFile(id), { seen: messages.at(-1)?.id ?? 0 });
   await updateChat(id, c => {
-    delete c.pid; delete c.busy; c.queue = [];
+    delete c.pid; delete c.pidSince; delete c.busy; c.queue = [];
     if (closing) { c.state = 'closed'; c.closed ??= new Date().toISOString(); }
   });
   await appendChatMessage(id, { from: 'platform', kind: 'event', text: closing ? '群收起了。' : '停下了。', mentions: [] });
@@ -294,17 +297,17 @@ export async function closeChat(id: string): Promise<Chat> {
   return control(id, () => stopLocked(id, true));
 }
 export async function reconcileChat(chat: Chat): Promise<Chat> {
-  if (alive(chat.pid) || !chat.busy && !chat.pid) return chat;
+  if (alive(chat.pid, chat.pidSince) || !chat.busy && !chat.pid) return chat;
   return control(chat.id, async () => {
     let current = await readChat(chat.id);
-    if (alive(current.pid) || !current.busy && !current.pid) return current;
+    if (alive(current.pid, current.pidSince) || !current.busy && !current.pid) return current;
     if (current.busy) {
       const job = await reconcile(await readJob(current.busy.job));
       if (active(job)) return current; // 选手仍在正常运行，保留互斥席位。
       await finishBusy(current);
     }
     await event(chat.id, '推进群聊的后台进程不在了，已收回动手席位，请负责人检查后继续。');
-    current = await updateChat(chat.id, c => { delete c.pid; });
+    current = await updateChat(chat.id, c => { delete c.pid; delete c.pidSince; });
     return current;
   });
 }
@@ -312,9 +315,10 @@ export async function cleanChat(id: string): Promise<Chat> {
   return control(id, async () => {
     const chat = await readChat(id);
     if (chat.state !== 'closed') throw new Error('请先收起群，再清理群副本。');
-    if (alive(chat.pid) || chat.busy) throw new Error('群还在动手，请先停止。');
+    if (alive(chat.pid, chat.pidSince) || chat.busy) throw new Error('群还在动手，请先停止。');
     const jobs = await membersJobs(chat);
-    if (jobs.some(j => active(j) || alive(j.pid) || alive(j.workerPid) || alive(j.setupPid))) throw new Error('成员任务尚未结束，请先停止。');
+    // 活跃状态仍拦清理，结束状态仍检查选手与准备进程；不再按历史看管 PID 把无关进程当成成员任务。
+    if (jobs.some(j => active(j) || stillRunning(j.workerPid, j.workerSince) || stillRunning(j.setupPid, j.setupSince))) throw new Error('成员任务尚未结束，请先停止。');
     if (!(await worktreeMissing(chat))) await writeAtomic(join(chatDir(id), 'diff.patch'), await diff(chat));
     await removeWorktree(chat);
     for (const job of jobs) await updateJob(job.id, j => { j.worktreeRemoved ??= new Date().toISOString(); foldRounds(j); });

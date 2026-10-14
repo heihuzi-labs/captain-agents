@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { IpcMainInvokeEvent } from 'electron';
-import { modelsRefresher, modelsRefreshHandler, modelsKeepHandler, modelsScheduler, MODELS_EVERY_MS } from '../app/main/models.ts';
+import { modelsRefresher, modelsRefreshHandler, modelsKeepHandler, modelsAddHandler, modelsScheduler, MODELS_EVERY_MS } from '../app/main/models.ts';
 import { channels } from '../app/shared/ipc.ts';
 import { root } from './helpers.ts';
 import type { ModelsCache } from '../src/core/roster.ts';
@@ -60,6 +60,39 @@ test('后台模型刷新：不阻塞 start，有新缓存跳过，24 小时过�
   cached = null; scheduler.start(); await settle(); assert.equal(calls, 3); scheduler.stop();
 });
 
+test('手动添加桥先验证来源、参数和底线，并发拒绝，失败后解除保存状态', async () => {
+  const calls: unknown[] = []; let updates = 0, release!: () => void, failure = false;
+  const handler = modelsAddHandler({ add: async (channel, model, efforts) => {
+    calls.push([channel, model, efforts]); await new Promise<void>(resolve => { release = resolve; });
+    if (failure) throw new Error('写入失败');
+  } }, async () => { updates++; }, trusted);
+  await assert.rejects(handler({} as IpcMainInvokeEvent, 'codex', 'custom-model', ['high']), /来源/);
+  for (const args of [[], ['codex', 'custom-model'], ['codex', 'custom-model', ['high'], true], ['grok', 'grok-5', ['high']],
+    ['cursor', 'gpt-8', ['high']], ['deepseek', 'deepseek-new', ['high']], ['bad', 'm', ['high']],
+    ['codex', '../secret', ['high']], ['codex', null, ['high']], ['codex', 'm', []], ['codex', 'm', ['max']],
+    ['codex', 'm', ['high', 'max']], ['codex', 'm', ['high', 'high']], ['codex', 'm', new Array(1)]]) await assert.rejects(handler(good, ...args));
+  assert.deepEqual(calls, []);
+  const efforts = ['xhigh', 'high'], first = handler(good, 'codex', 'custom-model', efforts); await settle();
+  efforts.push('max');
+  await assert.rejects(handler(good, 'codex', 'other', ['high']), /正在保存/);
+  release(); await first; assert.deepEqual(calls, [['codex', 'custom-model', ['high', 'xhigh']]]); assert.equal(updates, 1);
+  failure = true;
+  const second = handler(good, 'codex', 'other', ['high']), rejected = assert.rejects(second, /写入失败/);
+  await settle(); release(); await rejected; assert.equal(updates, 1);
+  failure = false;
+  const third = handler(good, 'codex', 'other', ['high']); await settle(); release(); await third;
+  assert.equal(calls.length, 3); assert.equal(updates, 2);
+});
+
+test('保留桥接受明确取消手动模型，非法和额外参数不进入核心', async () => {
+  const calls: unknown[] = [];
+  const handler = modelsKeepHandler({ keep: async (...args) => { calls.push(args); } }, async () => {}, trusted);
+  for (const args of [['codex', [], ['custom-model'], true], ['codex', [], new Array(1)], ['codex', ['custom-model'], ['custom-model']],
+    ['codex', [], ['custom-model', 'custom-model']], ['grok', [], ['custom-model']]]) await assert.rejects(handler(good, ...args));
+  assert.deepEqual(calls, []);
+  await handler(good, 'codex', [], ['custom-model']); assert.deepEqual(calls, [['codex', [], ['custom-model']]]);
+});
+
 test('后台模型刷新：等待磁盘时退出不启动查询，错误只交给日志回调', async t => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   let release!: (v: ModelsCache | null) => void, calls = 0;
@@ -74,9 +107,10 @@ test('桥两层白名单与真实窗口冒烟清单一致，主进程关闭时�
   const main = await readFile(join(root, 'app/main/index.ts'), 'utf8');
   const preload = await readFile(join(root, 'app/preload/index.ts'), 'utf8');
   const smoke = await readFile(join(root, 'test/e2e/smoke.ts'), 'utf8');
-  for (const key of ['modelsKeep', 'modelsRefresh'] as const) {
+  for (const key of ['modelsKeep', 'modelsRefresh', 'modelsAdd'] as const) {
     assert.ok(channels[key]); assert.ok(main.includes(`ipcMain.handle(channels.${key}`)); assert.ok(preload.includes(`ipcRenderer.invoke(channels.${key}`)); assert.ok(smoke.includes(`'${key}'`));
   }
   assert.match(main, /modelsRefreshHandler\(models, event => trustedSender/);
+  assert.match(main, /modelsAddHandler\(\{ add: addModel \}.*event => trustedSender/);
   assert.match(main, /modelSchedule\?\.stop\(\)/); assert.match(main, /if \(!e2eHidden\) \{\s+modelSchedule = modelsScheduler/);
 });

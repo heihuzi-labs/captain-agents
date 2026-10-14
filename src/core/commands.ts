@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { lstat } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { active, selectJobs, updateJob, finish } from './job.ts';
+import { active, selectJobs, updateJob, finish, leftBy } from './job.ts';
 import type { Job } from './job.ts';
 import { alive, hasCode, writeAtomic, removeTree } from './fsx.ts';
 import { jobDir } from './paths.ts';
@@ -11,6 +11,7 @@ import { cursorStateDir, grokSessionDirs, jobTmpDir } from './sandbox.ts';
 import { isolationOf } from './roster.ts';
 import { moveToTrash } from './trash.ts';
 import { killGroup, reconcileSafely } from './runner.ts';
+import { isWindows, stillRunning } from './platform.ts';
 import { guardTeamJob } from './team.ts';
 import { collectRealSteps } from './real.ts';
 
@@ -40,21 +41,41 @@ export async function collect(id: string, report: (text: string) => void = () =>
 export async function stop(id: string) {
   for (const job of await selectJobs(id)) {
     await updateJob(job.id, j => {
-      if (!active(j) && j.state !== 'lost' && !alive(j.setupPid)) return;
+      // 记录里的准备进程、选手进程可能早就不在了：派发进程或看管进程被直接杀掉时，Windows 上它们直接起的那一个跟着没了，
+      // 那一个起的子孙还在跑（platform.ts 的 stillRunning）。这里按记录去找留下的子孙，一律带期限（leftBy）。
+      const until = leftBy(j);
+      if (!active(j) && j.state !== 'lost' && !stillRunning(j.setupPid, j.setupSince, until)) return;
       j.stopRequested = true;
-      killGroup(j.setupPid, 'SIGKILL');
-      if (alive(j.pid)) {
+      killGroup(j.setupPid, 'SIGKILL', j.setupSince, undefined, until);
+      if (alive(j.pid, j.pidSince)) {
+        // Windows 没有“请你退出”的信号（发了就是直接结束，看管进程来不及收尾）：这里直接停掉选手的进程树，
+        // 看管进程等到选手退出、看到上面的记号，自己收尾成“被停止”；它每 2 秒也会看一次这个记号。
+        if (isWindows) { killGroup(j.workerPid, 'SIGKILL', j.workerSince, undefined, until); return; }
         try { process.kill(j.pid!, 'SIGTERM'); return; }
         catch (e) { if (!hasCode(e, 'ESRCH')) throw e; }
       }
       // 看管进程被杀时选手可能仍在，不能只改一个状态字。
-      killGroup(j.workerPid, 'SIGKILL');
+      killGroup(j.workerPid, 'SIGKILL', j.workerSince, undefined, until);
       finish(j, 'stopped');
     });
   }
-  const deadline = Date.now() + 10_000;
+  const started = Date.now(), deadline = started + 10_000;
+  let forced = false;
   while ((await selectJobs(id)).some(active)) {
     if (Date.now() >= deadline) throw new Error('停止请求已经发出，但看管进程尚未收尾。请查看 supervisor.log 后再运行 status。');
+    // Windows：看管进程 5 秒还没自己收尾（卡住了，或还没走到会看停止记号的地方），就和 macOS 上发信号的结果一样：
+    // 直接结束它，再停一遍选手的进程树，由这里记成“被停止”。
+    if (isWindows && !forced && Date.now() - started >= 5000) {
+      forced = true;
+      for (const job of await selectJobs(id)) await updateJob(job.id, j => {
+        if (!active(j)) return;
+        if (alive(j.pid, j.pidSince)) { try { process.kill(j.pid!, 'SIGKILL'); } catch (e) { if (!hasCode(e, 'ESRCH')) throw e; } }
+        const until = leftBy(j);
+        killGroup(j.setupPid, 'SIGKILL', j.setupSince, undefined, until);
+        killGroup(j.workerPid, 'SIGKILL', j.workerSince, undefined, until);
+        finish(j, 'stopped');
+      });
+    }
     await sleep(50);
   }
   await reconcileSafely();
@@ -137,7 +158,8 @@ function checkRated(jobs: Job[]) {
   if (missing.length) throw new Error(`这些任务已拍板但还没打分：${missing.map(j => j.id).join('、')}。请先 xagents rate <任务号> --score 1-5，再清理。`);
 }
 function checkClean(j: Job) {
-  if (alive(j.setupPid)) throw new Error(`任务 ${j.id} 的准备进程仍在，请先 xagents stop ${j.id}。`);
-  if (active(j) || (!j.started && alive(j.queuedBy))) throw new Error(`任务 ${j.id} 仍在运行或准备，请先 stop 并等派发命令退出，再 clean。`);
-  if (j.state === 'lost' && alive(j.workerPid)) throw new Error(`任务 ${j.id} 失联后选手可能仍在运行，请先 xagents stop ${j.id}。`);
+  if (stillRunning(j.setupPid, j.setupSince, leftBy(j))) throw new Error(`任务 ${j.id} 的准备进程仍在，请先 xagents stop ${j.id}。`);
+  if (active(j) || (!j.started && alive(j.queuedBy, j.queuedSince))) throw new Error(`任务 ${j.id} 仍在运行或准备，请先 stop 并等派发命令退出，再 clean。`);
+  // 失联的活：Windows 上选手自己已经跟着看管进程没了，要看的是它留下的子孙（macOS 上照旧只看选手那一组的组长）。
+  if (j.state === 'lost' && stillRunning(j.workerPid, j.workerSince, leftBy(j))) throw new Error(`任务 ${j.id} 失联后选手可能仍在运行，请先 xagents stop ${j.id}。`);
 }

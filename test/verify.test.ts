@@ -13,6 +13,8 @@ async function seed(c: Awaited<ReturnType<typeof context>>, id = 'verify-test') 
   await writeFile(join(dir, 'job.json'), JSON.stringify({ id, batch: '', project: '测试', repo: c.repo, base: c.base, worktree: c.repo, branch: `xa/${id}`, who: 'codex', kind: '实现', state: 'done', created: new Date().toISOString(), seconds: 1 }));
   return dir;
 }
+// 嵌进命令里的路径一律用正斜杠：Windows 上命令经 Git 的 sh 交给 Node 时，成对的反斜杠会被折成一个。
+const js = (path: string) => JSON.stringify(path.replaceAll('\\', '/'));
 async function config(c: Awaited<ReturnType<typeof context>>, commands: string[], minutes = 20) {
   const file = join(c.home, 'projects/测试.json'), p = JSON.parse(await readFile(file, 'utf8'));
   p.verify = commands; p.verifyTimeoutMinutes = minutes; await writeFile(file, JSON.stringify(p));
@@ -46,18 +48,22 @@ test('假项目顺序验收通过和失败，保存完整日志和结果，桌�
 test('超时记录没过并杀掉整组孙进程，不留下心跳', async t => {
   const c = await context(t); await c.add(); const dir = await seed(c);
   const heartbeat = join(c.temp, 'heartbeat');
-  const grandchild = `require('node:fs').writeFileSync(${JSON.stringify(heartbeat)},'started');setInterval(()=>require('node:fs').appendFileSync(${JSON.stringify(heartbeat)},'x'),20)`;
-  await config(c, [cmd(`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'inherit'});setInterval(()=>{},1000)`) ], 0.01);
+  const grandchild = `require('node:fs').writeFileSync(${js(heartbeat)},'started');setInterval(()=>require('node:fs').appendFileSync(${js(heartbeat)},'x'),20)`;
+  await config(c, [cmd(`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'inherit'});setInterval(()=>{},1000)`) ], process.platform === 'win32' ? 0.1 : 0.01); // Windows 上起三层进程要好几秒，超时给宽一些，否则孙进程还没来得及写心跳
   const r = await c.cli(['verify', 'verify-test']); assert.equal(r.code, 1); assert.match(r.stdout, /超时/);
-  const j = JSON.parse(await readFile(join(dir, 'job.json'), 'utf8')); assert.equal(j.verify.ok, false); assert.equal(j.verify.steps[0].exit, null);
-  const before = await readFile(heartbeat, 'utf8'); await sleep(150); assert.equal(await readFile(heartbeat, 'utf8'), before);
+  const j = JSON.parse(await readFile(join(dir, 'job.json'), 'utf8')); assert.equal(j.verify.ok, false);
+  // 被强行结束的进程：macOS 上没有退出码（记的是信号），Windows 上退出码是 1。
+  assert.equal(j.verify.steps[0].exit, process.platform === 'win32' ? 1 : null);
+  const before = await readFile(heartbeat, 'utf8').catch(async e => { throw new Error(`${e.message}\n验收日志：\n${await readFile(join(dir, 'verify.log'), 'utf8').catch(String)}`); });
+  await sleep(150); assert.equal(await readFile(heartbeat, 'utf8'), before);
 });
 test('同项目验收跨进程排队超过 10 秒仍等待，日志不会交叉', async t => {
   const c = await context(t); await c.add(); await seed(c, 'a'); await seed(c, 'b');
   const trace = join(c.temp, 'trace');
-  await config(c, [cmd(`const fs=require('node:fs');const first=!fs.existsSync(${JSON.stringify(trace)});fs.appendFileSync(${JSON.stringify(trace)},'start\\n');setTimeout(()=>fs.appendFileSync(${JSON.stringify(trace)},'end\\n'),first?10500:50)`)]);
+  await config(c, [cmd(`const fs=require('node:fs');const first=!fs.existsSync(${js(trace)});fs.appendFileSync(${js(trace)},'start\\n');setTimeout(()=>fs.appendFileSync(${js(trace)},'end\\n'),first?10500:50)`)]);
   const results = await Promise.all([c.cli(['verify', 'a']), c.cli(['verify', 'b'])]);
-  for (const r of results) assert.equal(r.code, 0, r.stderr);
+  const logs = async () => (await Promise.all(['a', 'b'].map(id => readFile(join(c.home, 'jobs', id, 'verify.log'), 'utf8').catch(e => String(e))))).join('\n----\n');
+  for (const r of results) assert.equal(r.code, 0, r.stderr + r.stdout + (r.code ? await logs() : ''));
   assert.equal(await readFile(trace, 'utf8'), 'start\nend\nstart\nend\n');
 });
 test('没有验收命令、非法超时、运行中或已清理不会误报通过', async t => {

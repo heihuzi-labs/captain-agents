@@ -10,9 +10,11 @@ export type UpdaterOptions = {
   version: string; platform: string; arch: string; publicKey: string; autoCheck: boolean; offReason?: string;
   // 取数器逐地址调用同一份核对，只有核对通过才返回；版本与平台选择留在循环外。
   fetchFeed(verify: (bytes: Uint8Array) => UpdateFeed): Promise<UpdateFeed>;
-  download(pkg: UpdatePackage, progress: (received: number) => void): Promise<string>;
+  download(pkg: UpdatePackage, progress: (received: number) => void, version: string): Promise<string>;
   prepare(zip: string, version: string): Promise<string>;
   restart(staged: string, version: string): Promise<void>;
+  // 现在不能装的原因（比如 Windows 上还有活在跑）；有原因就照实说，更新仍保持“已就绪”，过会儿再点。
+  blocker?(): Promise<string | undefined>;
   saveAutoCheck(on: boolean): Promise<void>;
   publish(state: UpdateState): void;
   clock?: UpdateClock;
@@ -51,7 +53,7 @@ export function createUpdater(options: UpdaterOptions) {
     const { feed, pkg } = available;
     change({ phase: 'downloading', version: feed.version, received: 0, size: pkg.size });
     try {
-      const zip = await options.download(pkg, received => change({ phase: 'downloading', version: feed.version, received, size: pkg.size }));
+      const zip = await options.download(pkg, received => change({ phase: 'downloading', version: feed.version, received, size: pkg.size }), feed.version);
       staged = await options.prepare(zip, feed.version);
       change({ phase: 'ready', version: feed.version });
     } catch (error) { staged = undefined; available = undefined; fail('没能下载更新', error); }
@@ -60,6 +62,8 @@ export function createUpdater(options: UpdaterOptions) {
   async function restart(): Promise<void> {
     enabled();
     if (state.phase !== 'ready' || !staged) throw new Error('更新还没准备好，不能重启安装。');
+    const blocked = await options.blocker?.();
+    if (blocked) throw new Error(blocked);
     busy = true;
     try { await options.restart(staged, state.version); }
     catch (error) { busy = false; staged = undefined; available = undefined; fail('没能安装更新', error); }

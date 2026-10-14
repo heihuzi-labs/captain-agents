@@ -23,5 +23,9 @@ exports.default = async function afterPack(context) {
   const [wanted, got] = [await files(from), await files(to)];
   if (wanted.length === 0 || wanted.join('\n') !== got.join('\n')) throw new Error(`应用里的平台和准备好的不一致（应有 ${wanted.length} 个文件，实际 ${got.length} 个）。`);
   if (!wanted.some(f => f.startsWith(join('node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js') + ':'))) throw new Error('应用里的平台缺少 srt。');
+  // Windows 上平台要直接调系统接口（src/core/native-windows.ts），模块和它的编译产物都得在。
+  if (context.electronPlatformName === 'win32') for (const part of ['node_modules/koffi/package.json', 'node_modules/@koromix/koffi-win32-']) {
+    if (!wanted.some(f => f.startsWith(join(part)))) throw new Error(`应用里的平台缺少 ${part}。`);
+  }
   console.log(`平台已放进应用：${got.length} 个文件。`);
 };

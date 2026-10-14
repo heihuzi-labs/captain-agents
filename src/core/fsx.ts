@@ -3,9 +3,23 @@ import { writeFileSync, mkdirSync, rmSync, readFileSync, statSync, openSync, clo
 import { dirname, basename, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { alive, processSince } from './platform.ts';
+export { alive } from './platform.ts';
 
 export function hasCode(error: unknown, code: string) {
   return (error as NodeJS.ErrnoException)?.code === code;
+}
+// Windows：文件正被别的进程打开时，改名、读取会短暂报“没权限”或“被占用”（实测：两个进程同时读写同一份登记文件时 rename 报 EPERM）。
+// 稍等再试，最多约 3 秒。macOS 上这几个错误码是真的没权限，不重试。
+const BUSY = ['EPERM', 'EACCES', 'EBUSY'];
+export async function retryBusy<T>(fn: () => Promise<T>, windows = process.platform === 'win32', attempts = 40): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await fn(); }
+    catch (e) {
+      if (!windows || attempt >= attempts || !BUSY.some(code => hasCode(e, code))) throw e;
+      await sleep(Math.min(10 * attempt, 100));
+    }
+  }
 }
 // 只修复树内目录的属主权限；lstat 不跟随链接，文件和链接目标都不改权限。
 export async function removeTree(dir: string): Promise<void> {
@@ -29,12 +43,12 @@ export async function removeTree(dir: string): Promise<void> {
   }
 }
 export async function readJson<T = unknown>(file: string): Promise<T> {
-  const text = await readFile(file, 'utf8');
+  const text = await retryBusy(() => readFile(file, 'utf8'));
   try { return JSON.parse(text); }
   catch { throw new SyntaxError(`登记文件不是完整 JSON：${file}。请从备份恢复或修正文件后重试。`); }
 }
 export async function readOptional(file: string): Promise<string> {
-  try { return await readFile(file, 'utf8'); }
+  try { return await retryBusy(() => readFile(file, 'utf8')); }
   catch (e) { if (hasCode(e, 'ENOENT')) return ''; throw e; }
 }
 export async function writeAtomic(file: string, contents: string | Uint8Array) {
@@ -42,37 +56,33 @@ export async function writeAtomic(file: string, contents: string | Uint8Array) {
   try {
     const fd = await open(tmp, 'wx', 0o600);
     try { await fd.writeFile(contents); await fd.sync(); } finally { await fd.close(); }
-    await rename(tmp, file);
+    await retryBusy(() => rename(tmp, file));
   } finally { await rm(tmp, { force: true }); }
 }
 export const writeJson = (file: string, data: unknown) => writeAtomic(file, JSON.stringify(data, null, 2) + '\n');
-export function alive(pid: number | undefined): boolean {
-  if (!Number.isInteger(pid) || pid! <= 0) return false;
-  try { process.kill(pid!, 0); return true; }
-  catch (e) { return !hasCode(e, 'ESRCH'); }
-}
-
 // 回收者在旧目录内抢一个标记，防止两个等待者误删刚换手的新锁。
 function reap(lock: string) {
   let claim: number | undefined;
+  const reaper = { pid: process.pid, pidSince: processSince(process.pid), token: randomUUID() };
   const marker = join(lock, 'reaping.json');
   try {
     const before = statSync(lock);
     claim = openSync(marker, 'wx', 0o600);
-    writeFileSync(claim, JSON.stringify({ pid: process.pid }));
+    writeFileSync(claim, JSON.stringify(reaper));
     const now = statSync(lock);
     if (before.ino !== now.ino || before.dev !== now.dev) return;
     let owner;
     try { owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8')); }
     catch { if (Date.now() - before.mtimeMs < 1000) return; }
-    if (owner && alive(owner.pid)) return;
+    if (owner && alive(owner.pid, owner.pidSince)) return;
     rmSync(lock, { recursive: true, force: true });
   } catch (e) {
     if (hasCode(e, 'EEXIST')) {
       try {
         const m = JSON.parse(readFileSync(marker, 'utf8'));
-        if (!alive(m.pid)) rmSync(marker, { force: true });
-      } catch {
+        if (!alive(m.pid, m.pidSince)) rmSync(marker, { force: true });
+      } catch (error) {
+        if (!hasCode(error, 'ENOENT') && !(error instanceof SyntaxError)) throw error;
         // 回收进程也可能在写标记时被杀，不能让半份标记永久挡住锁。
         try { if (Date.now() - statSync(marker).mtimeMs > 1000) rmSync(marker, { force: true }); }
         catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
@@ -83,7 +93,7 @@ function reap(lock: string) {
       closeSync(claim);
       try {
         const m = JSON.parse(readFileSync(marker, 'utf8'));
-        if (m.pid === process.pid) rmSync(marker, { force: true });
+        if (m.token === reaper.token) rmSync(marker, { force: true });
       } catch { /* 已回收。 */ }
     }
   }
@@ -93,7 +103,7 @@ export async function withLock<T>(dir: string, fn: () => Promise<T> | T, waitMs 
   await mkdir(dir, { recursive: true });
   const lock = join(dir, '.lock');
   const ownerFile = join(lock, 'owner.json');
-  const owner = { pid: process.pid, at: new Date().toISOString(), token: randomUUID() };
+  const owner = { pid: process.pid, pidSince: processSince(process.pid), at: new Date().toISOString(), token: randomUUID() };
   const deadline = Date.now() + waitMs;
   while (true) {
     try {
@@ -104,8 +114,8 @@ export async function withLock<T>(dir: string, fn: () => Promise<T> | T, waitMs 
     } catch (e) {
       if (!hasCode(e, 'EEXIST')) throw e;
       try {
-        const current = await readJson<{ pid?: number; token?: string }>(ownerFile);
-        if (!alive(current.pid)) reap(lock);
+        const current = await readJson<{ pid?: number; pidSince?: number; token?: string }>(ownerFile);
+        if (!alive(current.pid, current.pidSince)) reap(lock);
       } catch (error) {
         if (!hasCode(error, 'ENOENT') && !(error instanceof SyntaxError)) throw error;
         try { if (Date.now() - (await stat(lock)).mtimeMs > 1000) reap(lock); }
@@ -119,6 +129,6 @@ export async function withLock<T>(dir: string, fn: () => Promise<T> | T, waitMs 
   finally {
     // 只释放自己获得的锁。
     const current = await readJson<{ pid?: number; token?: string }>(ownerFile).catch(() => null);
-    if (current?.token === owner.token) await rm(lock, { recursive: true, force: true });
+    if (current?.token === owner.token) await rm(lock, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
   }
 }

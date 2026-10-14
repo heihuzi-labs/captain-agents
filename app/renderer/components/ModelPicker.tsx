@@ -6,6 +6,8 @@ import { Button, CheckDot, Chip, Modal, WorkerIcon } from '../ui/index.ts';
 
 type Channel = View['models']['channels'][number];
 type Model = Channel['models'][number];
+type Effort = Model['efforts'][number];
+const EFFORTS: Effort[] = ['medium', 'high', 'xhigh'];
 // 模型多于这个数才出搜索框。
 export const SEARCH_FROM = 8;
 // 右边只写例外：三档齐全、没有快速版就什么都不写，免得每行重复同一串字。
@@ -32,7 +34,7 @@ function Row({ m, channel, on, toggle }: { m: Model; channel: Channel['channel']
     <CheckDot label={`保留 ${m.shown}`} checked={on} onChange={toggle} />
     {icon && <WorkerIcon name={icon} size="sm" />}
     <span className="mp-name">
-      <span className="mp-title"><span className="ellip">{m.shown}</span>{m.fresh && <Chip tone="acc">新</Chip>}{m.gone && <Chip tone="warn" title="最近一次检查，这一家的名单里已经没有它">已下线</Chip>}</span>
+      <span className="mp-title"><span className="ellip">{m.shown}</span>{m.fresh && <Chip tone="acc">新</Chip>}{m.manual && <Chip title="手动添加的模型名，不在这一家自带的名单里">手动添加</Chip>}{m.gone && <Chip tone="warn" title="最近一次检查，这一家的名单里已经没有它">已下线</Chip>}</span>
       {m.description && <span className="mp-desc ellip" title={m.description}>{m.description}</span>}
     </span>
     {note && <span className="mp-meta">{note}</span>}
@@ -44,23 +46,37 @@ function Row({ m, channel, on, toggle }: { m: Model; channel: Channel['channel']
 export function ModelPicker({ channel, updated, close }: { channel: Channel; updated: string | null; close: () => void }) {
   const initial = useMemo(() => new Set(channel.models.filter(m => m.kept).map(m => m.model)), [channel.channel]);
   const [kept, setKept] = useState(() => new Set(initial)), [query, setQuery] = useState('');
-  const [busy, setBusy] = useState<'' | 'refresh' | 'save'>(''), [error, setError] = useState('');
+  const [busy, setBusy] = useState<'' | 'refresh' | 'save' | 'add'>(''), [error, setError] = useState('');
+  // 手动添加（只有 Codex 这一家）：接口提供的模型不在自带的名单里时，填名字加进来。刚加的直接算“已保留”，排在上面那一段。
+  const [name, setName] = useState(''), [efforts, setEfforts] = useState<Effort[]>(EFFORTS), [added, setAdded] = useState<string[]>([]), [addError, setAddError] = useState('');
+  const add = async () => {
+    const model = name.trim();
+    setBusy('add'); setAddError('');
+    try {
+      await window.xa.modelsAdd(channel.channel, model, efforts);
+      setAdded(list => [...list, model]); setKept(prev => new Set(prev).add(model)); setName('');
+    } catch (e) { setAddError('没能添加：' + errorReason(e)); }
+    finally { setBusy(''); }
+  };
   const toggle = (model: string, on: boolean) => setKept(prev => { const next = new Set(prev); if (on) next.add(model); else next.delete(model); return next; });
   const changed = channel.models.some(m => m.kept !== kept.has(m.model));
+  // 手动加的模型取消勾选要明说（整份替换保存时，漏掉的手动模型默认保持原样）。
+  const dropManual = channel.models.filter(m => m.manual && m.kept && !kept.has(m.model)).map(m => m.model);
   const run = async (what: 'refresh' | 'save') => {
     setBusy(what); setError('');
     try {
       if (what === 'refresh') await window.xa.modelsRefresh();
-      else { await window.xa.modelsKeep(channel.channel, channel.models.filter(m => kept.has(m.model)).map(m => m.model)); close(); }
+      else { await window.xa.modelsKeep(channel.channel, channel.models.filter(m => kept.has(m.model)).map(m => m.model), ...(dropManual.length ? [dropManual] : [])); close(); }
     } catch (e) { setError((what === 'refresh' ? '没能刷新：' : '没能保存：') + errorReason(e)); }
     finally { setBusy(''); }
   };
   const word = query.trim().toLowerCase();
   const match = (m: Model) => !word || (m.shown + ' ' + m.model).toLowerCase().includes(word);
   const all = useMemo(() => ordered(channel.channel, channel.models), [channel]);
-  const mine = all.filter(m => initial.has(m.model) && match(m));
+  const first = (m: Model) => initial.has(m.model) || added.includes(m.model);
+  const mine = all.filter(m => first(m) && match(m));
   // 没保留的：新冒出来的排在前面。
-  const rest = all.filter(m => !initial.has(m.model) && match(m)).sort((a, b) => Number(b.fresh) - Number(a.fresh));
+  const rest = all.filter(m => !first(m) && match(m)).sort((a, b) => Number(b.fresh) - Number(a.fresh));
   const long = channel.models.length > SEARCH_FROM;
   const when = channel.at ?? updated;
   return <Modal label={`管理模型：${channel.name}`} title={<span className="mp-head"><WorkerIcon name={channel.icon} size="sm" /><span>管理模型 · {channel.name}</span></span>} size="sm" flush onClose={close} footer={<>
@@ -85,6 +101,16 @@ export function ModelPicker({ channel, updated, close }: { channel: Channel; upd
           <div className="mp-list">{rest.map(m => <Row key={m.model} m={m} channel={channel.channel} on={kept.has(m.model)} toggle={on => toggle(m.model, on)} />)}</div></section>}
         {!mine.length && !rest.length && <p className="mp-empty faint">{word ? '没有名字里带这几个字的模型' : '还没有发现模型，点“刷新”检查一次'}</p>}
       </div>
+      {channel.channel === 'codex' && <div className="mp-add" role="group" aria-label="手动添加模型">
+        <div className="mp-add-row">
+          <input className="field mp-add-name" aria-label="模型名" placeholder="模型名，比如 gpt-6-astra" value={name} onChange={e => setName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && name.trim() && !busy) { e.preventDefault(); void add(); } }} />
+          {EFFORTS.map(effort => { const on = efforts.includes(effort); return <label key={effort} className="mp-add-effort"><CheckDot label={effortText(effort)} checked={on}
+            locked={on && efforts.length === 1 ? '至少要留一种强度' : undefined} onChange={() => setEfforts(EFFORTS.filter(e => e === effort ? !on : efforts.includes(e)))} /><span>{effortText(effort)}</span></label>; })}
+          <Button size="sm" disabled={!!busy || !name.trim()} onClick={() => void add()}>添加</Button>
+        </div>
+        {addError && <p role="alert" className="mp-add-error">{addError}</p>}
+      </div>}
     </div>
   </Modal>;
 }

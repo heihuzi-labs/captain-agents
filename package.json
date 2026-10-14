@@ -1,6 +1,6 @@
 {
   "name": "xagents",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "description": "派活工作台：把活派给本机的 Codex、Grok、Cursor 命令行，登记、隔离、验收、看板",
   "license": "MIT",
@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "0.0.77",
+    "koffi": "3.3.2",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -51,6 +52,9 @@
     "onlyBuiltDependencies": [
       "electron",
       "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "koffi"
     ]
   },
   "main": "out/main/index.js",
@@ -84,6 +88,7 @@
       "identity": null
     },
     "win": {
+      "executableName": "captain-agents",
       "target": [
         {
           "target": "nsis",
@@ -95,6 +100,10 @@
       "icon": "build/icon.png"
     },
     "nsis": {
+      "include": "build/installer.nsh",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
       "artifactName": "captain-agents_${version}_windows-x64.${ext}"
     }
   }

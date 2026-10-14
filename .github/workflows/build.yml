@@ -15,12 +15,32 @@ on:
         required: false
         type: string
         default: '["mac-arm64","mac-x64","win-x64"]'
+      require-signing:
+        description: Fail if the Mac packages cannot get Apple's Developer ID signature and notarization
+        required: false
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       targets:
         required: false
         type: string
         default: '["mac-arm64","mac-x64","win-x64"]'
+      require-signing:
+        required: false
+        type: boolean
+        default: false
+    # Apple's signing material. Only the Mac jobs read it; the release workflow passes it on.
+    secrets:
+      APPLE_CERTIFICATE:
+        description: Base64 of the Developer ID Application certificate with its private key (.p12)
+        required: false
+      APPLE_CERTIFICATE_PASSWORD:
+        description: Password of that .p12
+        required: false
+      APPLE_API_KEY_P8:
+        description: Base64 of the App Store Connect API key (.p8) used for notarization
+        required: false
 
 permissions:
   contents: read
@@ -30,7 +50,8 @@ jobs:
     name: ${{ matrix.target }}
     # Native runners: Apple silicon, Intel and Windows.
     runs-on: ${{ matrix.target == 'win-x64' && 'windows-2022' || matrix.target == 'mac-x64' && 'macos-15-intel' || 'macos-15' }}
-    timeout-minutes: 45
+    # Notarization waits on Apple; it usually takes minutes but can take much longer.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -61,17 +82,16 @@ jobs:
           # download bucket, and what the packaged app must report when it starts.
           node scripts/release/release-inputs.mjs env >> "$GITHUB_ENV"
           node scripts/release/release-inputs.mjs describe "${{ matrix.target }}" >> "$GITHUB_ENV"
-          # The test suites run once, on the Apple silicon runner.
-          echo "RUN_TESTS=${{ matrix.target == 'mac-arm64' }}" >> "$GITHUB_ENV"
+          # The test suites run on the Apple silicon runner and on Windows (not on the Intel Mac).
+          echo "RUN_TESTS=${{ matrix.target == 'mac-arm64' || matrix.target == 'win-x64' }}" >> "$GITHUB_ENV"
 
       - name: Type check
         shell: bash
         run: npm run typecheck
 
-      # The test suites run once, on the Apple silicon runner. macOS minutes are the expensive ones and
-      # the Intel job would only repeat the same result (2026-10-12: 625 core tests passed on both).
-      # On Windows the core suite does not finish yet (3 of the first 15 tests failed, then it hung
-      # for 20 minutes): the core and its isolation have only been measured on macOS so far.
+      # The test suites run on the Apple silicon runner and on Windows. macOS minutes are the expensive
+      # ones and the Intel job would only repeat the same result (2026-10-12: 625 core tests passed on
+      # both). Windows runs its own: paths, processes and the isolation differ there.
       - name: Core tests
         if: env.RUN_TESTS == 'true'
         shell: bash
@@ -82,19 +102,91 @@ jobs:
         shell: bash
         run: npm run test:ui
 
+      # On a Mac, with the certificate available, the packer signs with the Developer ID and the hardened
+      # runtime (scripts/pack.mjs). Without it the Mac package is signed locally below, which macOS blocks
+      # on first open after a download; a release asks for require-signing so that can't slip out.
       - name: Pack
         shell: bash
-        run: node scripts/pack.mjs "${{ matrix.target }}"
+        env:
+          MAC_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          MAC_CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MAC_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = macOS ] && [ -n "$MAC_CERT" ] && [ -n "$MAC_IDENTITY" ]; then
+            export CSC_LINK="$MAC_CERT" CSC_KEY_PASSWORD="$MAC_CERT_PASSWORD" XA_MAC_IDENTITY="$MAC_IDENTITY"
+            echo "MAC_SIGNED=true" >> "$GITHUB_ENV"
+          elif [ "$RUNNER_OS" = macOS ] && [ "${{ inputs.require-signing }}" = true ]; then
+            echo "The Apple certificate or the APPLE_SIGNING_IDENTITY variable is missing; a release must be signed." >&2
+            exit 1
+          fi
+          unset MAC_CERT MAC_CERT_PASSWORD
+          node scripts/pack.mjs "${{ matrix.target }}"
 
-      - name: Sign locally and zip (macOS)
+      # Notarize with Apple, staple the ticket, check Gatekeeper accepts it, then zip. GitHub's Intel runner
+      # often cannot reach Apple's ticket service (seen on another project on 2026-10-13); there the app stays
+      # notarized without a stapled ticket, which only matters for the first open while offline.
+      - name: Sign, notarize and zip (macOS)
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           app="$(ls -d dist/mac*/*.app)"
           test "$(printf '%s\n' "$app" | wc -l)" -eq 1
-          codesign --force --deep --sign - "$app"
-          codesign --verify --deep --strict "$app"
+          if [ "${MAC_SIGNED:-}" = true ]; then
+            codesign --verify --deep --strict "$app"
+            details="$(codesign -dv --verbose=2 "$app" 2>&1)"
+            grep -Fq "TeamIdentifier=$APPLE_TEAM_ID" <<<"$details"
+            grep -Eq 'flags=0x[0-9a-f]*\(runtime\)' <<<"$details"
+            for name in APPLE_API_KEY_P8 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+              if [ -z "${!name}" ]; then echo "$name is missing; cannot notarize." >&2; exit 1; fi
+            done
+            key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            trap 'rm -f "$key"' EXIT
+            (umask 077 && printf '%s' "$APPLE_API_KEY_P8" | base64 --decode > "$key")
+            ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+            xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --key "$key" --key-id "$APPLE_API_KEY_ID" \
+              --issuer "$APPLE_API_ISSUER" --wait --timeout 60m --output-format json > "$RUNNER_TEMP/notary.json" || true
+            cat "$RUNNER_TEMP/notary.json"
+            status="$(node -p 'require(process.argv[1]).status ?? ""' "$RUNNER_TEMP/notary.json" 2>/dev/null || true)"
+            if [ "$status" != Accepted ]; then
+              id="$(node -p 'require(process.argv[1]).id ?? ""' "$RUNNER_TEMP/notary.json" 2>/dev/null || true)"
+              if [ -n "$id" ]; then
+                xcrun notarytool log "$id" --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" || true
+              fi
+              echo "Notarization did not succeed (status: ${status:-none})." >&2
+              exit 1
+            fi
+            stapled=false
+            for attempt in 1 2 3 4 5; do
+              if xcrun stapler staple "$app"; then stapled=true; break; fi
+              sleep $((attempt * 20))
+            done
+            if [ "$stapled" = true ]; then
+              # 核对票据也要连苹果的服务器，网络偶尔断一下（2026-10-14 苹果芯片那台：钉上了，核对时断线）：同样重试。
+              validated=false
+              for attempt in 1 2 3 4 5; do
+                if xcrun stapler validate "$app"; then validated=true; break; fi
+                sleep $((attempt * 20))
+              done
+              test "$validated" = true
+              spctl --assess --type execute -vv "$app" 2>&1 | tee "$RUNNER_TEMP/gatekeeper.txt"
+              grep -Fq "source=Notarized Developer ID" "$RUNNER_TEMP/gatekeeper.txt"
+            elif [ "${{ matrix.target }}" = mac-x64 ]; then
+              echo "::warning::The Intel app is notarized but its ticket could not be stapled; the first open needs a network connection."
+            else
+              echo "Stapling the notarization ticket failed." >&2
+              exit 1
+            fi
+          else
+            codesign --force --deep --sign - "$app"
+            codesign --verify --deep --strict "$app"
+          fi
           echo "APP_EXECUTABLE=$app/Contents/MacOS/$(basename "$app" .app)" >> "$GITHUB_ENV"
           mkdir -p artifacts
           ditto -c -k --sequesterRsrc --keepParent "$app" "artifacts/$PACKAGE_NAME"
@@ -116,6 +208,67 @@ jobs:
           set -euo pipefail
           mkdir -p shots
           node test/e2e/packaged.ts "$APP_EXECUTABLE" "$EXPECTED_TARGET" "shots/${{ matrix.target }}.png"
+
+      # For the lead to look at, never a reason to fail the build (docs/design-windows.md section 11.1):
+      # does the command line launcher the app writes start from each kind of terminal.
+      - name: Launcher check (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: node scripts/probe/windows-launcher.mjs "$APP_EXECUTABLE" shots/launcher.json || echo "launcher check did not finish"
+
+      # The pipeline's other self-check runs from the source tree with plain Node. An installed app runs the
+      # platform through its own program instead, and the probe inside the isolation is started with that
+      # program too. This is that path, from the place a per-user install lands (docs/design-windows.md 11.5).
+      - name: Self-check through the packaged app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          XAGENTS_HOME: ${{ runner.temp }}\xagents-home-packaged
+          CODEX_NON_INTERACTIVE: '1'
+          CODEX_RELEASE: 0.162.1
+        run: |
+          $script = Join-Path $env:RUNNER_TEMP 'codex-install.ps1'
+          Invoke-WebRequest -Uri 'https://chatgpt.com/codex/install.ps1' -OutFile $script
+          & $script
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\captain-agents'
+          Copy-Item -Recurse -Force dist\win-unpacked $app
+          $exe = Join-Path $app 'captain-agents.exe'
+          $cli = Join-Path $app 'resources\platform\bin\xagents'
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          New-Item -ItemType Directory -Force $env:XAGENTS_HOME | Out-Null
+          # First, with nothing installed for hardening: a job dispatched through the packaged app must get done.
+          node scripts/probe/windows-dispatch.mjs shots\dispatch-packaged.json -- $exe $cli
+          "dispatch through the packaged app, nothing installed: exit code $LASTEXITCODE"
+          $dispatch = $LASTEXITCODE
+          $env:XA_DISPATCH_RO = '1'
+          node scripts/probe/windows-dispatch.mjs shots\dispatch-packaged-ro.json -- $exe $cli
+          "read-only dispatch through the packaged app: exit code $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { $dispatch = $LASTEXITCODE }
+          Remove-Item Env:XA_DISPATCH_RO
+          & $exe $cli windows-setup | Out-Host
+          "setup exit code: $LASTEXITCODE"
+          foreach ($n in 1, 2) {
+            $t = Measure-Command { & $exe $cli selfcheck | Out-Host }
+            "self-check through the packaged app, run ${n}: exit code $LASTEXITCODE, $([int]$t.TotalSeconds) seconds"
+          }
+          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') shots\selfcheck-packaged.json -ErrorAction SilentlyContinue
+          & $exe $cli windows-setup --remove | Out-Host
+          exit $dispatch
+
+      # The platform calls the system directly on Windows instead of starting a hidden PowerShell (docs/design-windows.md
+      # section 13). The probe again, with the app's own program as the runtime and the module taken from inside the
+      # installed app: the copy that pack put there must load and give the same answers as the old way.
+      - name: System calls without PowerShell, through the installed app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ELECTRON_RUN_AS_NODE: '1'
+        run: |
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\captain-agents'
+          $env:XA_KOFFI_FROM = Join-Path $app 'resources\platform\node_modules\koffi'
+          & (Join-Path $app 'captain-agents.exe') scripts\probe\windows-native.mjs shots\native-packaged.json | Out-Host
+          "probe through the installed app: exit code $LASTEXITCODE"
+          exit $LASTEXITCODE
 
       - name: Print size and SHA-256
         shell: bash

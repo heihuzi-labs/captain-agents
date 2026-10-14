@@ -103,7 +103,7 @@ test('real 拒绝无效选项、说明、格式、数量、大小及未结束任
   await assert.rejects(recordRealCheck('one', { ok: true, note: '结果', shots: [large] }), /10 MB/);
   await assert.rejects(recordRealCheck('one', { ok: true, note: '结果', shots: Array(11).fill(shot) }), /10 张/);
   const link = join(c.temp, 'link.png'); await symlink(shot, link);
-  await assert.rejects(recordRealCheck('one', { ok: true, note: '结果', shots: [link] }));
+  await assert.rejects(recordRealCheck('one', { ok: true, note: '结果', shots: [link] }), /截图必须是普通图片文件，不能是符号链接/);
   await assert.rejects(recordRealCheck('one', { ok: true, note: '结果', shots: [shot, join(c.temp, 'missing.png')] }));
   assert.equal(await readFile(join(c.dir, 'job.json'), 'utf8'), before);
   assert.deepEqual(await readFile(join(c.dir, 'shots/01.png')), png);

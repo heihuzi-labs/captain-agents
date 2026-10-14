@@ -4,6 +4,7 @@ import { access, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, wri
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { checkUpdateZip } from './update-zip.ts';
+import { windowsInstallationTarget } from './update-windows.ts';
 
 const execute = promisify(execFile);
 // 查看和清理“解开的新版应用”用的文件函数，可以换。原因（2026-10-10 真实验收抓到）：在 Electron 的后台进程里，
@@ -16,6 +17,7 @@ export const updateCommand: UpdateCommand = async (file, args) => (await execute
 export const UPDATE_APP_ID = 'app.xagents.desk';
 export async function installationTarget(executable: string, packaged: boolean, platform: string): Promise<{ path?: string; reason?: string }> {
   if (!packaged) return { reason: '这个版本不带在线更新' };
+  if (platform === 'win32') return windowsInstallationTarget(executable);
   if (platform !== 'darwin') return { reason: '这个平台暂不支持在线更新' };
   const app = dirname(dirname(dirname(executable)));
   if (!isAbsolute(executable) || !app.endsWith('.app') || dirname(executable) !== join(app, 'Contents/MacOS') || app.includes('/AppTranslocation/')) return { reason: '应用没有装在正常的 .app 目录里，请手动安装。' };
