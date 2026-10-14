@@ -153,10 +153,10 @@ test('手册文件缺失、是空的或读不了：用人话说清楚放哪、�
   await cp(join(root, 'src'), join(tool, 'src'), { recursive: true });
   await cp(join(root, 'package.json'), join(tool, 'package.json'));
   // 用复制出来的工具副本跑命令：手册的位置跟着工具走，副本里没有 guide/ 就等于手册缺失。
-  const run = () => exec(process.execPath, [join(tool, 'src/cli/cli.ts'), 'guide'], c.repo, { ...c.env, HOME: join(c.temp, 'user-home') });
+  const run = () => exec(process.execPath, [join(tool, 'src/cli/cli.ts'), 'guide'], c.repo, { ...c.env, HOME: join(c.temp, 'user-home'), USERPROFILE: join(c.temp, 'user-home') });
   const missing = await run();
   assert.equal(missing.code, 1);
-  assert.match(missing.stderr, /出错：找不到指挥手册：.*guide\/commander\.md。.*重新拉取仓库或重新安装/);
+  assert.match(missing.stderr, /出错：找不到指挥手册：.*guide[\\/]commander\.md。.*重新拉取仓库或重新安装/);
   assert.doesNotMatch(missing.stderr, /\n\s+at /);
   assert.equal(missing.stdout, '');
   await mkdir(join(tool, 'guide'));

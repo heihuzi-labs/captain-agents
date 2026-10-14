@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { modKey } from './ui/platform.ts';
 import type { View } from '../../src/core/view-types.ts';
 import { batchColors, columnColor, derive, entries, loadPosition, normalizeTarget, savePosition, shareView, typicalTimes } from './lib/board.ts';
 import type { Entry, Page, Target } from './lib/board.ts';
@@ -105,7 +106,7 @@ export function App() {
   }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (!e.metaKey) return;
+      if (!modKey(e)) return;
       if (e.key === ',') { e.preventDefault(); setTarget(null); setSettings(true); }
       else if (['1', '2', '3', '4'].includes(e.key)) {
         e.preventDefault();

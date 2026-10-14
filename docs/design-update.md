@@ -38,6 +38,7 @@
 - 平台根目录统一在 `src/core/paths.ts` 的 `resolveToolRoot()` / `toolRoot`：asar 中的后台根据 Electron 自带的 `process.resourcesPath` 找 `platform`，缺目录明确报错；开发构建、源码 CLI 和运行快照继续取自己的根目录。根目录不接受外部环境变量覆盖，已有快照不会切回安装目录的另一版本。
 - 起平台进程统一用 `src/core/node-runtime.ts` 的 `nodeRunner()` / `nodeCommand()`：普通 Node 用 `process.execPath`；Electron 用同一程序加 `ELECTRON_RUN_AS_NODE=1`。入口 `node-entry.ts` 随后清掉开关、把 `process.defaultApp` 设为真（否则 srt 用的参数解析库按 Electron 的习惯把脚本路径当成用户参数，srt 会在隔离里再套一层自己，实测启动失败）并执行目标脚本；推进进程再起看管进程、看管进程再起 srt 时都重新设置，选手拿不到这个变量。自检仅调整启动方式，探针正文不变。
 - **命令行后台**：`app/main/cli-launcher.ts` 提供 `cliLauncherStatus()` 和 `installCliLauncher({ replace?: boolean })`。状态是 `installed`（当前应用的完整启动脚本）、`missing`、`other`（包括源码链接、悬空链接、其他应用位置的脚本）；开发版状态为 `other`，安装报“开发版不安装命令行”。安装在锁内写临时可执行文件再改名，路径和参数正确引用，已有其他文件必须显式选择替换。脚本只用应用自带运行时执行平台中的 `bin/xagents`，同位置更新后自然就是新版。
+- **自动装上**（2026-10-12 主人定）：打包后的应用每次启动时看一眼启动脚本——还没装的自动装上，应用换了位置的跟着重写；终端里已经有一个别的 `xagents`（不是本应用写的）时什么都不动，等主人在设置里确认替换。出错只记日志，不影响启动。开发版不装。
 - **命令行的界面**：设置 → 通用 → 命令行（[界面规范](ui-spec.md) 第 18 节），通过桥上的 `cliStatus()` / `cliInstall(replace)` 调上面两个函数；开发版显示“开发版不安装命令行”。
 - 开发的人照旧使用源码 `bin/xagents`、`npm run dev`、`npm run build && npx electron .` 和 `npm run install-app`。安装脚本只停窗口主进程，避免把同一可执行程序启动的平台后台进程也停掉。
 - `scripts/check-desktop-bundle.mjs` 保留原有外部依赖检查，并检查平台必需文件、srt 依赖完整且没有符号链接。`npm run pack` 顺序是构建 → 准备平台 → 检查 → builder。
@@ -74,7 +75,7 @@
 ### 4.4 怎么发布
 
 - 版本号开始认真用（`package.json` 的 `version`，从 0.2.0 起）。
-- 发布流水线（GitHub Actions，在公开仓库 heihuzi-labs/captain-agents 上）：打标签触发 → 构建 Mac 苹果芯片版 → 本地签名 → 打成 zip → 算大小和 SHA-256 → 生成并签名清单 → 自己先验一遍 → 放到发布位置。
+- 发布流水线（GitHub Actions，在公开仓库 heihuzi-labs/captain-agents 上）：打标签触发 → 构建 Mac 版 → 开发者签名、公证（2026-10-14 前是本地签名） → 打成 zip → 算大小和 SHA-256 → 生成并签名清单 → 自己先验一遍 → 放到发布位置。
 - **每次发版都是对外动作，由主人点头**（或者主人自己打标签），负责人不自己发。
 - 负责人平时在本机验收新版仍然用 `npm run install-app`，不走发布。
 
@@ -198,7 +199,7 @@ ready → 用户点重启 → 独立安装小程序 → 新版打开
 
 ## 5. 现在不做的
 
-- **苹果开发者签名和公证**：现在是本地签名。应用自己下载的更新不带“来自互联网”的标记，替换后能正常打开，所以更新这条路不依赖它。但新用户**第一次**从网上下载安装时仍会被系统拦一下（新系统上要到“系统设置 → 隐私与安全性”里点“仍要打开”，老系统上右键打开），这要等做开发者签名和公证才能解决，算在“做成产品”那一步里，不在这次范围。
+- **苹果开发者签名和公证**：2026-10-14 起发版的 Mac 包带开发者签名并经过公证（做法见 [release-checklist.md](release-checklist.md) 的“苹果签名和公证”），新用户从网上下载后可以直接打开。应用内更新照旧只用 `codesign --verify --deep --strict` 核对解开的应用，本地签名的老版本更新到正式签名的新版本能过这道核对。系统按签名记住的那些许可（比如通知）在第一次换成正式签名时可能要再点一次允许。
 - **Intel Mac 和 Windows**：清单的格式一开始就按“多平台”设计，但这次只出苹果芯片版。
 - 灰度放量、强制更新：清单里留“最低支持版本”一个字段，放量先不做。
 

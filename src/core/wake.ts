@@ -1,10 +1,12 @@
 // 小队与项目群共用的续接、运行检查和收尾；启动命令与隔离仍由 workers/runner 负责。
 import { access, rename, cp, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { samePath, stillRunning } from './platform.ts';
+import { backgroundEnvironment } from './node-runtime.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { launch } from './dispatch.ts';
 import { alive, hasCode, readOptional, writeAtomic, writeJson } from './fsx.ts';
-import { active, finish, listJobs, readJob, updateJob } from './job.ts';
+import { active, finish, leftBy, listJobs, readJob, updateJob } from './job.ts';
 import type { Job, Usage } from './job.ts';
 import { jobDir, paths, toolRoot } from './paths.ts';
 import { loadProject } from './project.ts';
@@ -12,7 +14,7 @@ import { prepareRun, prunePackages, usePreparedRun } from './run-package.ts';
 import { checkChoice } from './policy.ts';
 import { checkQuota, ensureQuota } from './quota.ts';
 import { isolationOf, vendorOf } from './roster.ts';
-import { ensureSelfcheck } from './selfcheck.ts';
+import { ensurePlatform, ensureSelfcheck } from './selfcheck.ts';
 import { extraDenyRead, readSettings } from './settings.ts';
 import { checkDeepseekLogin, refreshGrokLogin, result, selection, SESSION_RE } from './workers.ts';
 
@@ -140,14 +142,16 @@ export async function resumeMember(job: Job, round: number, promptBody: string):
     if (current.resume?.round === round && (current.state === 'queued' || current.state === 'running')) return;
     if (current.state === 'queued' || current.state === 'running') throw new Error(`任务 ${current.id} 还在跑，不能叫醒下一轮。请等它结束或先 stop。`);
     if (current.cleaned || current.slimmed || current.worktreeRemoved) throw new Error(`任务 ${current.id} 已清理，不能续接。`);
-    if (alive(current.workerPid) || alive(current.setupPid)) throw new Error(`任务 ${current.id} 仍有选手进程，请先停止。`);
+    // 上一轮已经结束：按这件活结束的时间给期限（和 stop、clean 一样），Windows 上出生晚于它的同号进程是重用者，不算选手。
+    const until = leftBy(current);
+    if (stillRunning(current.workerPid, current.workerSince, until) || stillRunning(current.setupPid, current.setupSince, until)) throw new Error(`任务 ${current.id} 仍有选手进程，请先停止。`);
     if (alive(current.pid)) throw new Error(`任务 ${current.id} 的上一轮看管进程还没退出，不能续接。`);
     // 联网总开关是主人的底线。成员的联网状态固定在第一次派活那一刻（开着联网派的，续接也带着联网）；
     // 主人后来把总开关关了，就不能照旧叫醒它。只收紧、不放宽：关着时派的成员，开关打开后续接仍然不联网。
     if (current.network === true && !(await readSettings()).networkAllowed)
       throw new Error(`这位成员是联网开着时派的，主人现在已关掉联网总开关，不能照旧续接。请负责人换一位新成员（新建一个群，或重新派活）。`);
     const project = await loadProject(current.project);
-    if (project.repo !== current.repo) throw new Error('项目的仓库登记已经改变，不能给旧成员换运行包。');
+    if (!samePath(project.repo, current.repo)) throw new Error('项目的仓库登记已经改变，不能给旧成员换运行包。');
     const resume = { round, prompt: `prompt-r${round}.md` };
     const prepared = await prepareRun(current, promptBody, { ...project, denyReadHome: await extraDenyRead() }, resume);
     // 准备失败不归档日志、不动验收和任务状态，也绝不使用旧包启动。
@@ -160,6 +164,9 @@ export async function resumeMember(job: Job, round: number, promptBody: string):
     current.state = 'queued';
     current.queuedBy = process.pid;
     delete current.ended; delete current.exit; delete current.error; delete current.stopRequested; delete current.usage;
+    // 上一轮的选手进程号不带进新一轮（上面已确认它不在了）。留着的话，新一轮的看管进程登记新号之前这一小段里有人 stop，
+    // 就会照着旧号去找“留下的子孙”，而这时活算还没结束、期限是现在，等于没有期限（job.ts 的 leftBy）。
+    delete current.workerPid; delete current.workerSince;
     start = true;
   });
   if (!start) return false;
@@ -178,6 +185,7 @@ export async function wakeGate(choice: ReturnType<typeof selection>, project?: s
     if (project && settings.archivedProjects.includes(project)) throw new Error(`项目 ${project} 已归档，请先取消归档。`);
     checkQuota(await ensureQuota(), [choice], false, settings.limits.quotaStop);
     if (!process.env.XAGENTS_FAKE_WORKER) {
+      ensurePlatform([isolationOf(choice.who)]);
       await ensureSelfcheck();
       if (isolationOf(choice.who) === 'grok') await refreshGrokLogin();
       if (vendorOf(choice.who) === 'deepseek') await checkDeepseekLogin();
@@ -213,6 +221,6 @@ export async function engineSnapshot(dir: string, name: 'chat-entry.ts' | 'team-
 }
 export function engineEnvironment() {
   // srt 留在安装目录；快照里的 gate 仍按原 srtPath 检查，不修改启动参数或模板。
-  return { ...process.env, XAGENTS_HOME: paths().home,
+  return { ...backgroundEnvironment(),
     XAGENTS_SRT: process.env.XAGENTS_SRT || join(toolRoot, 'node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js') };
 }

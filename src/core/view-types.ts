@@ -33,11 +33,11 @@ export type ViewJob = Pick<Job, 'id' | 'batch' | 'project' | 'who' | 'model' | '
 };
 // 设置“选手与模型 → 管理模型”用的数据（docs/design-models.md）。每个通道一组；models = 最近发现的名单 ∪ 这个通道已有的选手。
 // kept：主人保留着（会出现在选手表里）；builtin：内置选手；fresh：主人上次保存选择之后新冒出来的（标“新”）；
-// gone：保留着、但最近一次成功问到的名单里已经没有（标“已下线”）。discoverable：这个通道会不会自动发现（DeepSeek 不会）。
+// manual：手动添加；gone：保留着、但最近一次成功问到的名单里已经没有（手动添加的免查）。discoverable：这个通道会不会自动发现（DeepSeek 不会）。
 export type ModelChannel = 'codex' | 'grok' | 'cursor' | 'deepseek';
 export type ViewModel = {
   model: string; who: Who; shown: string; description: string | null; efforts: Effort[]; fast: boolean;
-  kept: boolean; builtin: boolean; fresh: boolean; gone: boolean;
+  kept: boolean; builtin: boolean; manual: boolean; fresh: boolean; gone: boolean;
 };
 export type ViewModels = {
   at: string | null;
@@ -89,6 +89,7 @@ export type View = {
   storage: { slimmedJobs: number; freedBytes: number; due: number };
   // 表现页的仪表盘：每个时间范围 × （全部项目 + 每个项目）各一份，界面按筛选取用，不自己算。
   dashboard: DashboardSlice[];
+  unlisted: { name: string; reason: string }[];
   roster: { who: Who; name: string; model: string; efforts: Effort[]; fastSupported: boolean }[];
   selfcheck: { ok: boolean | null; at: string | null; note: string };
   // at：这家额度的数据时间；failed：这次没查到（bars 里是上一次的数据，at 也是上一次的时间）。

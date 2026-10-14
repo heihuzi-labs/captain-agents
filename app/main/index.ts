@@ -1,9 +1,9 @@
 import { refreshModelsWithBaseline, readModelsCache } from '../../src/core/models.ts';
-import { modelsRefresher, modelsRefreshHandler, modelsKeepHandler, modelsScheduler } from './models.ts';
+import { modelsRefresher, modelsRefreshHandler, modelsKeepHandler, modelsAddHandler, modelsScheduler } from './models.ts';
 import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeTheme, protocol, screen, session, shell } from 'electron';
 import { connect, connectArgument, connectStatus, disconnect } from '../../src/core/connect.ts';
 import { INTRO_TEXT } from '../../src/core/intro.ts';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { desktopPath, paths } from '../../src/core/paths.ts';
 import { buildView } from '../../src/core/view.ts';
@@ -15,11 +15,11 @@ import { addComment, cleanComment } from '../../src/core/comments.ts';
 import { createChat, renameChat, sayInChat } from '../../src/core/chat.ts';
 import { stopChat } from '../../src/core/chat-engine.ts';
 import { sayInTeam, stopTeam } from '../../src/core/team.ts';
-import { readSettings, writeSettings, setNetworkAllowed, keepModels, loadConfiguredRoster } from '../../src/core/settings.ts';
+import { readSettings, writeSettings, setNetworkAllowed, keepModels, addModel, loadConfiguredRoster } from '../../src/core/settings.ts';
 import { queryQuota, readQuotaCache } from '../../src/core/quota.ts';
 import type { View } from '../../src/core/view-types.ts';
 import type { Destination, CliStatus } from '../shared/ipc.ts';
-import { applyAppearance, syncBackground, windowBackground } from './appearance.ts';
+import { applyAppearance, syncBackground, titleBarOverlay, windowBackground } from './appearance.ts';
 import { jobActions, quotaRefreshHandler, quotaRefresher, settingsActions, teamActions, chatActions } from './actions.ts';
 import { noticeTitle, notificationTracker } from './notifications.ts';
 import type { Notice } from './notifications.ts';
@@ -35,7 +35,7 @@ import { slimOld } from '../../src/core/slim.ts';
 // Electron 自带的“原始文件函数”：不把路径里的 .asar 当虚拟目录（更新包里有 app.asar，见 update-install.ts）。
 import originalFs from 'original-fs';
 import { desktopUpdater } from './update-runtime.ts';
-import { cliLauncherStatus, installCliLauncher } from './cli-launcher.ts';
+import { cliLauncherStatus, installCliLauncher, refreshCliLauncher } from './cli-launcher.ts';
 import { updateActions } from './updater.ts';
 import type { Updater } from './updater.ts';
 
@@ -45,6 +45,8 @@ declare const __XA_UPDATE_PUBLIC_KEY__: string;
 declare const __XA_UPDATE_HOSTS__: string[];
 protocol.registerSchemesAsPrivileged([{ scheme: 'xa-icon', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
 app.setName('派活工作台');
+// Windows：系统通知要认得出是哪个应用才弹得出来，用和安装包一致的应用标识。
+if (process.platform === 'win32') app.setAppUserModelId('app.xagents.desk');
 process.env.PATH = desktopPath(process.env.PATH);
 // 安装脚本请旧进程退出时，也走 before-quit 保存窗口位置、停止定时清理。
 process.once('SIGTERM', () => app.quit());
@@ -118,14 +120,19 @@ async function openWindow() {
       const area = display.workArea;
       return bounds.x! < area.x + area.width && bounds.x! + bounds.width > area.x && bounds.y! < area.y + area.height && bounds.y! + bounds.height > area.y;
     })) { delete bounds.x; delete bounds.y; }
+    // 顶栏就是标题栏。macOS：左上角留红黄绿按钮；Windows：右上角三个窗口按钮由系统画在顶栏上，不显示菜单栏。
+    const chrome = process.platform === 'win32'
+      ? { titleBarStyle: 'hidden' as const, titleBarOverlay: titleBarOverlay(nativeTheme.shouldUseDarkColors), autoHideMenuBar: true }
+      : { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: TRAFFIC_LIGHTS };
     const current = new BrowserWindow({ ...bounds, minWidth: 900, minHeight: 600, title: '派活工作台',
-      titleBarStyle: 'hiddenInset', trafficLightPosition: TRAFFIC_LIGHTS, show: false,
+      ...chrome, show: false,
       backgroundColor: windowBackground(nativeTheme.shouldUseDarkColors),
       webPreferences: { ...securePreferences, preload: join(import.meta.dirname, '../preload/index.cjs'), partition: 'xa-desktop' } });
     window = current;
-    // 留给页面处理，防止默认菜单的 Cmd+R 先把整个窗口重载。
+    // 留给页面处理，防止默认菜单的 Cmd+R（Windows 上是 Ctrl+R）先把整个窗口重载。
     current.webContents.on('before-input-event', (_event, input) => {
-      current.webContents.setIgnoreMenuShortcuts(input.meta && ['1', '2', '3', 'r'].includes(input.key.toLowerCase()));
+      const modifier = process.platform === 'win32' ? input.control : input.meta;
+      current.webContents.setIgnoreMenuShortcuts(modifier && ['1', '2', '3', '4', 'r'].includes(input.key.toLowerCase()));
     });
     current.webContents.on('will-navigate', event => event.preventDefault());
     current.webContents.on('will-redirect', event => event.preventDefault());
@@ -170,6 +177,8 @@ else {
     }
   });
   void app.whenReady().then(async () => {
+    // 命令行启动脚本：没装的自动装上，应用换了位置的跟着改；出错只记日志，不影响启动。
+    if (app.isPackaged) await refreshCliLauncher().catch(console.error);
     await loadConfiguredRoster();
     await migrateIcons().catch(console.error);
     applyAppearance(nativeTheme, (await readSettings()).appearance);
@@ -212,6 +221,35 @@ else {
     // 命令行启动脚本：开发版不提供；参数只认一个开关，路径都由后台自己定，窗口传不进来。
     const cliStatus = async (): Promise<CliStatus> => app.isPackaged ? cliLauncherStatus() : 'unavailable';
     ipcMain.handle(channels.cliStatus, (event, ...args: unknown[]) => { guard(event); if (args.length) throw new Error('读取命令行状态不需要参数。'); return cliStatus(); });
+    // 位置：只有两处固定的位置（程序所在的文件夹、登记处），窗口传不进路径。
+    const places = () => ({ app: dirname(process.execPath), data: paths().home });
+    ipcMain.handle(channels.places, (event, ...args: unknown[]) => { guard(event); if (args.length) throw new Error('读取位置不需要参数。'); return places(); });
+    ipcMain.handle(channels.openPlace, async (event, ...args: unknown[]) => {
+      guard(event);
+      if (args.length !== 1 || (args[0] !== 'app' && args[0] !== 'data')) throw new Error('只能打开程序或数据所在的文件夹。');
+      const failed = await shell.openPath(places()[args[0]]);
+      if (failed) throw new Error(failed);
+    });
+    // 隔离（只在 Windows 上）：主人在设置里点了才做。没装好就先装——提权的确认框由系统弹、主人自己点，应用不替主人提权——再自检；
+    // 自检结果写进缓存，随看板数据推给窗口。同一时间只做一次。
+    let fixing = false;
+    ipcMain.handle(channels.isolationFix, async (event, ...args: unknown[]) => {
+      guard(event);
+      if (args.length) throw new Error('安装和检查隔离不需要参数。');
+      if (process.platform !== 'win32') throw new Error('只有 Windows 上的隔离需要另外安装。');
+      if (fixing) throw new Error('正在安装或检查，请稍等。');
+      fixing = true;
+      try {
+        const { readSelfcheck, selfcheck } = await import('../../src/core/selfcheck.ts');
+        if ((await readSelfcheck()).ok !== true) {
+          const { windowsSetup } = await import('../../src/core/selfcheck-windows.ts');
+          const { execute } = await import('../../src/core/verify.ts');
+          const setup = await windowsSetup(execute);
+          if (!setup.ok) throw new Error(setup.lines.join('；'));
+        }
+        await selfcheck();
+      } finally { fixing = false; publish(await readDesktopView()); }
+    });
     ipcMain.handle(channels.cliInstall, async (event, ...args: unknown[]) => {
       guard(event);
       if (args.length !== 1 || typeof args[0] !== 'boolean') throw new Error('安装命令行只能接收一个开关。');
@@ -242,6 +280,7 @@ else {
     ipcMain.handle(channels.teamStop, async (event, ...args: unknown[]) => { guard(event); await teamBridge('stop', args); });
     ipcMain.handle(channels.modelsRefresh, modelsRefreshHandler(models, event => trustedSender(event, window, pageUrl)));
     ipcMain.handle(channels.modelsKeep, modelsKeepHandler({ keep: keepModels }, async () => { await loadConfiguredRoster(); publish(await readDesktopView()); }, event => trustedSender(event, window, pageUrl)));
+    ipcMain.handle(channels.modelsAdd, modelsAddHandler({ add: addModel }, async () => { await loadConfiguredRoster(); publish(await readDesktopView()); }, event => trustedSender(event, window, pageUrl)));
     ipcMain.handle(channels.quotaRefresh, quotaRefreshHandler(quota, event => trustedSender(event, window, pageUrl)));
     // 复制对接提示词：只写固定的那一份，不收参数；窗口自己没有剪贴板权限（security.ts 拒绝一切权限请求）。
     ipcMain.handle(channels.copyIntro, (event, ...args: unknown[]) => { guard(event); if (args.length) throw new Error('复制对接提示词不需要参数。'); clipboard.writeText(INTRO_TEXT); });

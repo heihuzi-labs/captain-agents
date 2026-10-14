@@ -7,6 +7,18 @@ import { setTimeout as sleep } from 'node:timers/promises';
 export function hasCode(error: unknown, code: string) {
   return (error as NodeJS.ErrnoException)?.code === code;
 }
+// Windows：文件正被别的进程打开时，改名、读取会短暂报“没权限”或“被占用”（实测：两个进程同时读写同一份登记文件时 rename 报 EPERM）。
+// 稍等再试，最多约 3 秒。macOS 上这几个错误码是真的没权限，不重试。
+const BUSY = ['EPERM', 'EACCES', 'EBUSY'];
+export async function retryBusy<T>(fn: () => Promise<T>, windows = process.platform === 'win32', attempts = 40): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await fn(); }
+    catch (e) {
+      if (!windows || attempt >= attempts || !BUSY.some(code => hasCode(e, code))) throw e;
+      await sleep(Math.min(10 * attempt, 100));
+    }
+  }
+}
 // 只修复树内目录的属主权限；lstat 不跟随链接，文件和链接目标都不改权限。
 export async function removeTree(dir: string): Promise<void> {
   async function writableDirectories(path: string): Promise<void> {
@@ -29,12 +41,12 @@ export async function removeTree(dir: string): Promise<void> {
   }
 }
 export async function readJson<T = unknown>(file: string): Promise<T> {
-  const text = await readFile(file, 'utf8');
+  const text = await retryBusy(() => readFile(file, 'utf8'));
   try { return JSON.parse(text); }
   catch { throw new SyntaxError(`登记文件不是完整 JSON：${file}。请从备份恢复或修正文件后重试。`); }
 }
 export async function readOptional(file: string): Promise<string> {
-  try { return await readFile(file, 'utf8'); }
+  try { return await retryBusy(() => readFile(file, 'utf8')); }
   catch (e) { if (hasCode(e, 'ENOENT')) return ''; throw e; }
 }
 export async function writeAtomic(file: string, contents: string | Uint8Array) {
@@ -42,7 +54,7 @@ export async function writeAtomic(file: string, contents: string | Uint8Array) {
   try {
     const fd = await open(tmp, 'wx', 0o600);
     try { await fd.writeFile(contents); await fd.sync(); } finally { await fd.close(); }
-    await rename(tmp, file);
+    await retryBusy(() => rename(tmp, file));
   } finally { await rm(tmp, { force: true }); }
 }
 export const writeJson = (file: string, data: unknown) => writeAtomic(file, JSON.stringify(data, null, 2) + '\n');
@@ -119,6 +131,6 @@ export async function withLock<T>(dir: string, fn: () => Promise<T> | T, waitMs 
   finally {
     // 只释放自己获得的锁。
     const current = await readJson<{ pid?: number; token?: string }>(ownerFile).catch(() => null);
-    if (current?.token === owner.token) await rm(lock, { recursive: true, force: true });
+    if (current?.token === owner.token) await rm(lock, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
   }
 }

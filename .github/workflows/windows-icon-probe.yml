@@ -1,0 +1,69 @@
+name: Windows icon probe
+on:
+  push:
+    branches: ['probe-icon/**']
+permissions:
+  contents: read
+jobs:
+  icons:
+    name: icons (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+      - name: Install dependencies
+        shell: bash
+        run: |
+          npm install --global pnpm@10.33.2
+          pnpm install --frozen-lockfile
+      - name: Codex command line (official script)
+        shell: pwsh
+        env:
+          CODEX_NON_INTERACTIVE: '1'
+          CODEX_RELEASE: 0.162.1
+        run: |
+          $script = Join-Path $env:RUNNER_TEMP 'codex-install.ps1'
+          Invoke-WebRequest -Uri 'https://chatgpt.com/codex/install.ps1' -OutFile $script
+          & $script
+      - name: Codex desktop app (MSIX)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $msix = Join-Path $env:RUNNER_TEMP 'codex.msix'
+          Invoke-WebRequest -Uri 'https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/third-party/codex-windows/26.715.8383.0/OpenAI.Codex_26.715.8383.0_x64__2p2nqsd0c76g0.Msix' -OutFile $msix
+          New-Item -ItemType Directory -Force shots | Out-Null
+          tar -tf $msix | Select-String -Pattern '^app/resources/[^/]+\.(png|ico|icns)$|^assets/' | Out-File shots\msix-list.txt
+          Get-Content shots\msix-list.txt
+          Add-AppxPackage -Path $msix
+          Get-AppxPackage *OpenAI* | Format-List | Out-Host
+      - name: Probe
+        shell: bash
+        run: npx electron scripts/probe/windows-icons.cjs shots
+      - name: The platform exports the icon itself (real packageFolders)
+        shell: bash
+        run: |
+          set -euo pipefail
+          home="$RUNNER_TEMP/xa-home"; mkdir -p "$home"
+          XAGENTS_HOME="$home" node --input-type=module -e "const m = await import('./src/core/icons.ts'); await m.installIcons(); const n = await import('./src/core/native-windows.ts'); console.log(n.packageFolders('OpenAI.Codex_2p2nqsd0c76g0'));"
+          ls -l "$home/icons"
+          cmp "$home/icons/codex.png" "shots/asset-OpenAI.Codex_26.715.-Square44x44Logo.targetsize-256_altform-lightunplated.png"
+          echo "codex.png matches the package's logo"
+          mkdir -p shots/icons && cp "$home/icons/codex.png" shots/icons/
+      - name: Build and screenshot with the exported icon
+        shell: bash
+        run: |
+          npm run build
+          node test/e2e/page-shots.ts shots/pages --icons shots/icons --scales 1.25
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: icon-probe
+          path: shots/*

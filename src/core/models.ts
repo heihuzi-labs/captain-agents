@@ -6,7 +6,7 @@ export { readModelsCache } from './model-cache.ts';
 import type { DiscoveredModel, Effort, ModelsCache, ModelsConfig } from './roster.ts';
 import type { ViewModels } from './view-types.ts';
 import { codexPath } from './workers.ts';
-import { launchModels, isolationOf, isolations, vendorOf, vendors, channelNames, specFor, whos, spec, isBuiltin, isKept, modelGone, isModelName, setModelsCatalog } from './roster.ts';
+import { launchModels, isolationOf, isolations, vendorOf, vendors, channelNames, specFor, whos, spec, isBuiltin, isKept, isManualModel, modelGone, isModelName, setModelsCatalog } from './roster.ts';
 import { cleanTerminal, executeQuery, grokEnvironment } from './quota.ts';
 import type { Provider, QueryExecutor } from './quota.ts';
 import type { Who } from './job.ts';
@@ -47,7 +47,7 @@ export async function queryModels(execute: QueryExecutor = executeQuery): Promis
         : provider === 'grok' ? { file: 'grok', args: ['models'], env: grokEnvironment(), timeoutMs: 20_000 }
           : { file: 'cursor-agent', args: ['--list-models'], timeoutMs: 20_000 });
       const models = provider === 'codex' ? parseCodexModels(raw) : parseTextModels(raw, provider);
-      return { provider, models, current: current.map(item => ({ ...item, present: models.some(m => m.slug === item.model) })) };
+      return { provider, models, current: current.map(item => ({ ...item, present: isManualModel(item.who) ? null : models.some(m => m.slug === item.model) })) };
     } catch (e) { return { provider, models: [], current, error: e instanceof Error ? e.message : String(e) }; }
   }));
 }
@@ -110,7 +110,8 @@ export function viewModels(config: ModelsConfig, cache: ModelsCache | null): Vie
       const s = spec(who), extra = config.extra[who];
       merged.set(s.model, { model: s.model, shown: s.shown, efforts: [...s.efforts], fast: !!s.fast, ...(extra?.description ? { description: extra.description } : {}) });
     }
-    for (const m of latest?.models ?? []) merged.set(m.model, m);
+    // 名单以后出现同名项也不改变主人填写的强度。
+    for (const m of latest?.models ?? []) if (!known.some(w => spec(w).model === m.model && config.extra[w]?.manual === true)) merged.set(m.model, m);
     return { channel, name: channelNames[channel], icon: channel, discoverable: channel !== 'deepseek', at: latest?.at ?? null, error: latest?.error ?? null,
       models: [...merged.values()].map(m => {
         const registered = known.find(w => spec(w).model === m.model);
@@ -118,6 +119,7 @@ export function viewModels(config: ModelsConfig, cache: ModelsCache | null): Vie
         // 已经是选手的，名字用选手自己的（名单里的名字带着“1M”这类后缀，和选手表里对不上）。
         return { ...m, shown: registered ? spec(registered).shown : m.shown, who, description: m.description ?? null, kept: registered !== undefined && isKept(registered),
           builtin: registered !== undefined && isBuiltin(registered),
+          manual: registered !== undefined && config.extra[registered]?.manual === true,
           // 还没有基线（这一家第一次问到）时都不算新。
           fresh: registered === undefined && config.seen[channel] !== undefined && !config.seen[channel]!.includes(m.model),
           gone: registered !== undefined && isKept(registered) && modelGone(registered, cache) };

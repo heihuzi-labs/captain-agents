@@ -1,4 +1,9 @@
+import { codexEndpoint } from './endpoint.ts';
+import type { Endpoint } from './endpoint.ts';
+import { listedProviders } from './listed.ts';
+import type { ListedOptions } from './listed.ts';
 import { nodeCommand, externalEnvironment } from './node-runtime.ts';
+import { killTree, treeSpawn } from './platform.ts';
 import { spawn } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
@@ -36,13 +41,15 @@ export const executeQuery: QueryExecutor = command => new Promise((resolve, reje
   const replacement = process.env.XAGENTS_QUERY_EXEC;
   const env = externalEnvironment({ ...process.env, ...command.env });
   const launch = replacement ? nodeCommand([replacement, command.file, ...command.args], env) : { ...command, env };
+  const since = Date.now();
+  let exitedAt: number | undefined;
   const child = spawn(launch.file, launch.args,
-    { cwd: command.cwd, env: launch.env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    { cwd: command.cwd, env: launch.env, ...treeSpawn(), stdio: ['pipe', 'pipe', 'pipe'] });
   let output = '', settled = false, completed = false, failure: Error | undefined;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const kill = (signal: NodeJS.Signals = 'SIGKILL') => {
     if (!child.pid) return;
-    try { process.kill(-child.pid, signal); }
+    try { killTree(child.pid, signal === 'SIGTERM' ? 'SIGTERM' : 'SIGKILL', since, exitedAt); }
     // 已拿到完整结果后只是收尾：程序刚好退出、还没被收走时，macOS 对整组发信号会报 EPERM，这时当它已经退出。
     // 2026-09-30 查到的偶发失败（测试里 Cursor 替身“kill EPERM”）就是这个；没拿到结果时照旧当失败。
     catch (e) { if (!hasCode(e, 'ESRCH') && !(completed && hasCode(e, 'EPERM'))) failure ??= e as Error; }
@@ -57,6 +64,7 @@ export const executeQuery: QueryExecutor = command => new Promise((resolve, reje
     else if (completed || (!command.complete && code === 0)) resolve(output);
     else reject(new Error(command.complete ? '未读到完整查询结果' : `查询程序退出码 ${code}`));
   };
+  child.once('exit', () => { exitedAt = Date.now(); });
   child.on('error', e => { failure = e; finish(null); });
   child.on('close', finish);
   child.stdin.on('error', e => { if (!completed) stop(e); });
@@ -178,12 +186,15 @@ export function parseCursorQuota(raw: string, at: string): QuotaEntry {
   return { name: 'Cursor', icon: 'cursor', plan, at, bars, onDemand: /On-Demand\s+(.+?)(?=\s+On-demand usage|\s+View in|\s+cursor\.com|$)/.exec(body)?.[1]?.trim() };
 }
 
-export type QuotaOptions = { execute?: QueryExecutor; sessionsDir?: string; now?: Date };
+export const customCodexQuotaLine = 'Codex：接的是自定义接口，不查额度';
+export type QuotaOptions = ListedOptions & { endpoint?: Pick<Endpoint, 'custom'>; execute?: QueryExecutor; sessionsDir?: string; now?: Date };
 export async function queryQuota(options: QuotaOptions = {}): Promise<QuotaSnapshot> {
   const at = (options.now ?? new Date()).toISOString(), execute = options.execute ?? executeQuery;
   await mkdir(paths().cache, { recursive: true });
-  const previous = await readQuotaCache();
-  const providers = await Promise.all(isolations.map(async icon => {
+  const endpoint = options.endpoint ?? await codexEndpoint();
+  const previous = await readQuotaCache(endpoint);
+  const listed = await listedProviders(options);
+  const providers = await Promise.all(listed.filter(p => p.reason === null && !(p.icon === 'codex' && endpoint.custom)).map(async ({ icon }) => {
     try {
       if (icon === 'codex') {
         const directory = options.sessionsDir ?? process.env.XAGENTS_CODEX_SESSIONS;
@@ -211,20 +222,28 @@ export async function queryQuota(options: QuotaOptions = {}): Promise<QuotaSnaps
   await writeJson(join(paths().cache, 'quota.json'), snapshot);
   return snapshot;
 }
-export async function readQuotaCache(): Promise<QuotaSnapshot | null> {
+export async function readQuotaCache(endpoint?: Pick<Endpoint, 'custom'>): Promise<QuotaSnapshot | null> {
+  endpoint ??= await codexEndpoint();
   try {
     const snapshot = await readJson<QuotaSnapshot>(join(paths().cache, 'quota.json'));
-    if (!iso(snapshot?.queriedAt) || !Array.isArray(snapshot.providers) || snapshot.providers.length !== 3) return null;
-    if (!isolations.every(icon => snapshot.providers.filter(p => p?.icon === icon && Array.isArray(p.bars)).length === 1)) return null;
+    if (!iso(snapshot?.queriedAt) || !Array.isArray(snapshot.providers)) return null;
+    if (snapshot.providers.some(p => !p || !isolations.includes(p.icon) || !Array.isArray(p.bars))
+      || new Set(snapshot.providers.map(p => p.icon)).size !== snapshot.providers.length) return null;
+    // 接口切换后，旧缓存也不能带出 Codex 的数字；只读看板不写登记处。
+    if (endpoint.custom) snapshot.providers = snapshot.providers.filter(p => p.icon !== 'codex');
     if (snapshot.providers.some(p => p.bars.some(b => !b || typeof b.label !== 'string' ||
       (b.used !== null && percent(b.used) === null) || (b.reset !== null && !iso(b.reset))))) return null;
     return snapshot;
   } catch { return null; } // 缓存损坏或不可读不能挡住收尾和看板。
 }
 export async function ensureQuota(options: QuotaOptions = {}) {
-  const cached = await readQuotaCache(), now = options.now ?? new Date();
+  const endpoint = options.endpoint ?? await codexEndpoint();
+  const cached = await readQuotaCache(endpoint), now = options.now ?? new Date();
+  const listed = await listedProviders(options);
+  const icons = listed.filter(p => p.reason === null && !(p.icon === 'codex' && endpoint.custom)).map(p => p.icon);
+  if (cached) cached.providers = cached.providers.filter(p => icons.includes(p.icon));
   const age = cached ? now.getTime() - Date.parse(cached.queriedAt) : Infinity;
-  return cached && age >= 0 && age <= 600_000 ? cached : queryQuota(options);
+  return cached && age >= 0 && age <= 600_000 && icons.every(icon => cached.providers.some(p => p.icon === icon)) ? cached : queryQuota({ ...options, endpoint });
 }
 // DeepSeek 借 Codex 跑但按用量扣自己的余额，不占 Codex 的周额度；简单版不查余额（钱用完时 DeepSeek 自己会报错）。
 export function quotaPool(who: Who) {

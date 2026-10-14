@@ -20,7 +20,8 @@ async function setup(t: TestContext, installed = true) {
   const options = { home };
   const state = async (ai: string) => (await connectStatus(options)).find(s => s.ai === ai)!;
   const backups = async () => (await fs.readdir(trash).catch(() => [])).sort();
-  return { ...c, home, trash, codex, claude, options, state, backups };
+  const cli = (args: string[], extra: NodeJS.ProcessEnv = {}) => c.cli(args, { HOME: home, USERPROFILE: home, ...extra });
+  return { ...c, cli, home, trash, codex, claude, options, state, backups };
 }
 
 test('各家状态、Claude 更新、Grok 共用，不读其他配置', async t => {
@@ -75,13 +76,13 @@ for (const ending of ['', '\n', '\r\n', '\n\n', '\r']) test(`Codex 追加及撤�
   await connect('codex', c.options);
   const connected = await fs.readFile(c.codex);
   assert.equal((await c.state('codex')).state, 'on');
-  assert.equal((await fs.stat(c.codex)).mode & 0o777, 0o640);
+  if (process.platform !== 'win32') assert.equal((await fs.stat(c.codex)).mode & 0o777, 0o640);
   assert.deepEqual(await fs.readFile(join(c.trash, (await c.backups())[0], 'AGENTS.md')), original);
   await connect('codex', c.options);
   assert.equal((await c.backups()).length, 1);
   await disconnect('codex', c.options);
   assert.deepEqual(await fs.readFile(c.codex), original);
-  assert.equal((await fs.stat(c.codex)).mode & 0o777, 0o640);
+  if (process.platform !== 'win32') assert.equal((await fs.stat(c.codex)).mode & 0o777, 0o640);
   assert.deepEqual(await fs.readFile(join(c.trash, (await c.backups())[1], 'AGENTS.md')), connected);
 });
 
@@ -185,7 +186,7 @@ test('copyToTrash 使用同样的目录编号，保留源文件与权限，符�
   const b = await copyToTrash([c.codex], '接入备份-codex');
   assert.equal(basename(a), '派活工作台-接入备份-codex'); assert.equal(basename(b), '派活工作台-接入备份-codex 2');
   assert.equal(await fs.readFile(c.codex, 'utf8'), '原文');
-  assert.equal((await fs.stat(join(a, 'AGENTS.md'))).mode & 0o777, 0o640);
+  if (process.platform !== 'win32') assert.equal((await fs.stat(join(a, 'AGENTS.md'))).mode & 0o777, 0o640);
   const link = join(c.home, 'link'); await fs.symlink(c.codex, link);
   const folder = await copyToTrash([link], '链接');
   assert.equal(await fs.readlink(join(folder, 'link')), c.codex);
@@ -212,8 +213,10 @@ test('CLI 列出各家、接入、撤下、备份位置、错误参数；guide �
   assert.match((await c.cli(['--help'])).stdout, /xagents connect/);
   const guide = await c.cli(['guide']); assert.equal(guide.code, 0, guide.stderr); assert.match(guide.stdout, /接入的 AI：Claude 还没接入；Codex 还没接入；Grok 和 Claude 共用；Cursor 还没接入；DeepSeek Harness 还没接入/);
   const fakeHome = join(c.temp, '不是目录'); await fs.writeFile(fakeHome, '');
-  const failedRead = await c.cli(['guide'], { HOME: fakeHome });
-  assert.equal(failedRead.code, 0, failedRead.stderr); assert.match(failedRead.stdout, /接入状态读不出：/);
+  const failedRead = await c.cli(['guide'], { HOME: fakeHome, USERPROFILE: fakeHome });
+  assert.equal(failedRead.code, 0, failedRead.stderr);
+  // 家目录其实是个文件：macOS 上读它下面的东西报“不是目录”，算读不出；Windows 上报的是“不存在”，和没装分不开，所以只在非 Windows 上看这句话。
+  if (process.platform !== 'win32') assert.match(failedRead.stdout, /接入状态读不出：/);
 });
 
 test('主进程三条处理都先 guard，接入和撤下用可测参数校验，缺参、多参、非名单都拒绝', async () => {

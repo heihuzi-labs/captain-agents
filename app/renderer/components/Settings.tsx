@@ -8,8 +8,9 @@ import { IntroPane } from './IntroPane.tsx';
 import { defaultColumns } from '../../shared/ipc.ts';
 import type { Settings as Values, SettingsPatch } from '../../shared/ipc.ts';
 import { Button, ColorField, Modal, Segmented, Select, SettingGroup, SettingRow, SideNavLayout, Switch } from '../ui/index.ts';
+import { TRAY } from '../ui/platform.ts';
 import { policyOf, WorkerSettings } from './WorkerSettings.tsx';
-import { CliSettings, UpdateSettings } from './Update.tsx';
+import { CliSettings, IsolationSettings, PlaceSettings, UpdateSettings } from './Update.tsx';
 import { NetworkSettings } from './NetworkSettings.tsx';
 
 type Who = keyof Values['workers'];
@@ -25,7 +26,7 @@ const rememberPage = (id: string) => { try { window.localStorage.setItem(PAGE_KE
 const APPEARANCES: { id: Values['appearance']; label: string }[] = [{ id: 'system', label: '跟随系统' }, { id: 'light', label: '浅色' }, { id: 'dark', label: '深色' }];
 
 // view 里有“选手名单”和展示信息（看板数据），有了才显示“选手与模型”页；设置本身仍单独读、单独存。
-export function Settings({ close, view }: { close(): void; view?: Pick<View, 'roster' | 'workers' | 'quota' | 'storage' | 'projects' | 'models'> }) {
+export function Settings({ close, view }: { close(): void; view?: Pick<View, 'roster' | 'workers' | 'quota' | 'storage' | 'projects' | 'models' | 'unlisted'> & Partial<Pick<View, 'selfcheck'>> }) {
   const [values, setValues] = useState<Values | null>(null), [error, setError] = useState(''), [workersError, setWorkersError] = useState('');
   const latest = useRef<Values | null>(null), saved = useRef<Values | null>(null), queued = useRef<SettingsPatch | null>(null);
   const saving = useRef(false), mounted = useRef(true), [remembered, setRemembered] = useState(readPage);
@@ -92,7 +93,7 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
       if (mounted.current) setError('没能保存：' + errorReason(e));
     } finally { if (mounted.current) setNetworkSaving(false); }
   };
-  const pages = [{ id: 'general', label: '通用' }, ...(view && view.roster.length > 0 ? [{ id: 'workers', label: '选手与模型' }] : []), { id: 'network', label: '联网' }, { id: 'colors', label: '看板颜色' }, { id: 'intro', label: '接入 AI' }];
+  const pages = [{ id: 'general', label: '通用' }, ...(view ? [{ id: 'workers', label: '选手与模型' }] : []), { id: 'network', label: '联网' }, { id: 'colors', label: '看板颜色' }, { id: 'intro', label: '接入 AI' }];
   const page = pages.find(p => p.id === remembered)?.id ?? 'general';
   return <Modal size="lg" flush label="设置" title="设置" onClose={close}>
     <SideNavLayout label="设置分页" items={pages} value={page} onChange={id => { setRemembered(id); rememberPage(id); }}>
@@ -101,7 +102,7 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
         {page === 'general' && <><SettingGroup>
           <SettingRow title="外观" note="选了立刻生效" group><Segmented label="外观" items={APPEARANCES} value={values.appearance} onChange={id => void save({ appearance: id as Values['appearance'] })} /></SettingRow>
           {([
-          ['keepAwake', '有活在跑时不让电脑自动休眠', '合上盖子仍会休眠'], ['notifications', '系统通知', undefined], ['openAtLogin', '开机自动启动', '登录后自动在菜单栏出现'],
+          ['keepAwake', '有活在跑时不让电脑自动休眠', '合上盖子仍会休眠'], ['notifications', '系统通知', undefined], ['openAtLogin', '开机自动启动', `登录后自动在${TRAY}出现`],
         ] as const).map(([key, label, note]) => <SettingRow key={key} title={label} note={note}><Switch label={label} checked={values[key]} onChange={next => void save({ [key]: next })} /></SettingRow>)}</SettingGroup>
         <SettingGroup head="存储">
           <SettingRow title="自动清理旧日志" note={SLIM_NOTE(values.storage.days)}><Switch label="自动清理旧日志" checked={values.storage.slim} onChange={slim => storage({ slim })} /></SettingRow>
@@ -110,7 +111,9 @@ export function Settings({ close, view }: { close(): void; view?: Pick<View, 'ro
           {view?.storage && <p className="setting-row setting-foot">{storageLine(view.storage)}</p>}
         </SettingGroup>
         <UpdateSettings />
-        <CliSettings /></>}
+        <CliSettings />
+        <IsolationSettings selfcheck={view?.selfcheck} />
+        <PlaceSettings /></>}
         {page === 'workers' && view && <>
           <SettingGroup head="派活限制">
             <SettingRow title="同时最多跑" note="在跑的加排队的，满了就先不派新活"><Select label="同时最多跑" items={RUN_CHOICES.map(n => ({ id: String(n), label: n + ' 件' }))} value={String(values.limits.maxRunning)}

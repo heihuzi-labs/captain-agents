@@ -1,22 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { relativeInside } from '../src/core/platform.ts';
 import { probeSource, expectedProbes, globalTargets } from '../src/core/selfcheck.ts';
 import { deepseekHome, keychainDirs, SHELL_FILES, CREDENTIAL_FILES } from '../src/core/sandbox.ts';
 import type { Isolation, Probe, TempPaths } from '../src/core/selfcheck.ts';
 
-// 公用临时位置（假路径）；任务专用临时目录是 /fake/job/tmp。
-const temp: TempPaths = { 'tmp-lead': '/fake/tmp/claude-501', 'tmp-shared': '/fake/tmp', 'tmp-srt': '/fake/tmp/claude', 'tmp-user': '/fake/folders/T', 'tmp-cache': '/fake/folders/C', 'npm-logs': '/fake/home/.npm/_logs' };
+// 只有内存替身会使用这些路径；在当前平台上保持规范的绝对路径。
+const fakeHome = resolve('/fake/home'), worktree = resolve('/fake/worktree'), taskTmp = resolve('/fake/job/tmp');
+const temp: TempPaths = { 'tmp-lead': resolve('/fake/tmp/claude-501'), 'tmp-shared': resolve('/fake/tmp'), 'tmp-srt': resolve('/fake/tmp/claude'), 'tmp-user': resolve('/fake/folders/T'), 'tmp-cache': resolve('/fake/folders/C'), 'npm-logs': join(fakeHome, '.npm/_logs') };
 
 // 执行最终生成的探针，只注入内存里的文件与网络替身，绝不打开真实敏感文件或端口。
 async function runProbe(mode: Isolation, options: { linkable?: boolean; proxy?: string; status?: number; socksAuth?: number; socksMethod?: number; npmrc?: string; direct?: string; noListener?: boolean; closed?: boolean; writable?: string[]; missing?: string[]; noDelete?: boolean; tmpdir?: string; temp?: Partial<TempPaths>; keychain?: 'denied' | 'allowed' | 'other' | 'timeout' | 'missing' | 'nobinary'; readable?: string[]; env?: Record<string, string>; shell?: Record<string, 'ENOENT' | 'allowed'> } = {}) {
   const opened: string[] = [], closed: string[] = [], requests: any[] = [], packets: Buffer[] = [], written: string[] = [], removed: string[] = [], made: string[] = [], flags: unknown[] = [];
   // writable：隔离意外放行的位置（相对假家目录，或绝对路径）；missing：还不存在的位置。
-  const under = (list: string[] | undefined, path: string) => (list ?? []).some(w => { const base = w.startsWith('/') ? w : `/fake/home/${w}`; return path === base || path.startsWith(`${base}/`); });
+  const under = (list: string[] | undefined, path: string) => (list ?? []).some(w => relativeInside(isAbsolute(w) ? w : join(fakeHome, w), path) !== undefined);
   const open = (path: string) => under(options.writable, path);
   const absent = (path: string) => under(options.missing, path);
-  const shellFile = (path: string) => options.shell?.[path.replace('/fake/home/', '')];
+  const shellFile = (path: string) => Object.entries(options.shell ?? {}).find(([file]) => join(fakeHome, file) === path)?.[1];
   let output = '';
   const denied = (code = 'EPERM') => Object.assign(new Error(), { code });
   const directError = options.direct ?? 'EPERM';
@@ -63,33 +65,33 @@ async function runProbe(mode: Isolation, options: { linkable?: boolean; proxy?: 
       : how === 'timeout' ? done(Object.assign(new Error(), { killed: true, code: null, signal: 'SIGTERM' }), '')
       : how === 'nobinary' ? done(Object.assign(new Error(), { code: 'ENOENT' }), '') : done(Object.assign(new Error(), { code: 44 }), ''));
   };
-  const source = probeSource(mode, '/fake/worktree', '/fake/outside', options.noListener ? null : 1234, 'RESULT:', 'TOKEN', { ...temp, ...options.temp }, '/fake/job/tmp', '/fake/outside-file', options.keychain === 'missing' ? null : item, ['XAGENTS_SELFCHECK_API_KEY', 'XAGENTS_SELFCHECK_INNER_TOKEN']).replace(/^import .*;\n/gm, '');
+  const source = probeSource(mode, worktree, resolve('/fake/outside'), options.noListener ? null : 1234, 'RESULT:', 'TOKEN', { ...temp, ...options.temp }, taskTmp, resolve('/fake/outside-file'), options.keychain === 'missing' ? null : item, ['XAGENTS_SELFCHECK_API_KEY', 'XAGENTS_SELFCHECK_INNER_TOKEN']).replace(/^import .*;\n/gm, '');
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const handle = (path: string) => ({ close: async () => { closed.push(path); }, stat: async () => ({ ino: 42 }) });
   const unlink = async (path: string) => { if (options.noDelete) throw denied(); removed.push(path); };
   const linked: string[][] = [];
   await new AsyncFunction('writeFile', 'rm', 'readdir', 'open', 'mkdir', 'rmdir', 'stat', 'link', 'constants', 'execFile', 'homedir', 'join', 'net', 'https', 'http', 'process', 'console', source)(
-    async (path: string) => { if (!path.startsWith('/fake/worktree/') && !path.startsWith('/fake/job/tmp/')) throw denied(); written.push(path); },
+    async (path: string) => { if (!under([worktree, taskTmp], path)) throw denied(); written.push(path); },
     unlink, async (path: string) => { opened.push(path); if ((options.readable ?? []).includes(path)) return []; const s = shellFile(path); if (s === 'ENOENT') throw denied('ENOENT'); if (s === 'allowed') throw denied('ENOTDIR'); throw denied(); },
     async (path: string, flag?: string | number) => {
       opened.push(path); flags.push([path, flag]);
       const s = shellFile(path); if (s === 'ENOENT') throw denied('ENOENT'); if (s === 'allowed') return handle(path);
-      if (path.endsWith('/.npmrc') && options.npmrc === 'allowed') return handle(path);
-      if (flag === 'wx' && absent(path.slice(0, path.lastIndexOf('/')))) throw denied('ENOENT');
+      if (path === join(fakeHome, '.npmrc') && options.npmrc === 'allowed') return handle(path);
+      if (flag === 'wx' && absent(dirname(path))) throw denied('ENOENT');
       if (flag !== 'wx' && flag !== 'r' && absent(path)) throw denied('ENOENT');
       if (open(path)) { if (flag === 'wx') written.push(path); return handle(path); }
-      throw denied(path.endsWith('/.npmrc') ? options.npmrc : undefined);
+      throw denied(path === join(fakeHome, '.npmrc') ? options.npmrc : undefined);
     },
     async (path: string) => { if (!open(path)) throw denied(); made.push(path); },
     unlink, async () => ({ ino: 7 }),
     async (from: string, to: string) => { if (!options.linkable) throw denied(); linked.push([from, to]); },
     { O_WRONLY: 1 }, execFile,
-    () => '/fake/home', join, net, https, http,
-    { env: { TMPDIR: options.tmpdir ?? '/fake/job/tmp/', ...options.env, ...(options.proxy ? { HTTPS_PROXY: options.proxy, HTTP_PROXY: options.proxy } : {}) } },
+    () => fakeHome, join, net, https, http,
+    { env: { TMPDIR: options.tmpdir ?? taskTmp + '/', ...options.env, ...(options.proxy ? { HTTPS_PROXY: options.proxy, HTTP_PROXY: options.proxy } : {}) } },
     { log: (line: string) => { output = line; } },
   );
   const probes = JSON.parse(output.slice('RESULT:'.length)) as Probe[];
-  assert.deepEqual(probes.map(p => p.name).sort(), expectedProbes(mode).sort());
+  assert.deepEqual(probes.map(p => p.name).sort(), expectedProbes(mode, false).sort());
   assert.ok(!output.includes('secret-password'));
   assert.ok(!output.includes(item.value), '探针结果里不能有钥匙串条目的值');
   return { probes, opened, closed, requests, packets, written, removed, made, flags, linked, executed, item };
@@ -97,16 +99,16 @@ async function runProbe(mode: Isolation, options: { linkable?: boolean; proxy?: 
 
 for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 最终探针测 SSH、npmrc 和规定的登录文件，文件缺失算拿不准`, async () => {
   const { probes, opened } = await runProbe(mode, { npmrc: 'ENOENT' });
-  assert.ok(opened.includes('/fake/home/.npmrc')); assert.ok(opened.includes('/fake/home/.ssh'));
-  for (const name of expectedProbes(mode).filter(n => n.startsWith('login-'))) {
-    const path = { 'login-codex': '/fake/home/.codex/auth.json', 'login-grok': '/fake/home/.grok/auth.json', 'login-cursor': '/fake/home/.cursor/cli-config.json', 'login-deepseek': deepseekHome() }[name];
+  assert.ok(opened.includes(join(fakeHome, '.npmrc'))); assert.ok(opened.includes(join(fakeHome, '.ssh')));
+  for (const name of expectedProbes(mode, false).filter(n => n.startsWith('login-'))) {
+    const path = { 'login-codex': join(fakeHome, '.codex/auth.json'), 'login-grok': join(fakeHome, '.grok/auth.json'), 'login-cursor': join(fakeHome, '.cursor/cli-config.json'), 'login-deepseek': deepseekHome() }[name];
     assert.ok(opened.includes(path!), name);
     assert.equal(probes.find(p => p.name === name)!.outcome, 'denied');
   }
   assert.equal(probes.find(p => p.name === 'npmrc')!.outcome, 'unknown');
   const allowed = await runProbe(mode, { npmrc: 'allowed', noListener: true });
   assert.equal(allowed.probes.find(p => p.name === 'npmrc')!.outcome, 'allowed');
-  assert.deepEqual(allowed.closed, ['/fake/home/.npmrc']);
+  assert.deepEqual(allowed.closed, [join(fakeHome, '.npmrc')]);
   assert.equal(allowed.probes.find(p => p.name === 'listener')!.outcome, 'unknown');
 });
 
@@ -114,16 +116,16 @@ for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 最
 for (const mode of ['codex', 'cursor'] as Isolation[]) test(`${mode} 没登录 Grok 时按所在文件夹判定`, async () => {
   const missing = { '.grok/auth.json': 'ENOENT' } as Record<string, 'ENOENT'>;
   const blocked = await runProbe(mode, { shell: missing });
-  assert.ok(blocked.opened.includes('/fake/home/.grok'));
+  assert.ok(blocked.opened.includes(join(fakeHome, '.grok')));
   assert.equal(blocked.probes.find(p => p.name === 'login-grok')!.outcome, 'denied');
-  const listable = await runProbe(mode, { shell: missing, readable: ['/fake/home/.grok'] });
+  const listable = await runProbe(mode, { shell: missing, readable: [join(fakeHome, '.grok')] });
   assert.equal(listable.probes.find(p => p.name === 'login-grok')!.outcome, 'unknown');
   const noDir = await runProbe(mode, { shell: { ...missing, '.grok': 'ENOENT' } });
   assert.equal(noDir.probes.find(p => p.name === 'login-grok')!.outcome, 'unknown');
   // 文件在、被挡住：行为不变，也不去列文件夹。
   const present = await runProbe(mode);
   assert.equal(present.probes.find(p => p.name === 'login-grok')!.outcome, 'denied');
-  assert.ok(!present.opened.includes('/fake/home/.grok'));
+  assert.ok(!present.opened.includes(join(fakeHome, '.grok')));
 });
 
 for (const mode of ['grok', 'cursor'] as Isolation[]) test(`${mode} HTTP 代理发送 URL 解码后的 Basic 认证，403 挡住，407 拿不准，200 可通`, async () => {
@@ -181,22 +183,22 @@ test('SOCKS5 认证失败、方法不匹配、连接关闭都拿不准，不发�
 for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 全局配置探针：挡住算通过；意外能写就报出来并马上删掉，已有文件不改内容`, async () => {
   const blocked = await runProbe(mode);
   for (const t of globalTargets) assert.equal(blocked.probes.find(p => p.name === t.name)!.outcome, 'denied', t.name);
-  assert.deepEqual(blocked.written, ['/fake/worktree/write-probe', '/fake/job/tmp/write-probe']);
+  assert.deepEqual(blocked.written, [join(worktree, 'write-probe'), join(taskTmp, 'write-probe')]);
   const leaky = await runProbe(mode, { writable: ['.cursor', '.grok/skills'], missing: ['.cursor/hooks.json', '.cursor/rules'] });
   const outcome = (name: string) => leaky.probes.find(p => p.name === name)!.outcome;
   for (const name of ['cursor-hooks', 'cursor-rules', 'cursor-skills', 'cursor-config', 'grok-skills']) assert.equal(outcome(name), 'allowed', name);
   for (const name of ['grok-agents', 'grok-hooks', 'claude-config', 'agents-skills']) assert.equal(outcome(name), 'denied', name);
   // 不存在的钩子文件按真实路径建出再删；不存在的目录建出再删；已有目录里只建随机名文件；已有文件只以读写方式打开。
-  assert.ok(leaky.written.includes('/fake/home/.cursor/hooks.json') && leaky.removed.includes('/fake/home/.cursor/hooks.json'));
-  assert.ok(leaky.made.includes('/fake/home/.cursor/rules') && leaky.removed.includes('/fake/home/.cursor/rules'));
-  assert.ok(leaky.written.includes('/fake/home/.grok/skills/TOKEN') && leaky.removed.includes('/fake/home/.grok/skills/TOKEN'));
-  assert.ok(!leaky.written.includes('/fake/home/.cursor/cli-config.json'));
+  assert.ok(leaky.written.includes(join(fakeHome, '.cursor/hooks.json')) && leaky.removed.includes(join(fakeHome, '.cursor/hooks.json')));
+  assert.ok(leaky.made.includes(join(fakeHome, '.cursor/rules')) && leaky.removed.includes(join(fakeHome, '.cursor/rules')));
+  assert.ok(leaky.written.includes(join(fakeHome, '.grok/skills/TOKEN')) && leaky.removed.includes(join(fakeHome, '.grok/skills/TOKEN')));
+  assert.ok(!leaky.written.includes(join(fakeHome, '.cursor/cli-config.json')));
   // 已有文件用只写方式打开（不截断、不新建），不用读写方式：读被禁时不能冒充写被挡。
-  assert.deepEqual(leaky.flags.filter(([path, flag]: any) => path === '/fake/home/.cursor/cli-config.json' && flag !== 'r'), [['/fake/home/.cursor/cli-config.json', 1]]);
+  assert.deepEqual(leaky.flags.filter(([path, flag]: any) => path === join(fakeHome, '.cursor/cli-config.json') && flag !== 'r'), [[join(fakeHome, '.cursor/cli-config.json'), 1]]);
   assert.ok(!leaky.flags.some(([, flag]: any) => flag === 'r+'));
   // 建出来的东西连同文件编号报给外面。
-  assert.deepEqual(leaky.probes.find(p => p.name === 'cursor-hooks')!.created, [{ path: '/fake/home/.cursor/hooks.json', dir: false, ino: 42 }]);
-  assert.deepEqual(leaky.probes.find(p => p.name === 'cursor-rules')!.created, [{ path: '/fake/home/.cursor/rules', dir: true, ino: 7 }]);
+  assert.deepEqual(leaky.probes.find(p => p.name === 'cursor-hooks')!.created, [{ path: join(fakeHome, '.cursor/hooks.json'), dir: false, ino: 42 }]);
+  assert.deepEqual(leaky.probes.find(p => p.name === 'cursor-rules')!.created, [{ path: join(fakeHome, '.cursor/rules'), dir: true, ino: 7 }]);
   // 写成了但删不掉：仍然是放行，原因里写明清理失败。
   const stuck = await runProbe(mode, { writable: ['.cursor', '.grok/skills'], missing: ['.cursor/hooks.json', '.cursor/rules'], noDelete: true });
   for (const name of ['cursor-hooks', 'cursor-rules', 'grok-skills']) {
@@ -210,15 +212,15 @@ for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 临
   assert.equal(blocked.probes.find(p => p.name === 'tmpdir')!.outcome, 'allowed');
   for (const name of Object.keys(temp)) assert.equal(blocked.probes.find(p => p.name === name)!.outcome, 'denied', name);
   // 在已有目录里只建随机名文件，写成了就算放行并马上删掉。
-  const leaky = await runProbe(mode, { writable: ['/fake/tmp'] });
+  const leaky = await runProbe(mode, { writable: [resolve('/fake/tmp')] });
   for (const name of ['tmp-lead', 'tmp-shared', 'tmp-srt']) assert.equal(leaky.probes.find(p => p.name === name)!.outcome, 'allowed', name);
   assert.equal(leaky.probes.find(p => p.name === 'tmp-user')!.outcome, 'denied');
-  assert.ok(leaky.written.includes('/fake/tmp/TOKEN') && leaky.removed.includes('/fake/tmp/TOKEN'));
+  assert.ok(leaky.written.includes(resolve('/fake/tmp/TOKEN')) && leaky.removed.includes(resolve('/fake/tmp/TOKEN')));
   // 负责人会话的临时目录还不存在：按真实路径建，挡住才算通过。
-  const missing = await runProbe(mode, { missing: ['/fake/tmp/claude-501'] });
+  const missing = await runProbe(mode, { missing: [resolve('/fake/tmp/claude-501')] });
   assert.equal(missing.probes.find(p => p.name === 'tmp-lead')!.outcome, 'denied');
   // TMPDIR 没指向任务的 tmp、查不到的位置，都算拿不准。
-  const other = await runProbe(mode, { tmpdir: '/fake/tmp', temp: { 'tmp-user': null } });
+  const other = await runProbe(mode, { tmpdir: resolve('/fake/tmp'), temp: { 'tmp-user': null } });
   assert.equal(other.probes.find(p => p.name === 'tmpdir')!.outcome, 'unknown');
   assert.equal(other.probes.find(p => p.name === 'tmp-user')!.outcome, 'unknown');
 });
@@ -228,18 +230,18 @@ test('硬链接探针：在任务 tmp 里给外面的文件建硬链接，挡住
   assert.equal(blocked.probes.find(p => p.name === 'hardlink')!.outcome, 'denied');
   const leaky = await runProbe('codex', { linkable: true });
   assert.equal(leaky.probes.find(p => p.name === 'hardlink')!.outcome, 'allowed');
-  assert.deepEqual(leaky.linked, [['/fake/outside-file', '/fake/job/tmp/TOKEN']]);
-  assert.ok(leaky.removed.includes('/fake/job/tmp/TOKEN'));
+  assert.deepEqual(leaky.linked, [[resolve('/fake/outside-file'), join(taskTmp, 'TOKEN')]]);
+  assert.ok(leaky.removed.includes(join(taskTmp, 'TOKEN')));
 });
 test('公用临时目录里探针建出的固定名目录不删，只报出来；随机名文件照删', async () => {
-  const r = await runProbe('cursor', { writable: ['/fake/tmp'], missing: ['/fake/tmp/claude-501'] });
+  const r = await runProbe('cursor', { writable: [resolve('/fake/tmp')], missing: [resolve('/fake/tmp/claude-501')] });
   const lead = r.probes.find(p => p.name === 'tmp-lead')!;
   assert.equal(lead.outcome, 'allowed'); assert.match(lead.reason, /建出的公用目录没有删/);
-  assert.ok(r.made.includes('/fake/tmp/claude-501') && !r.removed.includes('/fake/tmp/claude-501'));
-  assert.ok(r.removed.includes('/fake/tmp/TOKEN'));
+  assert.ok(r.made.includes(resolve('/fake/tmp/claude-501')) && !r.removed.includes(resolve('/fake/tmp/claude-501')));
+  assert.ok(r.removed.includes(resolve('/fake/tmp/TOKEN')));
 });
 
-for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 钥匙串探针：security 读不出、两个钥匙串文件夹列不出才算挡住；结果里不带条目的值`, async () => {
+for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 钥匙串探针：security 读不出、两个钥匙串文件夹列不出才算挡住；结果里不带条目的值`, { skip: process.platform === 'win32' ? '只属于 macOS：security 命令和钥匙串探针' : false }, async () => {
   const outcome = (r: Awaited<ReturnType<typeof runProbe>>, name: string) => r.probes.find(p => p.name === name)!;
   const blocked = await runProbe(mode);
   assert.deepEqual(blocked.executed, [{ file: '/usr/bin/security', args: ['find-generic-password', '-a', blocked.item.account, '-s', blocked.item.service, '-w'] }]);
@@ -256,7 +258,7 @@ for (const mode of ['codex', 'grok', 'cursor'] as Isolation[]) test(`${mode} 钥
 });
 
 test('环境变量探针：看不到假变量、也没有别的带密钥字样的变量才算挡住；只报名字不报值', async () => {
-  const plain = await runProbe('codex', { env: { PATH: '/bin', HOME: '/fake/home', HTTPS_PROXY_HOST: 'x' } });
+  const plain = await runProbe('codex', { env: { PATH: '/bin', HOME: fakeHome, HTTPS_PROXY_HOST: 'x' } });
   assert.deepEqual(plain.probes.find(p => p.name === 'env-secret'), { name: 'env-secret', outcome: 'denied', reason: '看不到' });
   for (const env of [{ XAGENTS_SELFCHECK_API_KEY: 'value-one' }, { XAGENTS_SELFCHECK_INNER_TOKEN: 'value-two' }, { Other_Service_Api_Key: 'value-three' }, { SSH_AUTH_SOCK: 'value-four' }]) {
     const p = (await runProbe('grok', { env })).probes.find(p => p.name === 'env-secret')!;
@@ -269,7 +271,7 @@ test('终端配置文件探针：本机有的都挡住才算通过，本机没�
   const shell = (o: Probe[]) => o.find(p => p.name === 'shell-files')!;
   const all = shell((await runProbe('grok')).probes);
   assert.equal(all.outcome, 'denied'); assert.match(all.reason, /挡住 12 个/);
-  for (const f of SHELL_FILES) assert.ok((await runProbe('codex')).opened.includes(`/fake/home/${f}`), f);
+  for (const f of SHELL_FILES) assert.ok((await runProbe('codex')).opened.includes(join(fakeHome, f)), f);
   const some = shell((await runProbe('cursor', { shell: { '.zlogin': 'ENOENT', '.bash_login': 'ENOENT' } })).probes);
   assert.equal(some.outcome, 'denied'); assert.match(some.reason, /本机没有 2 个/);
   const leak = shell((await runProbe('codex', { shell: { '.bashrc': 'allowed' } })).probes);
@@ -280,7 +282,7 @@ test('凭据文件探针：~/.netrc、~/.docker 等本机有的都挡住才算�
   const cred = (o: Probe[]) => o.find(p => p.name === 'credential-files')!;
   const all = await runProbe('grok');
   assert.equal(cred(all.probes).outcome, 'denied'); assert.match(cred(all.probes).reason, new RegExp(`挡住 ${CREDENTIAL_FILES.length} 个`));
-  for (const f of CREDENTIAL_FILES) assert.ok(all.opened.includes(`/fake/home/${f}`), f);
+  for (const f of CREDENTIAL_FILES) assert.ok(all.opened.includes(join(fakeHome, f)), f);
   for (const f of ['.netrc', '.git-credentials', '.docker', '.kube', '.config/gcloud', '.azure', '.pypirc', '.gem/credentials', '.cargo/credentials.toml', '.terraform.d/credentials.tfrc.json', '.dsh']) assert.ok(CREDENTIAL_FILES.includes(f), f);
   const some = cred((await runProbe('codex', { shell: { '.pypirc': 'ENOENT', '.azure': 'ENOENT' } })).probes);
   assert.equal(some.outcome, 'denied'); assert.match(some.reason, /本机没有 2 个/);
