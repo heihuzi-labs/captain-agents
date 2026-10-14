@@ -10,6 +10,11 @@ import type { Job } from '../src/core/job.ts';
 
 export const root = resolve(import.meta.dirname, '..');
 export const fixture = join(root, 'test/fixtures/worker.ts');
+// Windows 上不按记下的进程号补刀：号回收得很快，过后再按号结束会误伤别的测试的进程。
+export function killLeftover(pid: number | undefined) {
+  if (!pid || process.platform === 'win32') return;
+  try { process.kill(pid, 'SIGKILL'); } catch { /* 已经没了 */ }
+}
 export async function until<T>(fn: () => Promise<T>, accept: (value: T) => boolean = Boolean, timeout = 12000): Promise<T> {
   const end = Date.now() + timeout;
   while (true) {
@@ -32,7 +37,7 @@ export async function context(t: TestContext, repository = true) {
   const home = join(temp, 'registry'), repo = join(temp, 'repo with spaces');
   await mkdir(home); await mkdir(repo);
   await mkdir(join(temp, 'user-home'));
-  const env = { ...process.env, XAGENTS_TRASH: join(temp, 'trash'), XAGENTS_HOME: home, XAGENTS_CAFFEINATE: join(temp, 'no-caffeinate'), XAGENTS_FAKE_WORKER: fixture, XAGENTS_APPLICATIONS: join(temp, 'Applications'), XAGENTS_MAX_RUNNING: '6', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: '测试', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: '测试', GIT_COMMITTER_EMAIL: 'test@example.invalid' };
+  const env = { ...process.env, XAGENTS_TRASH: join(temp, 'trash'), XAGENTS_HOME: home, CODEX_HOME: join(temp, 'codex-config'), XAGENTS_CAFFEINATE: join(temp, 'no-caffeinate'), XAGENTS_FAKE_WORKER: fixture, XAGENTS_APPLICATIONS: join(temp, 'Applications'), XAGENTS_MAX_RUNNING: '6', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: '测试', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: '测试', GIT_COMMITTER_EMAIL: 'test@example.invalid' };
   delete env.XAGENTS_SRT;
   const cli = (args: string[], extra: NodeJS.ProcessEnv = {}, cwd = repo) => exec(process.execPath, [join(root, 'src/cli/cli.ts'), ...args], cwd, { ...env, ...(['guide', 'connect'].includes(args[0]) ? { HOME: join(temp, 'user-home') } : {}), ...extra });
   const git = async (args: string[]) => {
@@ -47,13 +52,23 @@ export async function context(t: TestContext, repository = true) {
     return rows.filter(Boolean);
   };
   t.after(async () => {
-    for (const job of await jobs()) {
-      try { if (job.setupPid) process.kill(-job.setupPid, 'SIGKILL'); } catch {}
-      try { if (job.workerPid) process.kill(-job.workerPid, 'SIGKILL'); } catch {}
+    // Windows 上进程号回收得很快：已经结束的活，记录里的进程号早就不是它的了，照着去结束会误伤同时在跑的别的测试
+    // （流水线上实测到：随机某条测试里的活突然“失联”）。所以那里只收还没结束的活，而且按进程树加创建时间来认。
+    const windows = process.platform === 'win32';
+    const live = async () => (await jobs()).filter(job => !windows || ['queued', 'running'].includes(job.state));
+    for (const job of await live()) {
+      if (windows) {
+        const { killTree } = await import('../src/core/platform.ts');
+        try { killTree(job.setupPid, 'SIGKILL', job.setupSince); } catch {}
+        try { killTree(job.workerPid, 'SIGKILL', job.workerSince); } catch {}
+      } else {
+        try { if (job.setupPid) process.kill(-job.setupPid, 'SIGKILL'); } catch {}
+        try { if (job.workerPid) process.kill(-job.workerPid, 'SIGKILL'); } catch {}
+      }
       try { if (job.pid) process.kill(job.pid, 'SIGTERM'); } catch {}
     }
     await sleep(150);
-    for (const job of await jobs()) { try { if (job.pid) process.kill(job.pid, 'SIGKILL'); } catch {} }
+    for (const job of await live()) { try { if (job.pid) process.kill(job.pid, 'SIGKILL'); } catch {} }
     await rm(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
   let base = '';
@@ -74,7 +89,7 @@ export async function context(t: TestContext, repository = true) {
 export async function desktopView(home: string): Promise<View> {
   const result = await exec(process.execPath, ['--input-type=module', '-e',
     "import { buildView } from './src/core/view.ts'; console.log(JSON.stringify(await buildView()));"], root,
-    { ...process.env, XAGENTS_HOME: home });
+    { ...process.env, XAGENTS_HOME: home, CODEX_HOME: join(home, 'codex-config'), XAGENTS_FAKE_WORKER: fixture });
   assert.equal(result.code, 0, result.stderr);
   return JSON.parse(result.stdout) as View;
 }

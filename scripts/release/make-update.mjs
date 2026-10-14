@@ -5,9 +5,10 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { httpsUrl, MAX_PACKAGE_SIZE, validateFeed, validateLegacyFeed, verifyFeed, verifyLegacyFeed } from '../../app/main/update-feed.ts';
 
-async function digest(file) {
+async function digest(file, platform) {
   const info = await stat(file);
-  if (!info.isFile() || !file.toLowerCase().endsWith('.zip') || info.size <= 0 || info.size > MAX_PACKAGE_SIZE) throw new Error('安装包必须是 1 GB 以内的非空 ZIP 文件。');
+  const extension = platform.startsWith('win32-') ? '.exe' : '.zip';
+  if (!info.isFile() || !file.toLowerCase().endsWith(extension) || info.size <= 0 || info.size > MAX_PACKAGE_SIZE) throw new Error(`安装包必须是 1 GB 以内的非空 ${extension} 文件。`);
   let size = 0;
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) { size += chunk.length; if (size > MAX_PACKAGE_SIZE) throw new Error('安装包超过 1 GB。'); hash.update(chunk); }
@@ -37,9 +38,9 @@ export async function makeUpdate(options) {
   for (const { platform, file } of options.packages) {
     if (Object.hasOwn(packages, platform) || !/^[a-z][a-z0-9]{0,19}-[a-z0-9]{1,20}$/.test(platform)) throw new Error('安装包平台重复或格式不对。');
     const name = encodeURIComponent(basename(file));
-    if (names.has(name)) throw new Error('不同平台的 ZIP 文件名不能相同。');
+    if (names.has(name)) throw new Error('不同平台的安装包文件名不能相同。');
     names.add(name);
-    const info = await digest(file);
+    const info = await digest(file, platform);
     packages[platform] = { urls: prefixes.map(prefix => new URL(name, prefix).href), ...info };
     if (legacyPrefix) legacyPackages[platform] = { url: new URL(name, legacyPrefix).href, ...info };
   }
@@ -53,7 +54,7 @@ export async function makeUpdate(options) {
     output.verify(output.text, publicKey);
   }
   for (const { platform, file } of options.packages) {
-    const verified = await digest(file);
+    const verified = await digest(file, platform);
     if (verified.size !== packages[platform].size || verified.sha256 !== packages[platform].sha256) throw new Error('签名后复核发现安装包改变了，请重新生成清单。');
   }
   // 完整写入再原子发布；link 不覆盖已有清单，发错路径也不会悄悄破坏上一版。

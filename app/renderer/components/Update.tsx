@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { AppInfo, CliStatus } from '../../shared/ipc.ts';
+import { isWindows } from '../ui/platform.ts';
+import type { AppInfo, CliStatus, Places } from '../../shared/ipc.ts';
 import { errorReason } from '../lib/errors.ts';
 import { fmtTime } from '../lib/board.ts';
 import { checkUpdate, closeUpdateDialog, downloadUpdate, megabytes, openUpdateDialog, percent, pillText, restartForUpdate, setAutoCheck, useUpdate } from '../lib/update.ts';
@@ -41,7 +42,7 @@ export function UpdateDialog() {
       </>}
       {state.phase === 'ready' && <>
         <div className="update-head"><b>{state.version} 已下载并核对无误</b></div>
-        <p className="muted update-tip">重启只是关掉窗口再打开，在跑的活和群聊不受影响。</p>
+        <p className="muted update-tip">{isWindows ? '安装时应用会关掉，装好后自动打开；有活在跑时要等它们做完。' : '重启只是关掉窗口再打开，在跑的活和群聊不受影响。'}</p>
       </>}
       {state.phase === 'error' && <p role="alert" className="notice notice-bad">{state.message}</p>}
       {state.phase === 'checking' && <p className="muted" role="status">在检查…</p>}
@@ -85,10 +86,12 @@ export function UpdateSettings() {
 }
 
 // 设置 → 通用 →“命令行”一组：终端里的 xagents 是不是这个应用里的那一份（docs/ui-spec.md 第 18 节）。开发版不出现。
+// 先说清这个命令是什么、给谁用的，再说现状：主人不需要自己敲它。
+const CLI_WHAT = '负责派活的 AI（比如 Claude、Codex）在终端里用 xagents 这个命令派活、查进度。';
 const CLI_NOTE: Record<Exclude<CliStatus, 'unavailable'>, string> = {
-  installed: '已安装。终端里的 xagents 用的就是这个应用里的平台，以后跟着应用一起更新。',
-  missing: '还没安装。装好后在终端里就能用 xagents，以后跟着应用一起更新。',
-  other: '~/.local/bin/xagents 已经有一个别的（比如链到源码目录的开发版）。替换后改用这个应用里的那一份。',
+  installed: CLI_WHAT + '已安装，用的就是这个应用里的那一份，以后跟着应用一起更新。',
+  missing: CLI_WHAT + '现在还没安装，装上它们才能用。',
+  other: isWindows ? CLI_WHAT + '终端里已经有一个别的 xagents 命令。替换后改用这个应用里的那一份。' : '~/.local/bin/xagents 已经有一个别的（比如链到源码目录的开发版）。替换后改用这个应用里的那一份。',
 };
 export function CliSettings() {
   const [status, setStatus] = useState<CliStatus | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [confirm, setConfirm] = useState(false);
@@ -105,10 +108,48 @@ export function CliSettings() {
     finally { setBusy(false); }
   };
   return <SettingGroup head="命令行" label="命令行">
-    <SettingRow title="终端里的 xagents" note={error || CLI_NOTE[status]} group>
-      {status === 'missing' && <Button size="sm" disabled={busy} onClick={() => void install(false)}>安装</Button>}
+    <SettingRow title="给 AI 用的 xagents 命令" note={error || CLI_NOTE[status]} group>
+      {status === 'missing' && <Button size="sm" variant="primary" disabled={busy} onClick={() => void install(false)}>安装</Button>}
       {status === 'other' && <Button size="sm" disabled={busy} onClick={() => setConfirm(true)}>替换…</Button>}
     </SettingRow>
-    {confirm && <ConfirmDialog tone="primary" busy={busy} message="把现有的 ~/.local/bin/xagents 换成这个应用里的那一份？" detail="原来那个文件会被覆盖；如果它是你自己链到源码目录的开发版，换了以后终端里用的就不再是源码目录里的代码。" confirmLabel="替换" onCancel={() => setConfirm(false)} onConfirm={() => void install(true)} />}
+    {confirm && <ConfirmDialog tone="primary" busy={busy} message={isWindows ? "把现有的 xagents 命令换成这个应用里的那一份？" : "把现有的 ~/.local/bin/xagents 换成这个应用里的那一份？"} detail="原来那个文件会被覆盖；如果它是你自己链到源码目录的开发版，换了以后终端里用的就不再是源码目录里的代码。" confirmLabel="替换" onCancel={() => setConfirm(false)} onConfirm={() => void install(true)} />}
+  </SettingGroup>;
+}
+
+// 设置 → 通用 →“位置”一组，只在 Windows 上（docs/ui-spec.md 第 10 节）：安装时可以选位置，装完要看得到程序和数据各在哪。
+const PLACES: [keyof Places, string][] = [['app', '程序'], ['data', '数据']];
+export function PlaceSettings() {
+  const [places, setPlaces] = useState<Places | null>(null), [error, setError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    if (isWindows && typeof window.xa?.places === 'function') void window.xa.places().then(p => { if (alive) setPlaces(p); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!places) return null;
+  const open = (which: keyof Places) => { setError(''); void window.xa.openPlace(which).catch(e => setError('没能打开：' + errorReason(e))); };
+  return <SettingGroup head="位置" label="位置">
+    {PLACES.map(([which, title]) => <SettingRow key={which} title={title} note={places[which]} group><Button size="sm" onClick={() => open(which)}>打开文件夹</Button></SettingRow>)}
+    {error && <p role="alert" className="setting-row setting-foot">{error}</p>}
+  </SettingGroup>;
+}
+
+// 设置 → 通用 →“加固”一组，只在 Windows 上（docs/ui-spec.md 第 10 节）。加固是可选的：不装也能派活，选手用 Codex 自带的保护。
+// 想装的在这里点一下（系统弹管理员确认框），装完自动检查；不用主人自己开终端。
+export const HARDEN_WHAT = '不装也能派活：选手用 Codex 自带的保护，只能改这件活自己的那份副本。装上加固以后，另外保证它读不到钥匙、联网关着时上不了网。';
+export function IsolationSettings({ selfcheck }: { selfcheck: { ok: boolean | null; at?: string | null; note: string } | undefined }) {
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  if (!isWindows || !selfcheck || typeof window.xa?.isolationFix !== 'function') return null;
+  const fine = selfcheck.ok === true;
+  const run = () => {
+    setBusy(true); setError('');
+    void window.xa.isolationFix().catch(e => setError((fine ? '没能检查：' : '没能装好：') + errorReason(e))).finally(() => setBusy(false));
+  };
+  // 没装过只说明它是什么；装过但没通过的，把没过的原话接在后面（没过也不影响派活）。
+  const state = fine ? '已装好，检查通过：' + selfcheck.note : selfcheck.ok === false ? HARDEN_WHAT + '上次检查没通过，现在用的仍是 Codex 自带的保护：' + selfcheck.note : HARDEN_WHAT;
+  const note = busy ? (fine ? '正在检查…' : '正在安装和检查…系统弹出确认框时请点“是”') : error || state;
+  return <SettingGroup head="加固（可选）" label="加固">
+    <SettingRow title="选手的加固隔离" note={note} group>
+      <Button size="sm" disabled={busy} onClick={run}>{fine ? '重新检查' : '安装并检查'}</Button>
+    </SettingRow>
   </SettingGroup>;
 }

@@ -3,7 +3,7 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { codexPermissions, jobTmpDir, sandbox } from '../src/core/sandbox.ts';
 import { command, selection, KEY_VARS, srtPath } from '../src/core/workers.ts';
 import { workerEnv } from '../src/core/env.ts';
@@ -20,7 +20,7 @@ import { context, root, desktopView } from './helpers.ts';
 
 const project = { denyReadExtra: ['private-dir'], denyReadHome: ['custom-secrets'] };
 function job(who: Who = 'codex'): Job {
-  return { ...selection(`${who}:high`), id: '1009-network', batch: 'batch', project: '测试', repo: '/repo', worktree: '/repo/wt',
+  return { ...selection(`${who}:high`), id: '1009-network', batch: 'batch', project: '测试', repo: resolve('/repo'), worktree: resolve('/repo/wt'),
     branch: 'xa/test', base: '123', mode: 'workspace-write', kind: '实现', title: '测试', summary: '验证联网', state: 'queued', created: new Date().toISOString() };
 }
 async function setup(t: TestContext, repository = false) {
@@ -34,7 +34,7 @@ async function setup(t: TestContext, repository = false) {
   return c;
 }
 
-test('关网的 Codex 权限表和 srt 设置与改动前快照逐字相同；开网仅改网络', async t => {
+test('关网的 Codex 权限表和 srt 设置与改动前快照逐字相同；开网仅改网络', { skip: process.platform === 'win32' ? '只属于 macOS：关网权限表与 srt 设置的 POSIX 路径逐字快照' : false }, async t => {
   const c = await setup(t);
   // 快照在本次修改前生成；只替换家目录和登记处，保留原字节次序。
   const baseline = JSON.parse(await readFile(join(root, 'test/fixtures/network-off.json'), 'utf8'));
@@ -86,7 +86,7 @@ test('所有选手开网时禁用系统 CA 并使用任务 npm 缓存；关网�
   }
 });
 
-test('srt 库实际生成不限网络的 macOS 规则，文件隔离仍在；不监听、不执行选手', { skip: process.platform !== 'darwin' }, async t => {
+test('srt 库实际生成不限网络的 macOS 规则，文件隔离仍在；不监听、不执行选手', { skip: process.platform === 'win32' ? '只属于 macOS：检查 sandbox-exec 生成的规则' : false }, async t => {
   const c = await setup(t);
   const srt = await srtPath();
   for (const who of ['grok', 'cursor-sonnet'] as const) for (const mode of ['workspace-write', 'read-only'] as const) {

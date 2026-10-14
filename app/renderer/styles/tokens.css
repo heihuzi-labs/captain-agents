@@ -13,7 +13,7 @@
   --batch-1: #7c5cff; --batch-2: #0f9d9a; --batch-3: #d9468f; --batch-4: #4f5bd5; --batch-5: #6f8f1f; --batch-6: #8a5a9e;
   /* 选手字母圆标（图标缺失时的兜底） */
   --brand-codex: #4b5cf0; --brand-grok: #111111; --brand-cursor: #111111; --brand-claude: #d97757; --brand-deepseek: #4d6bfe; --brand-other: #888888;
-  --on-brand: #ffffff; --on-accent: #ffffff; --icon-ring: transparent;
+  --on-brand: #ffffff; --on-accent: #ffffff; --icon-ring: transparent; --icon-plate: #ffffff; --icon-plate-ring: rgba(0, 0, 0, .08);
   /* 开关：关着时的轨道、滑块 */
   --switch-off: #cfcfc7; --knob: #ffffff;
   /* 留言标记：卡片角上的小圆点，表示有主人的留言等负责人回复 */
@@ -37,8 +37,8 @@
   --chart: #2f6bd8; /* 单系列图表的柱色（dataviz 校验：浅色底通过亮度带与 3:1 对比） */
   /* 尺寸：图标、批次色带 */
   --icon-sm: 16px; --icon-md: 22px; --icon-lg: 28px; --band: 3px; --hairline: 1px;
-  /* 标题栏给 macOS 左上角三个按钮留的宽度 */
-  --titlebar-inset: 86px;
+  /* 标题栏给 macOS 左上角三个按钮留的宽度；右边平常只是普通边距 */
+  --titlebar-inset: 86px; --titlebar-right: var(--sp-4);
   /* 顶栏（就是标题栏）高度；额度圆环直径。红黄绿按钮的位置在 app/main/index.ts，随顶栏高度一起改 */
   --topbar-h: 48px; --ring: 24px;
   /* 协作页右边成员栏的宽度（docs/ui-spec.md 第 17 节） */
@@ -53,11 +53,21 @@
     --state-decide: #94a3b8;
     --on-accent: #131312; --reply: #f0709e;
     --seg-track: #1f1f1d; --seg-thumb: #3b3b37;
-    --icon-ring: rgba(255, 255, 255, .14);
+    --icon-ring: rgba(255, 255, 255, .14); --icon-plate-ring: rgba(255, 255, 255, .14);
     --switch-off: #4a4a45; --knob: #f3f2ee;
     --scrim: rgba(0, 0, 0, .55);
     --shadow-card: 0 1px 2px rgba(0, 0, 0, .4);
     --shadow-menu: 0 8px 24px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
     --chart: #5f93ef; /* 深色底另取一档：主色 #7ba8f6 在深色亮度带之外 */
   }
+}
+
+/* Windows：窗口的三个按钮由系统画在顶栏右上角，左边不用留位置，右边留出它们的宽度（docs/ui-spec.md 第 11 节）。 */
+:root[data-platform="windows"] {
+  --titlebar-inset: var(--sp-4); --titlebar-right: 148px;
+  /* 字体、字号按 Windows 自己的来（docs/ui-spec.md 第 2 节“Windows 上不一样的地方”）：中文明写微软雅黑，五档字号各加 1px。 */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Microsoft YaHei UI", "Microsoft YaHei", monospace;
+  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-xl: 19px;
+  color-scheme: light dark;
 }

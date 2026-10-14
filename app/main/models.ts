@@ -1,6 +1,6 @@
 import type { IpcMainInvokeEvent } from 'electron';
-import { modelSelection } from '../../src/core/settings.ts';
-import type { ModelsCache, Vendor } from '../../src/core/roster.ts';
+import { manualModelInput, modelSelection } from '../../src/core/settings.ts';
+import type { Effort, ModelsCache, Vendor } from '../../src/core/roster.ts';
 import { quotaRefresher, QUOTA_GAP_MS } from './actions.ts';
 
 export const MODELS_EVERY_MS = 24 * 60 * 60_000;
@@ -17,15 +17,27 @@ export function modelsRefreshHandler(refresher: Pick<ReturnType<typeof modelsRef
     await refresher.refresh(args);
   };
 }
-export function modelsKeepHandler(core: { keep(channel: Vendor, models: string[]): Promise<void> }, updated: () => Promise<void>, trusted: (event: IpcMainInvokeEvent) => boolean) {
+export function modelsKeepHandler(core: { keep(channel: Vendor, models: string[], dropManual?: string[]): Promise<void> }, updated: () => Promise<void>, trusted: (event: IpcMainInvokeEvent) => boolean) {
   let pending = false;
   return async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
     if (!trusted(event)) throw new Error('不允许的请求来源。');
-    if (args.length !== 2) throw new Error('保留模型需要通道和模型名列表两个参数。');
-    const { channel, models } = modelSelection(args[0], args[1]);
+    if (args.length !== 2 && args.length !== 3) throw new Error('保留模型需要通道和模型名列表，可另传明确不保留的手动模型列表。');
+    const { channel, models, dropManual } = modelSelection(args[0], args[1], args[2]);
     if (pending) throw new Error('模型正在保存，请稍等。');
     pending = true;
-    try { await core.keep(channel, models); await updated(); }
+    try { await core.keep(channel, models, dropManual); await updated(); }
+    finally { pending = false; }
+  };
+}
+export function modelsAddHandler(core: { add(channel: 'codex', model: string, efforts: Effort[]): Promise<void> }, updated: () => Promise<void>, trusted: (event: IpcMainInvokeEvent) => boolean) {
+  let pending = false;
+  return async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
+    if (!trusted(event)) throw new Error('不允许的请求来源。');
+    if (args.length !== 3) throw new Error('手动添加模型需要通道、模型名和允许的强度三个参数。');
+    const { channel, model, efforts } = manualModelInput(args[0], args[1], args[2]);
+    if (pending) throw new Error('模型正在保存，请稍等。');
+    pending = true;
+    try { await core.add(channel, model, efforts); await updated(); }
     finally { pending = false; }
   };
 }

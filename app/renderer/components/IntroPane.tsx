@@ -4,6 +4,7 @@ import type { ConnectAi, ConnectState, ConnectStatus } from '../../../src/core/i
 import { errorReason } from '../lib/errors.ts';
 import { Button, Chip, ConfirmDialog, SettingGroup, SettingRow, WorkerIcon } from '../ui/index.ts';
 import type { Tone } from '../ui/index.ts';
+import { TRASH } from '../ui/platform.ts';
 
 // 设置 → 接入 AI（docs/ui-spec.md 第 10 节）：上面一组“一键接入”五家，下面一组给其他 AI 的对接提示词。
 // 状态全部来自桥上的 connectStatus()，窗口不自己判断文件；接入、撤下也只走桥。所有文字当纯文字显示。
@@ -63,7 +64,7 @@ function ConnectGroup() {
           })}
     </SettingGroup>
     {asking && <ConfirmDialog tone="primary" confirmLabel={actionOf(asking)?.label ?? '接入'}
-      message={`会写入：${asking.files.join('、')}。原文件先备份到废纸篓。写进去的是下面这段：`}
+      message={`会写入：${asking.files.join('、')}。原文件先备份到${TRASH}。写进去的是下面这段：`}
       detail={<pre className="connect-rule">{LEAD_RULE}</pre>}
       onConfirm={() => run(asking, 'connect')} onCancel={() => setAsking(null)} />}
   </>;

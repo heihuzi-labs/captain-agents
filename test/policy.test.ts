@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { samePath } from '../src/core/platform.ts';
 import type { TestContext } from 'node:test';
 import { checkChoice, effectiveWorkers, validateWorkersPatch } from '../src/core/policy.ts';
 import type { WorkerPolicy } from '../src/core/policy.ts';
@@ -10,13 +11,17 @@ import { readSettings, writeSettings } from '../src/core/settings.ts';
 import { buildView } from '../src/core/view.ts';
 import { settingsActions, settingsPatch } from '../app/main/actions.ts';
 import { alive } from '../src/core/fsx.ts';
-import { context, until } from './helpers.ts';
+import { context, fixture, until } from './helpers.ts';
 
 const normal = (): WorkerPolicy => ({ enabled: true, efforts: ['high'], fast: false });
 async function registry(t: TestContext) {
   const c = await context(t, false), previous = process.env.XAGENTS_HOME;
   process.env.XAGENTS_HOME = c.home;
   t.after(() => { if (previous === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = previous; });
+  for (const [key, value] of Object.entries({ XAGENTS_FAKE_WORKER: fixture, CODEX_HOME: join(c.temp, 'codex-config') })) {
+    const old = process.env[key]; process.env[key] = value;
+    t.after(() => { if (old === undefined) delete process.env[key]; else process.env[key] = old; });
+  }
   return c;
 }
 
@@ -173,7 +178,7 @@ test('真实 CLI run：整批先校验，关掉、禁用强度、未开快速版
   const job = (await c.jobs())[0]; assert.equal(job.who, 'grok'); assert.equal(job.effort, 'high');
   const waited = await c.cli(['wait', job.id]); assert.equal(waited.code, 0, waited.stderr + waited.stdout);
   const done = (await c.jobs())[0]; assert.equal(done.state, 'done');
-  assert.ok(done.command?.args[0].endsWith('test/fixtures/worker.ts'));
+  assert.ok(done.command && samePath(done.command.args[0], fixture));
   await until(async () => !alive(done.pid) && !alive(done.workerPid));
   assert.equal((await c.cli(['clean', done.id])).code, 0);
 });

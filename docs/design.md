@@ -239,6 +239,8 @@ realCheck: { needed: boolean; steps: string[]; result: { ok: boolean; note: stri
 
 以下全部来自这次实测，每条都有探针结果作依据。
 
+这一节写的是 macOS。Windows 上现在只开 Codex 这一路，做法和探针结果另写在 [design-windows.md](design-windows.md) 和 [research/windows-codex-sandbox-2026-10-12.md](research/windows-codex-sandbox-2026-10-12.md)：底线相同，实现不同（专用账户、文件权限、系统过滤规则）。
+
 下表“能连网”一列是总开关关着时的行为（缺省关）。主人只能在桌面应用里打开总开关，所有项目随之允许联网，网络完全不限（含本机端口），文件和密钥规则不变，见 [design-network.md](design-network.md)。开着时 Codex 只加 network={enabled=true}，Grok / Cursor 经 srt 库接口省略网络设置；不做联网专项自检。
 
 | 选手 | 启动方式 | 隔离 | 能写 | 能连网 |

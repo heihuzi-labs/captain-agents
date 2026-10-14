@@ -2,13 +2,25 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { evaluate, expectedProbes, permissionOutcome, networkOutcome, probeSource, readSelfcheck, ensureSelfcheck, globalTargets, tempTargets, globalBefore, cleanGlobal } from '../src/core/selfcheck.ts';
+import { join, resolve } from 'node:path';
+import { codexPath } from '../src/core/workers.ts';
+import { evaluate as evaluateOn, expectedProbes as expectedOn, permissionOutcome, networkOutcome, probeSource, readSelfcheck, ensureSelfcheck, globalTargets, tempTargets, globalBefore, cleanGlobal } from '../src/core/selfcheck.ts';
 import type { Isolation, IsolationResult } from '../src/core/selfcheck.ts';
 import { desktopView, context } from './helpers.ts';
 import { whos, isolationOf } from '../src/core/roster.ts';
 
+import { isWindows } from '../src/core/platform.ts';
+import { windowsExpectedProbes } from '../src/core/selfcheck-windows.ts';
+
+// 这个文件里大多数用例测的是 macOS 的判定规则和探针清单：明确按 macOS 的规则算，在哪种系统上跑结果都一样。
+const evaluate = (results: IsolationResult[], at?: string) => evaluateOn(results, at, false);
+const expectedProbes = (mode: Isolation) => expectedOn(mode, false);
 const mustAllow = (name: string) => name === 'worktree' || name === 'tmpdir';
+// 和自检缓存有关的用例（读缓存、派活前把关）要用“当前系统认的一份通过结果”。
+const currentPassing = (): IsolationResult[] => isWindows
+  ? [{ isolation: 'codex', probes: windowsExpectedProbes().map(name => ({ name, outcome: mustAllow(name) ? 'allowed' : 'denied', reason: '' })) }]
+  : passing();
+const current = (at?: string) => evaluateOn(currentPassing(), at);
 const passing = (): IsolationResult[] => (['codex', 'grok', 'cursor'] as Isolation[]).map(isolation => ({ isolation, probes: expectedProbes(isolation).map(name => ({ name, outcome: mustAllow(name) ? 'allowed' : 'denied', reason: mustAllow(name) ? '操作成功' : 'EPERM' })) }));
 test('选手清单里每位选手用的隔离都在自检范围内，缺哪一种自检都不过', () => {
   for (const who of whos) {
@@ -58,23 +70,23 @@ test('缓存一天有效，过期重检；失败和损坏拦截，不能仅凭 o
   await mkdir(join(temp, 'cache'));
   const file = join(temp, 'cache/selfcheck.json');
   let calls = 0;
-  const checker = async () => { calls++; return evaluate(passing()); };
-  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker); assert.equal(calls, 1);
-  const now = Date.now(); await writeFile(file, JSON.stringify(evaluate(passing(), new Date(now).toISOString())));
+  const checker = async () => { calls++; return current(); };
+  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker, false); assert.equal(calls, 1);
+  const now = Date.now(); await writeFile(file, JSON.stringify(current(new Date(now).toISOString())));
   assert.equal((await readSelfcheck(now + 86399999)).ok, true);
   assert.equal((await readSelfcheck(now + 86400000)).ok, null);
   assert.equal((await readSelfcheck(now - 1)).ok, null);
-  await ensureSelfcheck(checker); assert.equal(calls, 1);
-  await writeFile(file, JSON.stringify(evaluate(passing(), new Date(now - 86400000).toISOString()))); await ensureSelfcheck(checker); assert.equal(calls, 2);
-  await writeFile(file, JSON.stringify({ version: 7, ok: true, at: new Date().toISOString(), results: [] }));
-  await assert.rejects(ensureSelfcheck(checker), /自检没过/); assert.equal(calls, 2);
+  await ensureSelfcheck(checker, false); assert.equal(calls, 1);
+  await writeFile(file, JSON.stringify(current(new Date(now - 86400000).toISOString()))); await ensureSelfcheck(checker, false); assert.equal(calls, 2);
+  await writeFile(file, JSON.stringify({ version: 8, platform: process.platform, ok: true, at: new Date().toISOString(), results: [] }));
+  await assert.rejects(ensureSelfcheck(checker, false), /自检没过/); assert.equal(calls, 2);
   // 旧版本的缓存（探针做法改之前）即使名字齐全、写着通过，也要重新自检；版本 4 还没有钥匙串探针。
-  await writeFile(file, JSON.stringify({ ...evaluate(passing()), version: 4 }));
-  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker); assert.equal(calls, 3);
+  await writeFile(file, JSON.stringify({ ...current(), version: 4 }));
+  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker, false); assert.equal(calls, 3);
   // 第 5 版没有凭据文件探针。
-  await writeFile(file, JSON.stringify({ ...evaluate(passing()), version: 5 }));
-  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker); assert.equal(calls, 4);
-  await writeFile(file, '{'); await assert.rejects(ensureSelfcheck(checker), /缓存损坏/);
+  await writeFile(file, JSON.stringify({ ...current(), version: 5 }));
+  assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker, false); assert.equal(calls, 4);
+  await writeFile(file, '{'); await assert.rejects(ensureSelfcheck(checker, false), /缓存损坏/);
 });
 test('隔离内的 CLI 自检不启动真实探针，保存失败且桌面视图不显示通过', async t => {
   const c = await context(t, false);
@@ -83,11 +95,12 @@ test('隔离内的 CLI 自检不启动真实探针，保存失败且桌面视图
   assert.equal(cache.ok, false); assert.equal(cache.results.length, 3); assert.ok(cache.results.every((r: any) => r.probes.length === 0));
   assert.equal((await desktopView(c.home)).selfcheck.ok, false);
 });
-test('真实派发入口被失败自检挡住，尚未登记任务和副本', async t => {
+// Windows 上自检不拦派活（docs/design-windows.md 第 12 节），这一条只属于别的系统。
+test('真实派发入口被失败自检挡住，尚未登记任务和副本', { skip: isWindows ? 'Windows 上自检不拦派活，没装加固就用 Codex 自带的做法' : false }, async t => {
   const c = await context(t); await c.add();
-  await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify(evaluate([])));
-  // 只关选手替身来走真实派发入口；额度查询照样用替身，不许真的启动 Cursor、Grok 去查（2026-09-30 发现每跑一次就在 ~/.cursor/projects 留一个目录）。
-  const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { XAGENTS_FAKE_WORKER: undefined, XAGENTS_QUERY_EXEC: join(import.meta.dirname, 'fixtures/quota/query.ts'), XAGENTS_CODEX_SESSIONS: join(import.meta.dirname, 'fixtures/quota') });
+  await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify(evaluateOn([])));
+  // 只关选手替身来走真实派发入口；Codex 程序指到一个存在的文件（这台机器上不一定装了 Codex，没装会先被“没找到程序”挡下，走不到自检）。额度查询照样用替身，不许真的启动 Cursor、Grok 去查（2026-09-30 发现每跑一次就在 ~/.cursor/projects 留一个目录）。
+  const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { XAGENTS_FAKE_WORKER: undefined, XAGENTS_CODEX: process.execPath, XAGENTS_QUERY_EXEC: join(import.meta.dirname, 'fixtures/quota/query.ts'), XAGENTS_CODEX_SESSIONS: join(import.meta.dirname, 'fixtures/quota') });
   assert.equal(r.code, 1); assert.match(r.stderr, /隔离自检没过/); assert.equal((await c.jobs()).length, 0);
 });
 
@@ -111,11 +124,22 @@ test('旧自检缓存缺 npmrc 或该查的登录探针，即使 ok 为 true 也
   await mkdir(join(c.home, 'cache'));
   // Codex 要查自己的登录文件；Grok、Cursor 只查别家的（自己的必须能读，否则启动不了）。
   for (const [isolation, login] of [['codex', 'login-codex'], ['grok', 'login-cursor'], ['cursor', 'login-grok'], ['grok', 'login-deepseek'], ['cursor', 'keychain'], ['grok', 'keychain-user']] as [Isolation, string][]) for (const name of ['npmrc', 'shell-files', 'credential-files', 'env-secret', login]) {
-    const results = passing(), result = results.find(r => r.isolation === isolation)!;
+    // 这张表是 macOS 的探针；Windows 上只有 Codex 一路，名字不在它清单里的跳过，另在下面补 Windows 才有的几项。
+    if (isWindows && (isolation !== 'codex' || !windowsExpectedProbes().includes(name))) continue;
+    const results = currentPassing(), result = results.find(r => r.isolation === isolation)!;
     result.probes = result.probes.filter(p => p.name !== name);
-    await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 7, ok: true, at: new Date().toISOString(), results }));
-    await assert.rejects(ensureSelfcheck(), /缺少有效结果/);
+    await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 8, platform: process.platform, ok: true, at: new Date().toISOString(), results }));
+    await assert.rejects(ensureSelfcheck(undefined, false), /缺少有效结果/);
   }
+  if (isWindows) for (const name of ['account', 'listen', 'pipe', 'startup-folder', 'tmp-root']) {
+    const results = currentPassing(); results[0].probes = results[0].probes.filter(p => p.name !== name);
+    await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 8, platform: 'win32', ok: true, at: new Date().toISOString(), results }));
+    await assert.rejects(ensureSelfcheck(undefined, false), /缺少有效结果/);
+  }
+  // 在另一种系统上做的自检结果不作数：要重新自检。
+  await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ ...current(), platform: isWindows ? 'darwin' : 'win32' }));
+  const other = await readSelfcheck();
+  assert.equal(other.ok, null); assert.match(other.note, /另一种系统/);
 });
 
 test('Codex 自检真实调用共用权限表，空 CODEX_HOME 仅给子进程，成功/失败/抛错都清理', async t => {
@@ -131,15 +155,15 @@ test('Codex 自检真实调用共用权限表，空 CODEX_HOME 仅给子进程�
     const result = { exit: behavior === 'ok' ? 0 : 1, output: '', timedOut: behavior === 'failed' };
     const tmp = join(c.temp, 'job-tmp');
     const parentEnv = { PATH: process.env.PATH ?? '', XAGENTS_SELFCHECK_API_KEY: 'fake-outer', XA_PLAIN: 'plain' };
-    const call = codexProbe(job, project, '/temporary/probe.mjs', tmp, async (file, args, cwd, timeout, onData, env) => {
-      assert.equal(file, process.env.XAGENTS_CODEX || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex');
-      assert.deepEqual(args, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '-c', codexEnvPolicy(), '--', process.execPath, '/temporary/probe.mjs']);
+    const call = codexProbe(job, project, resolve('/temporary/probe.mjs'), tmp, async (file, args, cwd, timeout, onData, env) => {
+      assert.equal(file, codexPath());
+      assert.deepEqual(args, ['sandbox', '-P', 'xa', '-C', job.worktree, '-c', codexPermissions({ ...job, id: '' }, project, tmp), '-c', codexEnvPolicy(), '--', process.execPath, resolve('/temporary/probe.mjs')]);
       // 外面那一层和派活一样去掉带密钥字样的变量（写成 undefined，执行器才不会从 process.env 垫回来）；inner 绕过它，只靠 Codex 那一层挡。
       assert.ok('XAGENTS_SELFCHECK_API_KEY' in env!); assert.equal(env!.XAGENTS_SELFCHECK_API_KEY, undefined);
       for (const [name, value] of Object.entries(env!)) if (value !== undefined && name !== 'XAGENTS_SELFCHECK_INNER_TOKEN') assert.ok(!isSecretName(name), name);
       assert.equal(env!.XAGENTS_SELFCHECK_INNER_TOKEN, 'fake-inner'); assert.equal(env!.XA_PLAIN, 'plain');
       // 与派活时一样：TMPDIR 指向任务的 tmp，权限表把它写明可写、/tmp 只读。
-      assert.equal(env!.TMPDIR, tmp); assert.ok(args[6].includes(`":slash_tmp"="read"`)); assert.ok(args[6].includes(`":tmpdir"="read"`)); assert.ok(args[6].includes(`${JSON.stringify(tmp)}="write"`));
+      assert.equal(env!.TMPDIR, tmp); assert.equal(args[6].includes(`":slash_tmp"="read"`), process.platform !== 'win32'); assert.ok(args[6].includes(`":tmpdir"="read"`)); assert.ok(args[6].includes(`${JSON.stringify(tmp)}="write"`));
       assert.equal(cwd, job.worktree); assert.equal(timeout, 20000); assert.equal(onData, undefined);
       temporaryHome = env!.CODEX_HOME!; assert.ok(temporaryHome); assert.notEqual(temporaryHome, inherited);
       assert.deepEqual(await readdir(temporaryHome), []);
@@ -220,7 +244,7 @@ test('公用临时目录：自检期间新出现的固定名目录即使探针�
   await assert.rejects(lstat(join(shared, 'TOKEN')));
   assert.deepEqual(problems, [`自检期间出现了 ${join(shared, 'claude-501')}（公用临时目录），不自动删，请负责人查看`]);
 });
-test('公用临时位置：getconf 查系统目录，查不到算空；没有 ~/.npm 时改查家目录本身', async t => {
+test('公用临时位置：getconf 查系统目录，查不到算空；没有 ~/.npm 时改查家目录本身', { skip: process.platform === 'win32' ? '只属于 macOS：getconf DARWIN 目录、/private/tmp 和 getuid' : false }, async t => {
   const c = await context(t, false);
   const { tempPaths } = await import('../src/core/selfcheck.ts');
   const home = join(c.temp, 'home'); await mkdir(home);
@@ -234,7 +258,7 @@ test('公用临时位置：getconf 查系统目录，查不到算空；没有 ~/
   assert.equal((await tempPaths(run as any, c.temp, home))['npm-logs'], join(home, '.npm/_logs'));
 });
 
-test('钥匙串测试条目：外面建好并读回核对才用；按固定账号名清扫，删到“没有这一项”为止，删不掉要报出来', async () => {
+test('钥匙串测试条目：外面建好并读回核对才用；按固定账号名清扫，删到“没有这一项”为止，删不掉要报出来', { skip: process.platform === 'win32' ? '只属于 macOS：security 钥匙串条目的创建与清扫' : false }, async () => {
   const { addKeychainItem, sweepKeychainItems } = await import('../src/core/selfcheck.ts');
   const fake = (behave: { add?: number; read?: 'same' | 'other' | 'fail'; deletes?: ({ exit: number | null; timedOut?: boolean })[] }) => {
     const calls: string[][] = [];

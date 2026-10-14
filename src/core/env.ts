@@ -23,12 +23,23 @@ export const PLATFORM_SWITCHES = ['AGENT_CLI_CREDENTIAL_STORE'];
 // 自检只在它的值正好等于 HTTP_PROXY 里的口令时才认它是 srt 的。
 export const SRT_OWN_VARS = ['CLOUDSDK_PROXY_PASSWORD'];
 
+// 只给平台自己的后台进程看的变量，不往下传给选手（XAGENTS_KOFFI：见 native-windows.ts）。
+const PLATFORM_ONLY: readonly string[] = ['XAGENTS_KOFFI'];
+
 // 选手进程的完整环境：继承的环境去掉带这些词的变量，再加上平台给它设的，最后去掉这件活点名不要的（比如 DeepSeek 的 KEY_VARS）。
 export function workerEnv(inherited: NodeJS.ProcessEnv, add: Record<string, string> = {}, unset: readonly string[] = []): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [name, value] of Object.entries(inherited)) if (!isSecretName(name)) env[name] = value;
+  for (const [name, value] of Object.entries(inherited)) if (!isSecretName(name) && !PLATFORM_ONLY.includes(name)) env[name] = value;
   Object.assign(env, add);
   for (const name of unset) delete env[name];
+  return env;
+}
+// 点名放行：过滤之后，把这几个变量从来源里原样补回（来源里没有的不补）。只交给选手的主程序；
+// 它跑的命令看不看得到，由各家自己那一层管（Codex 是下面的 codexEnvPolicy，放行的名字要一并写进去）。
+// 现在只有一种用法：主人的 Codex 配置里点名放钥匙的那个变量（endpoint.ts）。
+// keep：平台给选手设好的、和这件活点名不要的名字。点名放行碰到它们一律不算数，平台的安排优先。
+export function passEnv(env: NodeJS.ProcessEnv, names: readonly string[] = [], source: NodeJS.ProcessEnv = process.env, keep: readonly string[] = []): NodeJS.ProcessEnv {
+  for (const name of names) if (source[name] !== undefined && !keep.includes(name)) env[name] = source[name];
   return env;
 }
 // 交给会把 process.env 垫在底下的执行器（verify.ts 的 execute）时用：base 里有、env 里没有的变量写成 undefined，Node 启动子进程时会跳过它们。

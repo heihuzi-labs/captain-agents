@@ -70,7 +70,13 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       targets: ${{ needs.prepare.outputs.targets }}
-    # The private key never reaches the build jobs.
+      # A release never ships a Mac package without Apple's signature and notarization.
+      require-signing: true
+    # Only Apple's signing material is passed on; the update private key never reaches the build jobs.
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
 
   publish:
     name: Sign the feeds and publish

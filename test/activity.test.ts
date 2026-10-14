@@ -67,6 +67,56 @@ test('坏行与结构异常跳过；半行等待后续；动作只保留末尾 5
   assert.equal(p.activity.at(-1)!.text, 'pwd /repo-other . file');
 });
 
+test('日志按副本路径自身格式解析：Windows 两种斜杠、大小写、自身与外部路径', () => {
+  const parser = new StreamParser('codex', 'C:\\work\\repo');
+  const cases = [
+    ['C:\\work\\repo\\src\\a.ts', 'src/a.ts'],
+    ['C:/work/repo/src/a.ts', 'src/a.ts'],
+    ['c:\\work\\repo', '.'],
+    ['c:/WORK/REPO/Src/a.ts', 'Src/a.ts'],
+    ['C:\\work\\repo\\', '.'],
+    ['C:\\work\\repo-other\\a.ts', 'C:\\work\\repo-other\\a.ts'],
+    ['C:\\work\\repo\\..\\outside.ts', 'C:\\work\\repo\\..\\outside.ts'],
+    ['D:\\work\\repo\\a.ts', 'D:\\work\\repo\\a.ts'],
+    ['/work/repo/a.ts', '/work/repo/a.ts'],
+  ];
+  for (const [path, expected] of cases) {
+    parser.feed(line({ type: 'item.completed', item: { type: 'file_change', changes: [{ path }] } }), at);
+    assert.equal(parser.activity.at(-1)!.text, expected, path);
+    parser.feed(line({ type: 'item.started', item: { type: 'command_execution', command: `cat ${path}` } }), at);
+    assert.equal(parser.activity.at(-1)!.text, `cat ${expected}`, path);
+  }
+});
+
+test('POSIX 日志在所有宿主上保持原样；引用路径、混合分隔符、空格与目录边界', () => {
+  const parser = new StreamParser('codex', '/Users/owner/repo');
+  assert.equal(parser.worktree, '/Users/owner/repo');
+  for (const [path, expected] of [
+    ['/Users/owner/repo/src/a.ts', 'src/a.ts'],
+    ['/Users/owner/repo\\src\\a.ts', 'src/a.ts'],
+    ['/Users/owner/repo', '.'],
+    ['/Users/owner/Repo/a.ts', '/Users/owner/Repo/a.ts'],
+    ['/Users/owner/repo/../outside', '/Users/owner/repo/../outside'],
+    ['/other/Users/owner/repo/a.ts', '/other/Users/owner/repo/a.ts'],
+    ['/Users/owner/repo-other/a.ts', '/Users/owner/repo-other/a.ts'],
+    ['/Users/owner/repo/src/a b.ts', 'src/a b.ts'],
+    ['/Users/owner/repo/src/a b/../../../../outside', '/Users/owner/repo/src/a b/../../../../outside'],
+  ]) {
+    parser.feed(line({ type: 'item.completed', item: { type: 'file_change', changes: [{ path }] } }), at);
+    assert.equal(parser.activity.at(-1)!.text, expected);
+    for (const quote of ['"', "'", '`']) {
+      parser.feed(line({ type: 'item.started', item: { type: 'command_execution', command: `cat ${quote}${path}${quote}` } }), at);
+      assert.equal(parser.activity.at(-1)!.text, `cat ${quote}${expected}${quote}`);
+    }
+  }
+  const spaced = new StreamParser('codex', 'C:\\my work\\repo');
+  spaced.feed(line({ type: 'item.started', item: { type: 'command_execution', command: 'cat "c:/my work/repo/src/a b.ts"' } }), at);
+  assert.equal(spaced.activity.at(-1)!.text, 'cat "src/a b.ts"');
+  const url = new StreamParser('codex', '/repo');
+  url.feed(line({ type: 'item.completed', item: { type: 'agent_message', text: '打开 https://repo/src/a.ts 和 /repo/src/a.ts' } }), at);
+  assert.equal(url.activity.at(-1)!.text, '打开 https://repo/src/a.ts 和 src/a.ts');
+});
+
 test('文件计数包括重命名和嵌套未跟踪文件，不改 Git 索引', async t => {
   const c = await context(t);
   await c.git(['mv', 'base.txt', 'renamed.txt']);

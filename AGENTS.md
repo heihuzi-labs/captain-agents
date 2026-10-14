@@ -12,7 +12,7 @@
 - 现在是“命令行 + 桌面应用”，两边共用 `src/core/` 一份核心；命令行在 `src/cli/`，桌面应用在 `app/`（`main` 后台、`preload` 桥、`renderer` 界面、`shared` 共用类型）。规则只写在核心里，两个外壳不重复写。
 - Node 24 + TypeScript，只用可擦除的写法（不用 `enum`、`namespace`、参数属性）。
 - 命令行入口是 `bin/xagents`（`package.json` 的 `bin`），由 Node 直接运行 `src/cli/cli.ts`，不编译。桌面应用用 electron-vite：`npm run dev` 开发，`npm run build` 构建，应用入口 `out/main/index.js`。
-- 运行时依赖（`package.json` 的 `dependencies`）：`@anthropic-ai/sandbox-runtime`（选手隔离）和桌面界面用的 `react`、`react-dom`、`react-markdown`。开发依赖是构建、打包、类型检查、测试、截图这几类工具（Electron、electron-vite、Vitest、Playwright 等）。加任何依赖先说明理由。
+- 运行时依赖（`package.json` 的 `dependencies`）：`@anthropic-ai/sandbox-runtime`（选手隔离）、`koffi`（只在 Windows 上用：直接调系统接口来防休眠、读进程列表、送进回收站，不在后台启动 PowerShell，见 [docs/design-windows.md](docs/design-windows.md) 第 13 节）和桌面界面用的 `react`、`react-dom`、`react-markdown`。开发依赖是构建、打包、类型检查、测试、截图这几类工具（Electron、electron-vite、Vitest、Playwright 等）。加任何依赖先说明理由。
 - 写登记文件一律先写临时文件再改名；改任务记录一律在锁里“读 → 改 → 写”。
 
 ## 测试与验收
@@ -21,13 +21,15 @@
   - 核心测试：`npm test`，`node:test` 跑 `test/*.test.ts`。
   - 界面测试：`npm run test:ui`，Vitest + Testing Library，测组件。
   - 真实窗口冒烟测试：`npm run test:e2e`（`test/e2e/smoke.ts`），用 Playwright 真的启动 Electron 窗口点一遍。它要开桌面窗口，**在隔离里跑不了**，交给负责人验收，报告里写明没跑。
+- 核心测试和界面测试在流水线的 Windows 机器上也跑。两种系统行为不同的地方（路径、进程、权限位、隔离）集中在 `src/core/platform.ts`，写代码和测试时不要假定是 macOS：路径用 `node:path` 和 `platform.ts` 里的比较函数，不写死 `/`、`/bin/sh`、`/tmp`；只属于 macOS 的用例在 Windows 上明确跳过并写原因，反过来也一样。
 - 验收命令是 `npm run verify`：类型检查 → 核心测试 → 界面测试 → 构建 → 冒烟测试，全过才算通过。
 - 在隔离里能跑的是 `npm run typecheck`、`npm test`、`npm run test:ui`；没跑的项不许说“已通过”。
 
 ## 安全底线（不许为了方便放宽）
 
 - 选手的名单和模型集中在 `src/core/roster.ts`，那是唯一的一张表；解析选手、启动参数、额度、隔离、自检都从它派生，不在别处写死选手。
-- 选手的启动参数和隔离模板（`src/core/workers.ts`、`sandbox/*.json`，Codex 的在 `src/core/sandbox.ts`）每一条都来自 2026-09-29 的实测，改动要附新的探针结果。
+- 选手的启动参数和隔离模板（`src/core/workers.ts`、`sandbox/*.json`，Codex 的在 `src/core/sandbox.ts`）每一条都来自 2026-09-29 的实测，改动要附新的探针结果。Windows 上的那一套（`src/core/selfcheck-windows.ts`、`sandbox/windows/*.ps1`、`sandbox.ts` 和 `workers.ts` 里 Windows 的分支）来自 2026-10-12 在三台真的 Windows 机器上的实测，见 [docs/research/windows-codex-sandbox-2026-10-12.md](docs/research/windows-codex-sandbox-2026-10-12.md)，改动同样要附新的探针结果；探针脚本和流水线在 `scripts/probe/`、`.github/workflows/windows-probe.yml`。
+- **Windows 上只开 Codex 这一路**（Codex 的各个模型和借它跑的 DeepSeek），别的选手派活时直接拒绝；哪种系统开放哪几种隔离只写在 `selfcheck.ts` 的 `platformIsolations` 一处。**Windows 上隔离自检不拦派活**（主人 2026-10-13 定：装好就要能用，事情要简单）：缺省用 Codex 自带的、不用安装的那种隔离，选手只能改这件活自己的副本，但钥匙文件不禁读、外网和本机端口不拦。原来那一整套（专用账户、禁读名单、平台另加的本机回环过滤规则 `sandbox/windows/loopback-fence.ps1`、57 项自检）是可选的“加固”，主人在桌面应用的设置里点一下装（要管理员确认，平台不替主人提权），装好并且自检通过的电脑上派活才用它。macOS 上不变：自检没过不派活。设计和还没做到的地方见 [docs/design-windows.md](docs/design-windows.md) 第 12 节。
 - 推理强度只开中档、高档、超高档，不开最高档；Cursor 里只用 Claude、GPT、Grok 的模型（`roster.ts` 的底线）。
 - 主人在设置里允许哪些选手、哪些强度、要不要快速版（`src/core/policy.ts`），平台在派活时强制执行，`--force` 也跳不过；设置只能在底线之内收窄，不能放宽。
 - 选手联网只有一个总开关，缺省关，只有主人能在桌面应用里打开；打开后网络完全不限（含本机端口），文件和密钥规则不变。

@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { shell } from '../src/core/platform.ts';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { access, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
@@ -49,7 +50,7 @@ test('体检从当前 HEAD 开副本，顺序跑 setup 和 verify，保留完整
   const calls: string[] = [];
   let worktree = '';
   const run: Executor = async (file, args, cwd, timeout, onData) => {
-    assert.equal(file, '/bin/sh'); assert.equal(args[0], '-c'); assert.equal(timeout, 180000);
+    assert.equal(file, shell('x').file); assert.equal(args[0], '-c'); assert.equal(timeout, 180000);
     if (!worktree) {
       worktree = cwd;
       assert.match(basename(cwd), /^xa-check-/);
@@ -69,7 +70,7 @@ test('体检从当前 HEAD 开副本，顺序跑 setup 和 verify，保留完整
   assert.deepEqual(result.baseline?.steps.map(step => step.cmd), ['check', 'test']);
   const logfile = await c.log(), text = await readFile(logfile, 'utf8');
   for (const cmd of calls) assert.ok(text.includes(`执行：${cmd}\n${cmd} output\n第二段输出`));
-  assert.equal((await stat(logfile)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal((await stat(logfile)).mode & 0o777, 0o600); // Windows 没有权限位
   assert.ok(result.items.every(item => item.detail.includes(logfile)));
   await assert.rejects(access(worktree), { code: 'ENOENT' });
   assert.equal(await readFile(join(c.repo, 'base.txt'), 'utf8'), '未提交的内容');

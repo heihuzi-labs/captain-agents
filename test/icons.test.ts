@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, stat, mkdir, access, rm, readdir, symlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { context } from './helpers.ts';
-import { iconSources, installIcons, migrateIcons } from '../src/core/icons.ts';
+import { iconSources, installIcons, migrateIcons, windowsIconSources } from '../src/core/icons.ts';
 
-test('图标用替身应用和 sips 按需导出；缺失跳过，失败不留半份，下次能重试', async t => {
+test('图标用替身应用和 sips 按需导出；缺失跳过，失败不留半份，下次能重试', { skip: process.platform === 'win32' ? '只属于 macOS：从 .app 用 sips 导出图标' : false }, async t => {
   const c = await context(t), apps = join(c.temp, 'Applications'), icons = join(c.home, 'icons');
   for (const key of ['codex', 'grok', 'cursor'] as const) {
     const source = join(apps, iconSources[key]); await mkdir(dirname(source), { recursive: true }); await writeFile(source, key);
@@ -37,6 +37,28 @@ test('图标用替身应用和 sips 按需导出；缺失跳过，失败不留�
 });
 
 const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
+test('Windows：按包家族名问到包的位置，原样复制包里的 PNG；没装、不是 PNG、太大都跳过显示字母，下次能重试；不碰 sips', async t => {
+  const c = await context(t), icons = join(c.home, 'icons'), pkg = join(c.temp, 'WindowsApps', 'OpenAI.Codex_1.0.0.0_x64__2p2nqsd0c76g0');
+  const source = windowsIconSources.codex!, file = join(pkg, source.file), asked: string[] = [];
+  const sips = join(c.temp, 'no-sips');
+  let folders: string[] = [];
+  const windows = { on: true, folders: (family: string) => { asked.push(family); return folders; } };
+  await installIcons(icons, join(c.temp, 'none'), sips, windows);
+  await assert.rejects(access(join(icons, 'codex.png')), '没装 Codex 桌面应用：显示字母');
+  folders = [join(c.temp, 'old'), pkg];
+  await mkdir(dirname(file), { recursive: true }); await writeFile(file, 'not a png');
+  await installIcons(icons, join(c.temp, 'none'), sips, windows);
+  await assert.rejects(access(join(icons, 'codex.png')), '不是 PNG：不导出');
+  await writeFile(file, png);
+  await installIcons(icons, join(c.temp, 'none'), sips, windows);
+  assert.deepEqual(await readFile(join(icons, 'codex.png')), png, '取系统给的最后一个（新的）包');
+  assert.deepEqual(asked, Array(3).fill(source.family));
+  await installIcons(icons, join(c.temp, 'none'), sips, windows);
+  assert.equal(asked.length, 3, '已经有了就不再问');
+  await assert.rejects(access(join(icons, 'grok.png')));
+  assert.deepEqual((await readdir(icons)).sort(), ['codex.png'], '不留临时文件');
+});
+
 test('旧图标在新目录缺失时复制，CLI 初始化不挡迁移，旧文件保留且重复迁移不覆盖', async t => {
   const c = await context(t, false), old = join(c.home, 'board/icons'), icons = join(c.home, 'icons');
   await mkdir(old, { recursive: true });
