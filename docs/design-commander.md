@@ -26,7 +26,7 @@
 
 ## 2. 指挥手册（`guide/commander.md`）（已实现）
 
-**手册正文见 [`guide/commander.md`](../guide/commander.md)，以它和现在的代码为准**；用 `xagents guide` 输出全文。下面是当初定的要点，手册按这 11 条组织，并按现在的代码做了调整（比如 `xagents inbox` 之外没有“等你”一栏，主人本人要介入的事一律在对话里问）。
+**手册正文见 [`guide/commander.md`](../guide/commander.md)，以它和现在的代码为准**；`xagents guide` 默认输出开头、第 0 节“必守规矩”和章节目录（精简版，2026-10-17 为省负责人额度而加），`xagents guide <节号或标题里的字>` 取单节，`xagents guide --all` 输出全文。下面是当初定的要点，手册按这 11 条组织，并按现在的代码做了调整（比如 `xagents inbox` 之外没有“等你”一栏，主人本人要介入的事一律在对话里问）。
 
 写给 AI 看的，要简洁，但把事情讲清楚。内容包括：
 

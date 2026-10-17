@@ -34,6 +34,31 @@ export async function readGuide(root = toolRoot): Promise<string> {
   return text;
 }
 
+// 手册按“## ”标题切成几节：开头那段（标题和说明）单独放 head。
+type Section = { key: string; heading: string; text: string };
+function splitGuide(manual: string): { head: string; sections: Section[] } {
+  const parts = manual.split(/^(?=## )/m);
+  const head = parts[0].startsWith('## ') ? '' : parts.shift()!;
+  return { head: head.trimEnd(), sections: parts.map(text => {
+    const heading = text.split('\n')[0].replace(/^## /, '').trim();
+    return { key: /^(\d+[a-z]?)\. /.exec(heading)?.[1] ?? '', heading, text: text.trimEnd() };
+  }) };
+}
+// 精简版（xagents guide 默认）：开头、第 0 节“必守规矩”、章节目录。负责人每次开工读这些就够，细节按节另取。
+export function guideBrief(manual: string): string {
+  const { head, sections } = splitGuide(manual);
+  const core = sections.filter(s => s.key === '0');
+  const index = sections.filter(s => s.key !== '0').map(s => `- ${s.heading}`);
+  return [head, ...core.map(s => s.text), index.length && ['## 章节目录（按需取：`xagents guide <节号或标题里的字>`，全文 `xagents guide --all`）', '', ...index].join('\n')].filter(Boolean).join('\n\n');
+}
+// 按节号（“7”“8b”）或标题里的字（“验收”）取几节；一节都对不上时报错并列出目录。
+export function guideSections(manual: string, picks: string[]): string {
+  const { sections } = splitGuide(manual);
+  const chosen = sections.filter(s => picks.some(p => s.key === p.toLowerCase() || (!/^\d+[a-z]?$/i.test(p) && s.heading.includes(p))));
+  if (!chosen.length) throw new Error(`手册里没有对得上“${picks.join('、')}”的章节。可以用节号或标题里的字，现有章节：\n${sections.map(s => `- ${s.heading}`).join('\n')}`);
+  return chosen.map(s => s.text).join('\n\n');
+}
+
 // 给人看的时间：本地时间“10-04 01:00”（和 xagents quota 的写法一致）。
 function localTime(value: string | null | undefined) {
   const d = new Date(value ?? NaN);

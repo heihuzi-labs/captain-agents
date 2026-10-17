@@ -9,7 +9,7 @@ test('桥只开放白名单，不泄露 IPC 事件；取消订阅移除原监听
   expect(mock.expose.mock.calls[0][0]).toBe('xa');
   const bridge = mock.expose.mock.calls[0][1] as XaBridge;
   expect(Object.isFrozen(bridge)).toBe(true);
-  expect(Object.keys(bridge).sort()).toEqual(['appInfo', 'chatCreate', 'chatRename', 'chatSay', 'chatStop', 'cliInstall', 'cliStatus', 'comment', 'connect', 'connectStatus', 'copyIntro', 'decide', 'disconnect', 'getSettings', 'getView', 'isolationFix', 'modelsAdd', 'modelsKeep', 'modelsRefresh', 'onOpen', 'onUpdate', 'onView', 'openPlace', 'places', 'redo', 'refreshQuota', 'setAutoUpdateCheck', 'setNetworkAllowed', 'setSettings', 'stop', 'teamSay', 'teamStop', 'updateCheck', 'updateDownload', 'updateRestart']);
+  expect(Object.keys(bridge).sort()).toEqual(['appInfo', 'chatCreate', 'chatRename', 'chatSay', 'chatStop', 'cliInstall', 'cliStatus', 'comment', 'connect', 'connectStatus', 'copyIntro', 'decide', 'disconnect', 'getSettings', 'getView', 'modelsAdd', 'modelsKeep', 'modelsRefresh', 'onOpen', 'onUpdate', 'onView', 'openPlace', 'places', 'redo', 'refreshQuota', 'setAutoUpdateCheck', 'setNetworkAllowed', 'setSettings', 'stop', 'teamSay', 'teamStop', 'updateCheck', 'updateDownload', 'updateRestart']);
   await bridge.decide('x', 'drop'); expect(mock.invoke).toHaveBeenLastCalledWith(channels.decide, 'x', 'drop');
   await bridge.redo('x'); expect(mock.invoke).toHaveBeenLastCalledWith(channels.redo, 'x');
   await bridge.stop('x'); expect(mock.invoke).toHaveBeenLastCalledWith(channels.stop, 'x');
@@ -30,7 +30,6 @@ test('桥只开放白名单，不泄露 IPC 事件；取消订阅移除原监听
   await bridge.setNetworkAllowed(false); expect(mock.invoke).toHaveBeenLastCalledWith(channels.networkAllowed, false);
   await bridge.cliStatus(); expect(mock.invoke).toHaveBeenLastCalledWith(channels.cliStatus);
   await bridge.cliInstall(true); expect(mock.invoke).toHaveBeenLastCalledWith(channels.cliInstall, true);
-  await bridge.isolationFix(); expect(mock.invoke).toHaveBeenLastCalledWith(channels.isolationFix);
   await bridge.places(); expect(mock.invoke).toHaveBeenLastCalledWith(channels.places);
   await bridge.openPlace('data'); expect(mock.invoke).toHaveBeenLastCalledWith(channels.openPlace, 'data');
   await bridge.appInfo(); expect(mock.invoke).toHaveBeenLastCalledWith(channels.appInfo);

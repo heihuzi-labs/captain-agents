@@ -1,7 +1,6 @@
 import { isAbsolute, join, normalize, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { realpath } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { readJson } from './fsx.ts';
 import { jobDir, paths, toolRoot } from './paths.ts';
 import { createHash } from 'node:crypto';
@@ -27,13 +26,8 @@ export const deepseekHome = () => join(paths().home, 'deepseek');
 // 系统钥匙串的两个文件夹：本用户的（登录钥匙串，主人和各家程序存的密码）和系统的（Wi-Fi 等）。三种隔离一律读不到。
 // srt 固定放行钥匙串服务、设置里收不回，读得到文件就能用 security 读出密码；挡住文件就读不出。
 // Grok、Cursor 的模板（sandbox/*.json）里写的是同样两处。依据 docs/research/keychain-2026-10-02.md。
-// Windows 上对应的是存凭据的系统文件夹：凭据库的两处（按用户漫游的、只在本机的），放在最前面，自检的两条探针查的就是它们；
-// 后面是给凭据加密用的主密钥和保管库。里面的内容按账户加密，隔离里的专用账户解不开，但名单上照样禁读。
-export function keychainDirs(windows = isWindows, home = homedir(), env: NodeJS.ProcessEnv = process.env) {
-  if (!windows) return [join(home, 'Library/Keychains'), '/Library/Keychains'];
-  const roaming = env.APPDATA || join(home, 'AppData', 'Roaming'), local = env.LOCALAPPDATA || join(home, 'AppData', 'Local');
-  return [join(roaming, 'Microsoft', 'Credentials'), join(local, 'Microsoft', 'Credentials'),
-    join(roaming, 'Microsoft', 'Protect'), join(roaming, 'Microsoft', 'Vault'), join(local, 'Microsoft', 'Vault')];
+export function keychainDirs(home = homedir()) {
+  return [join(home, 'Library/Keychains'), '/Library/Keychains'];
 }
 
 // 终端的配置文件和命令历史：主人常把钥匙写在里面（export XX_API_KEY=…），历史里也会留下敲过的钥匙。
@@ -54,12 +48,6 @@ export const CREDENTIAL_FILES = ['.netrc', '.git-credentials', '.config/git/cred
   '.dsh'];
 // 三种隔离共用的家目录禁读名单（Codex 权限表和 srt 模板都从这里取）。
 const HOME_DENY = [...SHELL_FILES, ...CREDENTIAL_FILES];
-// Windows 才有的家目录禁读位置（相对家目录）：PowerShell 的配置文件和命令历史（主人同样可能把钥匙写在里面），
-// 以及几家命令行在 Windows 上放登录的地方（GitHub 命令行、谷歌云）。别的凭据文件在 Windows 上和 macOS 同名同位置，沿用上面两张表。
-export const WINDOWS_SHELL_FILES = ['Documents/PowerShell', 'Documents/WindowsPowerShell', 'OneDrive/Documents/PowerShell', 'OneDrive/Documents/WindowsPowerShell',
-  'AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine'];
-export const WINDOWS_CREDENTIAL_FILES = ['AppData/Roaming/GitHub CLI', 'AppData/Roaming/gcloud'];
-export const homeDeny = (windows = isWindows) => windows ? [...HOME_DENY, ...WINDOWS_SHELL_FILES, ...WINDOWS_CREDENTIAL_FILES] : HOME_DENY;
 
 // 依据 docs/research/codex-permissions-2026-09-29.md；启动与探针只能从这里取表。
 // denyReadHome：设置里额外禁读的家目录位置（settings.ts 的 extraDenyRead，派活开头读好）。
@@ -67,31 +55,26 @@ export type Isolated = Pick<Project, 'denyReadExtra'> & { denyReadHome?: string[
 // :workspace 自带 /tmp 和 $TMPDIR 可写：两者都改成只读，只有任务的 tmp 写明可写（启动方另把 TMPDIR 指向它）。
 // 实测不设 TMPDIR 时 :tmpdir 就是系统给本用户的临时目录，所以不能只靠环境变量把它指走。
 // 2026-10-09 主人决定网络完全不限：只加 enabled，不启用 network_proxy（实测报告 3.1）。
-// plain：权限表里什么都不加，就是 Codex 自带的那一档（Windows 上没装加固时用，见 docs/design-windows.md 第 12 节）。
+// Windows 上权限表里什么都不加，就是 Codex 自带的那一档（docs/design-windows.md 第 12、14 节）。
 // Codex 免安装的那种隔离做不了按名单禁读，带了名单它不肯跑；只读的活再另外放开任务临时目录，它也不肯跑
 // （“cannot enforce split writable root sets”，主人电脑上和流水线上都实测到）。所以一条都不加。
-export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job), network = false, exists: (path: string) => boolean = existsSync, plain = false) {
+export function codexPermissions(job: Pick<Job, 'mode' | 'repo' | 'worktree' | 'id'>, project: Isolated, tmp = jobTmpDir(job), network = false, windows = isWindows) {
   tomlString(job.repo); tomlString(job.worktree); tomlString(tmp); checkRoot(tmp, '临时目录');
   const rules = new Map<string, 'read' | 'write' | 'deny'>();
-  // Windows：禁读名单里本机不存在的路径，Codex 会先把它建成文件夹再加权限（源码 deny_read_acl.rs，流水线上也实测到了）。
-  // 那样主人家里会凭空多出 .npmrc、.netrc 这类名字的文件夹，把别的工具弄坏。所以 Windows 上只写本机真实存在的；
-  // 代价是活跑着的时候才新出现的文件，这件活挡不住，下一件才挡得住。macOS 上不存在的也照写（规则对将来出现的同样有效）。
   const base = job.mode === 'read-only' ? ':read-only' : ':workspace', tail = network === true ? ',network={enabled=true}' : '';
-  if (plain) return `permissions.xa={extends="${base}",filesystem={}${tail}}`;
-  const set = (path: string, permission: 'read' | 'deny') => { if (!isWindows || exists(path)) rules.set(path, permission); };
-  for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...homeDeny(), ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); set(join(homedir(), path), 'deny'); }
-  set(join(homedir(), '.codex/tmp'), 'read');
-  tomlString(deepseekHome()); set(deepseekHome(), 'deny');
-  for (const dir of keychainDirs()) { tomlString(dir); set(dir, 'deny'); }
-  // Windows 没有 /tmp 这一条（Codex 在 Windows 上会丢掉它），系统给用户的临时目录按 TEMP、TMP 算，同样设只读。
-  if (!isWindows) rules.set(':slash_tmp', 'read');
+  if (windows) return `permissions.xa={extends="${base}",filesystem={}${tail}}`;
+  for (const path of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc', ...HOME_DENY, ...(project.denyReadHome ?? [])]) { tomlString(path); relativePath(path); rules.set(join(homedir(), path), 'deny'); }
+  rules.set(join(homedir(), '.codex/tmp'), 'read');
+  tomlString(deepseekHome()); rules.set(deepseekHome(), 'deny');
+  for (const dir of keychainDirs()) { tomlString(dir); rules.set(dir, 'deny'); }
+  rules.set(':slash_tmp', 'read');
   rules.set(':tmpdir', 'read');
   rules.set(tmp, 'write');
   for (const extra of project.denyReadExtra) {
     // 在 resolve 前检查，避免换行等字符在规范化时消失。
     tomlString(extra); relativePath(extra);
-    set(resolve(job.repo, extra), 'deny');
-    set(resolve(job.worktree, extra), 'deny');
+    rules.set(resolve(job.repo, extra), 'deny');
+    rules.set(resolve(job.worktree, extra), 'deny');
   }
   const filesystem = [...rules].map(([path, permission]) => `${tomlString(path)}="${permission}"`).join(',');
   return `permissions.xa={extends="${base}",filesystem={${filesystem}}${tail}}`;

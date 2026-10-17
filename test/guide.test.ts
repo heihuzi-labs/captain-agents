@@ -5,6 +5,7 @@ import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { context, exec, root } from './helpers.ts';
 import { whos } from '../src/core/roster.ts';
+import { guideBrief } from '../src/core/guide.ts';
 
 const at = '2026-09-30T00:10:00.000Z';
 const manualFile = join(root, 'guide/commander.md');
@@ -40,7 +41,7 @@ test('手册里提到的每个 xagents 子命令和参数，都在 --help 里真
   for (const word of projectMentioned) assert.ok(projectKnown.has(word), `手册提到了 xagents project ${word}，但 --help 里没有`);
   const flags = new Set([...help.stdout.match(/--[a-z][a-z-]*/g) ?? [], '--help']); // --help 本身不写在帮助正文里
   for (const flag of new Set(manual.match(/--[a-z][a-z-]*/g))) assert.ok(flags.has(flag), `手册提到了参数 ${flag}，但 --help 里没有`);
-  assert.match(help.stdout, /xagents guide\n\s+打印指挥手册全文/);
+  assert.match(help.stdout, /xagents guide \[--all\]\n\s+打印指挥手册精简版/);
 });
 
 test('手册讲全了：打分五档、四类要主人本人的事、底线，且不写死选手清单', async () => {
@@ -82,8 +83,11 @@ test('xagents guide：先是手册全文，再是“这台机器现在的情况�
   const result = await c.cli(['guide']);
   assert.equal(result.code, 0, result.stderr);
   const [body, appendix] = [result.stdout.slice(0, result.stdout.indexOf('\n## 这台机器现在的情况')), result.stdout.slice(result.stdout.indexOf('## 这台机器现在的情况'))];
-  assert.equal(body.trimEnd(), manual.trimEnd(), '前半段必须是手册全文');
+  assert.equal(body.trimEnd(), guideBrief(manual).trimEnd(), '默认前半段是精简版');
   assert.equal(result.stdout.split('## 这台机器现在的情况').length, 2);
+  const all = await c.cli(['guide', '--all']); assert.equal(all.code, 0, all.stderr);
+  assert.equal(all.stdout.slice(0, all.stdout.indexOf('\n## 这台机器现在的情况')).trimEnd(), manual.trimEnd(), '--all 前半段是手册全文');
+  assert.equal(all.stdout.slice(all.stdout.indexOf('## 这台机器现在的情况')), appendix, '两种都带同样的机器情况');
 
   // 选手设置：和 xagents workers 一致，五位都在。
   assert.match(appendix, /- Codex（codex）· GPT-6 Astra：已关闭，不能派；强度 高档；快速版 未开放/);
@@ -131,7 +135,7 @@ test('xagents guide：登记处是空的也能用，额度没查过时提示先�
   assert.match(result.stdout, /：0 条/);
   for (const who of whos) assert.ok(result.stdout.includes(`（${who}）`));
   assert.equal((result.stdout.match(/：还没做过活$/gm) ?? []).length, whos.length);
-  const extra = await c.cli(['guide', '多余']); assert.equal(extra.code, 1); assert.match(extra.stderr, /参数数量不对/);
+  const extra = await c.cli(['guide', '多余']); assert.equal(extra.code, 1); assert.match(extra.stderr, /没有对得上“多余”的章节[\s\S]*- 7\. 盯进度/);
 });
 
 test('guideAppendix()：登记处连 jobs 目录都没有时不报错，也不联网查额度', async t => {
@@ -184,4 +188,20 @@ test('xagents guide 列出结束超过 1 小时还没拍板的活，刚结束的
   assert.match(r.stdout, /old-forgotten（测试）题目 old-forgotten：结束于 3 小时前/);
   assert.doesNotMatch(r.stdout, /- fresh-done|- old-decided/);
   assert.match(r.stdout, /adopt <号> --merged <提交号>/);
+});
+
+test('精简版留住必守规矩和章节目录，比全文短得多；按节号或标题里的字取单节', async t => {
+  const c = await context(t, false), manual = await readFile(manualFile, 'utf8'), brief = guideBrief(manual);
+  assert.ok(brief.length * 3 < manual.length, `精简版 ${brief.length} 字，全文 ${manual.length} 字`);
+  // 每次都要守的规矩一条不能少。
+  for (const rule of ['派给选手 / 负责人自己写 / 混合', '为什么派给它', 'run_in_background', '不要用 `xagents status` 反复查进度', '退出码 3', 'xagents verify', '四类事', '本机系统弹窗', '隔离自检没过不派活', '不用 `git stash`'])
+    assert.ok(brief.includes(rule), `精简版缺少：${rule}`);
+  for (const heading of manual.match(/^## \d+[a-z]?\. .+$/gm)!.filter(h => !h.startsWith('## 0.'))) assert.ok(brief.includes(`- ${heading.slice(3)}`), `目录缺少 ${heading}`);
+  assert.ok(!brief.includes('## 8. 审查和验收'), '精简版不带各节正文');
+  const seven = await c.cli(['guide', '7']); assert.equal(seven.code, 0, seven.stderr);
+  assert.ok(seven.stdout.startsWith('## 7. 盯进度'));
+  assert.ok(!seven.stdout.includes('## 这台机器现在的情况'), '按节取不带机器情况');
+  const two = await c.cli(['guide', '8b', '验收']); assert.equal(two.code, 0, two.stderr);
+  assert.deepEqual(two.stdout.match(/^## .+$/gm), ['## 8. 审查和验收', '## 8b. 搭档审改（小队）']);
+  const both = await c.cli(['guide', '7', '--all']); assert.equal(both.code, 1); assert.match(both.stderr, /--all 打印全文/);
 });

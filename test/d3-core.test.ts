@@ -369,6 +369,14 @@ test('wait：活先结束 → 正常返回，不管别的；结束的同时带�
   assert.equal(r2.reason, 'finished'); assert.equal(r2.fresh.length, 1); assert.equal(r2.fresh[0].kind, 'comment');
 });
 
+test('wait：一次给几个任务号或批号，全部结束才返回，同一件活只算一次', async () => {
+  const jobs = [running('a'), running('b'), running('c', { batch: 'a' })];
+  const { io, calls } = script(jobs, [j => { j[0].state = 'done'; }, j => { j[2].state = 'failed'; }, j => { j[1].state = 'done'; }]);
+  const result = await waitForJobs(['a', 'b'], io);
+  assert.equal(result.reason, 'finished'); assert.equal(calls.sleeps, 3);
+  assert.deepEqual(result.jobs.map(j => j.id), ['a', 'c', 'b']);
+});
+
 test('wait：主人先留言 → 立刻叫醒，任何任务上的新动作（留言、用这份、重做）都算', async () => {
   for (const [action, kind] of [
     [(j: Job[]) => { j[1].comments = [comment('停一下，我有话说', '2026-09-29T01:00:00.000Z')]; }, 'comment'],
@@ -410,6 +418,11 @@ test('wait 命令：被叫醒时用人话打印任务、动作、留言原文和
     const done = [running('a')];
     assert.equal(await wait('a', script(done, [j => { j[0].state = 'done'; }]).io), 0);
     assert.doesNotMatch(lines.join('\n'), /主人有新的动作/);
+    assert.match(lines.join('\n'), /1 件都结束了：做完 1 件/);
+    lines.length = 0;
+    const pair = [running('a'), running('b')];
+    assert.equal(await wait(['a', 'b'], script(pair, [j => { j[0].state = 'done'; j[1].comments = [comment('等等', '2026-09-29T01:00:00.000Z')]; }]).io), 3);
+    assert.ok(lines.join('\n').includes('xagents wait a b'));
   } finally { console.log = log; }
   const c = await registry(t);
   assert.match((await c.cli(['--help'])).stdout, /wait 的退出码：0 都做完了，1 有出错或失联，3 主人有新动作/);

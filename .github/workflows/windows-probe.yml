@@ -1,7 +1,7 @@
 name: Windows probe
 
-# Measures things that can only be measured on a real Windows machine: the isolation probes
-# (docs/design-windows.md) and the core test suite. It publishes nothing; results are workflow artifacts.
+# Measures things that can only be measured on a real Windows machine: a job dispatched end to end with Codex's
+# own sandbox (docs/design-windows.md sections 12 and 14), the custom endpoint probe and the core test suite. It publishes nothing; results are workflow artifacts.
 # Runs when started by hand, or on a push to a branch named probe/...
 
 on:
@@ -47,7 +47,7 @@ jobs:
           retention-days: 14
 
   codex-sandbox:
-    name: Codex sandbox (${{ matrix.os }})
+    name: Codex dispatch (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -90,9 +90,9 @@ jobs:
           "CODEX_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           & $exe --version
 
-      # Before anything else touches the machine: with nothing installed for hardening, does a job dispatched by the
-      # platform's own commands get done (docs/design-windows.md section 12). A local fake endpoint and a throwaway key.
-      - name: Dispatch a job end to end, nothing installed
+      # With nothing else installed, does a job dispatched by the platform's own commands get done
+      # (docs/design-windows.md sections 12 and 14). A local fake endpoint and a throwaway key.
+      - name: Dispatch a job end to end
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force probe-results | Out-Null
@@ -103,64 +103,6 @@ jobs:
           $env:XA_DISPATCH_RO = '1'
           node scripts/probe/windows-dispatch.mjs "probe-results/dispatch-ro-${{ matrix.os }}.json" -- node src/cli/cli.ts
           if ($write -ne 0) { exit $write }
-
-      - name: Run the probes
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force probe-results | Out-Null
-          node scripts/probe/windows-codex.mjs "$env:CODEX_EXE" "probe-results/codex-${{ matrix.os }}.json"
-
-      # The real thing: the platform's own setup command and its own self-check, with a throwaway registry.
-      - name: Install the isolation and run the self-check
-        if: always()
-        shell: pwsh
-        env:
-          XAGENTS_HOME: ${{ runner.temp }}\xagents-home
-        run: |
-          $env:XAGENTS_CODEX = $env:CODEX_EXE
-          New-Item -ItemType Directory -Force $env:XAGENTS_HOME | Out-Null
-          $before = Get-ChildItem -Force $env:USERPROFILE | Select-Object -ExpandProperty Name
-          node src/cli/cli.ts selfcheck
-          "exit code before setup: $LASTEXITCODE"
-          node src/cli/cli.ts windows-setup
-          "setup exit code: $LASTEXITCODE"
-          node src/cli/cli.ts selfcheck
-          $code = $LASTEXITCODE
-          "self-check exit code: $code"
-          "new entries in the home directory after the self-check (there should be none):"
-          Get-ChildItem -Force $env:USERPROFILE | Where-Object { $before -notcontains $_.Name } | Select-Object -ExpandProperty Name
-          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
-          # The platform's own folder made writable for everyone: the self-check must refuse (docs/design-windows.md 11.1).
-          icacls "$env:GITHUB_WORKSPACE" /grant '*S-1-1-0:(OI)(CI)M' | Out-Null
-          node src/cli/cli.ts selfcheck
-          "self-check exit code with a program folder everyone can write to (must not be 0): $LASTEXITCODE"
-          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-writable-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
-          icacls "$env:GITHUB_WORKSPACE" /remove '*S-1-1-0' | Out-Null
-          # A home directory like a real one: tens of thousands of files under the folders the permission table
-          # denies. How long does the self-check take then, and is a second run faster? (docs/design-windows.md 11.5)
-          node -e "const fs=require('fs'),path=require('path');for(const d of ['.claude/projects','.codex/sessions','.cursor/extensions','.ssh']){for(let i=0;i<80;i++){const dir=path.join(process.env.USERPROFILE,d,'d'+i);fs.mkdirSync(dir,{recursive:true});for(let j=0;j<250;j++)fs.writeFileSync(path.join(dir,'f'+j+'.txt'),'x');}}"
-          "files under .claude: $((Get-ChildItem -Recurse -File (Join-Path $env:USERPROFILE '.claude')).Count)"
-          foreach ($n in 1, 2) {
-            $t = Measure-Command { node src/cli/cli.ts selfcheck | Out-Host }
-            "self-check with a big home, run ${n}: exit code $LASTEXITCODE, $([int]$t.TotalSeconds) seconds"
-            Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-bighome-$n-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
-          }
-          node src/cli/cli.ts windows-setup --remove
-          node src/cli/cli.ts selfcheck
-          "self-check exit code without the fence: $LASTEXITCODE"
-          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') "probe-results/selfcheck-nofence-${{ matrix.os }}.json" -ErrorAction SilentlyContinue
-          exit 0
-
-      # The state the owner's machine is in: the hardened isolation has been installed for this Codex folder, but the
-      # self-check does not pass, so a dispatch still takes the plain path. Does the job get done then?
-      - name: Dispatch a job end to end, hardening installed but not in use
-        if: always()
-        shell: pwsh
-        env:
-          XA_DISPATCH_AFTER_SETUP: '1'
-        run: |
-          $env:XAGENTS_CODEX = $env:CODEX_EXE
-          node scripts/probe/windows-dispatch.mjs "probe-results/dispatch-after-setup-${{ matrix.os }}.json" -- node src/cli/cli.ts
 
       # A user's Codex that talks to a custom endpoint (docs/design-scan.md): does a job get out with today's
       # launch arguments, and with the endpoint carried over. A local fake endpoint and a throwaway key.
@@ -175,7 +117,6 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          if (Test-Path "probe-results/codex-${{ matrix.os }}.json") { Get-Content "probe-results/codex-${{ matrix.os }}.json" }
           if (Test-Path "probe-results/endpoint-${{ matrix.os }}.json") { Get-Content "probe-results/endpoint-${{ matrix.os }}.json" }
 
       - name: Upload the result

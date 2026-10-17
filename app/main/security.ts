@@ -4,6 +4,8 @@ import { posix, win32 } from 'node:path';
 
 export const productionCsp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' xa-icon:; connect-src 'none'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'";
 export const securePreferences = { contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } as const;
+// 窗口用的会话：名字必须以 persist: 开头，否则 Electron 只放在内存里，“记在本机”的东西（群读到哪、置顶、归档、选中的分页）每次重启都丢。
+export const windowPartition = 'persist:xa-desktop';
 
 export function trustedSender(event: IpcMainInvokeEvent, window: BrowserWindow | null, pageUrl: string, windows = process.platform === 'win32'): boolean {
   return Boolean(window && !window.isDestroyed() && event.sender === window.webContents &&

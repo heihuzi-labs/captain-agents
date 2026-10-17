@@ -6,7 +6,7 @@ import type { Effort } from '../../src/core/roster.ts';
 
 // 唯一的 IPC 白名单；没有通用文件、命令或任意 IPC 入口。
 export const channels = {
-  cliStatus: 'xa:cli-status', cliInstall: 'xa:cli-install', places: 'xa:places', openPlace: 'xa:open-place', isolationFix: 'xa:isolation-fix',
+  cliStatus: 'xa:cli-status', cliInstall: 'xa:cli-install', places: 'xa:places', openPlace: 'xa:open-place',
   appInfo: 'xa:app-info', onUpdate: 'xa:update', updateCheck: 'xa:update-check',
   updateDownload: 'xa:update-download', updateRestart: 'xa:update-restart', setAutoUpdateCheck: 'xa:auto-update-check',
   getView: 'xa:get-view', view: 'xa:view', open: 'xa:open',
@@ -45,8 +45,6 @@ export type XaBridge = {
   // 安装启动脚本；已有别的 xagents 时必须带 replace: true 才替换（界面先让人确认）。返回装完后的状态。
   cliInstall(replace: boolean): Promise<CliStatus>;
   // 位置（docs/ui-spec.md 第 10 节）：两处固定的位置；打开时只收 'app' 或 'data'，窗口传不进路径。
-  // 隔离（只在 Windows 上，docs/ui-spec.md 第 10 节）：没装好就先装（系统弹管理员确认框，主人点“是”），然后自检；结果随看板数据推回来。不带参数。
-  isolationFix(): Promise<void>;
   places(): Promise<Places>;
   openPlace(which: keyof Places): Promise<void>;
   appInfo(): Promise<AppInfo>;

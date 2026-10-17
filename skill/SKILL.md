@@ -10,7 +10,9 @@ description: 用派活工作台（xagents）把目标清楚的实现、修复、
 
 ## 第一步：先运行 `xagents guide`，读完再动手
 
-`xagents guide` 打印指挥手册全文，末尾附这台机器现在的情况：主人允许的选手和强度、各家额度、各家档案、手头的活和待办。怎么派、怎么审、怎么打分、出了故障怎么办，全在手册里，这里不重复。
+`xagents guide` 打印指挥手册精简版（每次都要守的规矩和章节目录），末尾附这台机器现在的情况：主人允许的选手和强度、各家额度、各家档案、手头的活和待办。做到哪一步再用 `xagents guide <节号或标题里的字>` 取那一节，全文用 `xagents guide --all`。怎么派、怎么审、怎么打分、出了故障怎么办，全在手册里，这里不重复。
+
+派出后用后台方式运行一条 `xagents wait <号> [<号> …]` 等到底，返回时会通知你；等的期间不要反复 `status` 查进度。
 
 ## 常用命令一览
 
@@ -18,7 +20,7 @@ description: 用派活工作台（xagents）把目标清楚的实现、修复、
 
 - 了解情况：`xagents guide`、`status`、`inbox`、`workers`、`quota`、`profiles`、`stats`
 - 派活：`xagents project add`（登记项目）、`run`
-- 盯进度：`xagents wait`、`status`、`stop`、`collect`
+- 盯进度：`xagents wait`（放后台，一条等到底）、`status`（主人问起时才查）、`stop`、`collect`
 - 搭档审改小队：`xagents team`（start / status / log / say / round / stop）
 - 验收和记录：`xagents verify`、`real`、`adopt`、`drop`、`rate`、`clean`
 - 主人的留言和拍板：`xagents inbox`、`reply`、`handled`

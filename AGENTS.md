@@ -28,8 +28,8 @@
 ## 安全底线（不许为了方便放宽）
 
 - 选手的名单和模型集中在 `src/core/roster.ts`，那是唯一的一张表；解析选手、启动参数、额度、隔离、自检都从它派生，不在别处写死选手。
-- 选手的启动参数和隔离模板（`src/core/workers.ts`、`sandbox/*.json`，Codex 的在 `src/core/sandbox.ts`）每一条都来自 2026-09-29 的实测，改动要附新的探针结果。Windows 上的那一套（`src/core/selfcheck-windows.ts`、`sandbox/windows/*.ps1`、`sandbox.ts` 和 `workers.ts` 里 Windows 的分支）来自 2026-10-12 在三台真的 Windows 机器上的实测，见 [docs/research/windows-codex-sandbox-2026-10-12.md](docs/research/windows-codex-sandbox-2026-10-12.md)，改动同样要附新的探针结果；探针脚本和流水线在 `scripts/probe/`、`.github/workflows/windows-probe.yml`。
-- **Windows 上只开 Codex 这一路**（Codex 的各个模型和借它跑的 DeepSeek），别的选手派活时直接拒绝；哪种系统开放哪几种隔离只写在 `selfcheck.ts` 的 `platformIsolations` 一处。**Windows 上隔离自检不拦派活**（主人 2026-10-13 定：装好就要能用，事情要简单）：缺省用 Codex 自带的、不用安装的那种隔离，选手只能改这件活自己的副本，但钥匙文件不禁读、外网和本机端口不拦。原来那一整套（专用账户、禁读名单、平台另加的本机回环过滤规则 `sandbox/windows/loopback-fence.ps1`、57 项自检）是可选的“加固”，主人在桌面应用的设置里点一下装（要管理员确认，平台不替主人提权），装好并且自检通过的电脑上派活才用它。macOS 上不变：自检没过不派活。设计和还没做到的地方见 [docs/design-windows.md](docs/design-windows.md) 第 12 节。
+- 选手的启动参数和隔离模板（`src/core/workers.ts`、`sandbox/*.json`，Codex 的在 `src/core/sandbox.ts`）每一条都来自 2026-09-29 的实测，改动要附新的探针结果。Windows 上的启动参数（`sandbox.ts` 和 `workers.ts` 里 Windows 的分支）来自流水线三台 Windows 机器上的实测，见 [docs/design-windows.md](docs/design-windows.md) 第 12 节，改动同样要附新的探针结果；探针脚本和流水线在 `scripts/probe/`、`.github/workflows/windows-probe.yml`。
+- **Windows 上只开 Codex 这一路**（Codex 的各个模型和借它跑的 DeepSeek），别的选手派活时直接拒绝；哪种系统开放哪几种隔离只写在 `selfcheck.ts` 的 `platformIsolations` 一处。**Windows 上只有 Codex 自带的保护，没有自检、没有加固**（主人 2026-10-18 定：用户都在自己的电脑上用）：选手只能改这件活自己的副本，写不进家目录，但读得到钥匙文件，外网和本机端口不拦，联网总开关在 Windows 上管不住。原来可选的“加固”（专用账户、禁读名单、回环拦截规则、57 项自检）已整套移除，见 [docs/design-windows.md](docs/design-windows.md) 第 14 节。macOS 上不变：自检没过不派活。
 - 推理强度只开中档、高档、超高档，不开最高档；Cursor 里只用 Claude、GPT、Grok 的模型（`roster.ts` 的底线）。
 - 主人在设置里允许哪些选手、哪些强度、要不要快速版（`src/core/policy.ts`），平台在派活时强制执行，`--force` 也跳不过；设置只能在底线之内收窄，不能放宽。
 - 选手联网只有一个总开关，缺省关，只有主人能在桌面应用里打开；打开后网络完全不限（含本机端口），文件和密钥规则不变。

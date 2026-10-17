@@ -26,7 +26,7 @@ import type { Notice } from './notifications.ts';
 import { createTray } from './tray.ts';
 import { readIcon } from './icons.ts';
 import { migrateIcons } from '../../src/core/icons.ts';
-import { httpsLink, securePreferences, secureSession, trustedSender } from './security.ts';
+import { httpsLink, securePreferences, secureSession, trustedSender, windowPartition } from './security.ts';
 import { loadBounds, saveBounds } from './window-state.ts';
 import { watchRegistry } from './watch.ts';
 import { startDesktop } from './startup.ts';
@@ -127,7 +127,7 @@ async function openWindow() {
     const current = new BrowserWindow({ ...bounds, minWidth: 900, minHeight: 600, title: '派活工作台',
       ...chrome, show: false,
       backgroundColor: windowBackground(nativeTheme.shouldUseDarkColors),
-      webPreferences: { ...securePreferences, preload: join(import.meta.dirname, '../preload/index.cjs'), partition: 'xa-desktop' } });
+      webPreferences: { ...securePreferences, preload: join(import.meta.dirname, '../preload/index.cjs'), partition: windowPartition } });
     window = current;
     // 留给页面处理，防止默认菜单的 Cmd+R（Windows 上是 Ctrl+R）先把整个窗口重载。
     current.webContents.on('before-input-event', (_event, input) => {
@@ -188,7 +188,7 @@ else {
       slimmer = slimScheduler({ run: async () => { if ((await slimOld()).jobs.length) publish(await readDesktopView()); }, onError: console.error });
       slimmer.start();
     }
-    const isolated = session.fromPartition('xa-desktop');
+    const isolated = session.fromPartition(windowPartition);
     secureSession(isolated, devUrl);
     isolated.protocol.handle('xa-icon', async request => {
       if (request.method !== 'GET') return new Response(null, { status: 405 });
@@ -229,26 +229,6 @@ else {
       if (args.length !== 1 || (args[0] !== 'app' && args[0] !== 'data')) throw new Error('只能打开程序或数据所在的文件夹。');
       const failed = await shell.openPath(places()[args[0]]);
       if (failed) throw new Error(failed);
-    });
-    // 隔离（只在 Windows 上）：主人在设置里点了才做。没装好就先装——提权的确认框由系统弹、主人自己点，应用不替主人提权——再自检；
-    // 自检结果写进缓存，随看板数据推给窗口。同一时间只做一次。
-    let fixing = false;
-    ipcMain.handle(channels.isolationFix, async (event, ...args: unknown[]) => {
-      guard(event);
-      if (args.length) throw new Error('安装和检查隔离不需要参数。');
-      if (process.platform !== 'win32') throw new Error('只有 Windows 上的隔离需要另外安装。');
-      if (fixing) throw new Error('正在安装或检查，请稍等。');
-      fixing = true;
-      try {
-        const { readSelfcheck, selfcheck } = await import('../../src/core/selfcheck.ts');
-        if ((await readSelfcheck()).ok !== true) {
-          const { windowsSetup } = await import('../../src/core/selfcheck-windows.ts');
-          const { execute } = await import('../../src/core/verify.ts');
-          const setup = await windowsSetup(execute);
-          if (!setup.ok) throw new Error(setup.lines.join('；'));
-        }
-        await selfcheck();
-      } finally { fixing = false; publish(await readDesktopView()); }
     });
     ipcMain.handle(channels.cliInstall, async (event, ...args: unknown[]) => {
       guard(event);

@@ -2,7 +2,7 @@
 // 登记处是临时的，里面是几件替身活；不碰这台机器上真实的数据。不进 verify。
 // 用法：node test/e2e/page-shots.ts <输出目录> [--app <打包后的可执行文件>] [--scales 1,1.25,1.5] [--as-windows]
 //   不写 --app 就启动 out/main/index.js（先 npm run build）。第一个缩放截全套，其余缩放只截浅色的几张。
-//   --as-windows：在别的系统上把页面标成 Windows，只为看排版（字号、滚动条）；字体渲染要在真的 Windows 上看。
+//   --as-windows：在别的系统上把页面当成 Windows（系统标识和排版都换），看 Windows 才有的界面和排版；字体渲染要在真的 Windows 上看。
 //   --icons <目录>：把这个目录里的各家图标（codex.png 等）放进临时登记处，看真图标的样子；不写就显示字母。
 // 截的是页面，系统画的窗口按钮不在图里。在 Windows 上、缩放是 1 的那一轮另外把窗口亮出来截两张屏幕（平常和开着弹窗），
 // 用来看窗口按钮那一块；托盘、通知仍要在真机上看（docs/design-windows.md 第 11.2 节）。
@@ -71,6 +71,8 @@ try {
       if (process.platform === 'win32') await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive());
       await resize(1180, 820);
       await page.evaluate(() => localStorage.setItem('xa.done-expanded', JSON.stringify(['记账应用', '官网改版'])));
+      // 界面按系统标识认 Windows（app/renderer/ui/platform.ts），刷新前换掉才生效。
+      if (asWindows) await app.evaluate(({ BrowserWindow }) => { const web = BrowserWindow.getAllWindows()[0].webContents; web.setUserAgent(web.getUserAgent().replace(/\([^)]*\)/, '(Windows NT 10.0; Win64; x64)')); });
       await page.reload(); await page.waitForSelector('[data-testid="running"]');
       if (asWindows) await page.evaluate(() => { document.documentElement.dataset.platform = 'windows'; });
       const shot = async (name: string) => {

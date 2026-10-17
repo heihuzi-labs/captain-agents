@@ -216,10 +216,9 @@ jobs:
         shell: bash
         run: node scripts/probe/windows-launcher.mjs "$APP_EXECUTABLE" shots/launcher.json || echo "launcher check did not finish"
 
-      # The pipeline's other self-check runs from the source tree with plain Node. An installed app runs the
-      # platform through its own program instead, and the probe inside the isolation is started with that
-      # program too. This is that path, from the place a per-user install lands (docs/design-windows.md 11.5).
-      - name: Self-check through the packaged app (Windows)
+      # The probe pipeline dispatches from the source tree with plain Node. An installed app runs the platform
+      # through its own program instead. This is that path, from the place a per-user install lands.
+      - name: Dispatch through the packaged app (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -236,23 +235,15 @@ jobs:
           $cli = Join-Path $app 'resources\platform\bin\xagents'
           $env:ELECTRON_RUN_AS_NODE = '1'
           New-Item -ItemType Directory -Force $env:XAGENTS_HOME | Out-Null
-          # First, with nothing installed for hardening: a job dispatched through the packaged app must get done.
+          # A job dispatched through the packaged app must get done, with Codex's own sandbox (docs/design-windows.md 14).
           node scripts/probe/windows-dispatch.mjs shots\dispatch-packaged.json -- $exe $cli
-          "dispatch through the packaged app, nothing installed: exit code $LASTEXITCODE"
+          "dispatch through the packaged app: exit code $LASTEXITCODE"
           $dispatch = $LASTEXITCODE
           $env:XA_DISPATCH_RO = '1'
           node scripts/probe/windows-dispatch.mjs shots\dispatch-packaged-ro.json -- $exe $cli
           "read-only dispatch through the packaged app: exit code $LASTEXITCODE"
           if ($LASTEXITCODE -ne 0) { $dispatch = $LASTEXITCODE }
           Remove-Item Env:XA_DISPATCH_RO
-          & $exe $cli windows-setup | Out-Host
-          "setup exit code: $LASTEXITCODE"
-          foreach ($n in 1, 2) {
-            $t = Measure-Command { & $exe $cli selfcheck | Out-Host }
-            "self-check through the packaged app, run ${n}: exit code $LASTEXITCODE, $([int]$t.TotalSeconds) seconds"
-          }
-          Copy-Item (Join-Path $env:XAGENTS_HOME 'cache\selfcheck.json') shots\selfcheck-packaged.json -ErrorAction SilentlyContinue
-          & $exe $cli windows-setup --remove | Out-Host
           exit $dispatch
 
       # The platform calls the system directly on Windows instead of starting a hidden PowerShell (docs/design-windows.md

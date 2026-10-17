@@ -37,16 +37,26 @@ export function describeAction(a: OwnerAction) {
   if (a.kind === 'comment') return `${head}：主人留言（${when}）：\n  ${a.text!.replace(/\n/g, '\n  ')}`;
   return `${head}：${a.kind === 'adopt' ? '主人选了用这份' : a.kind === 'drop' ? '主人选了不要了' : '主人请求重做'}（${when}）`;
 }
-export async function wait(id: string, io?: WaitIO) {
-  if (await tryTeam(id)) return waitTeam(id, io);
-  const result = await waitForJobs(id, io);
+// 可以一次等几个任务号或批号：全部结束才返回，期间主人有新动作就提前叫醒。小队只能单独等。
+export async function wait(id: string | string[], io?: WaitIO) {
+  const ids = typeof id === 'string' ? [id] : id;
+  if (ids.length === 1 && await tryTeam(ids[0])) return waitTeam(ids[0], io);
+  for (const one of ids) if (ids.length > 1 && await tryTeam(one)) throw new Error(`${one} 是小队，小队要单独等：xagents wait ${one}`);
+  const again = `xagents wait ${ids.join(' ')}`;
+  const result = await waitForJobs(ids, io);
   if (result.reason === 'owner') {
-    console.log(`主人有新的动作，先处理再接着等：\n${result.fresh.map(describeAction).join('\n')}\n处理完（xagents reply 回复留言，或 xagents handled 标记照办）再运行：xagents wait ${id}`);
+    console.log(`主人有新的动作，先处理再接着等：\n${result.fresh.map(describeAction).join('\n')}\n处理完（xagents reply 回复留言，或 xagents handled 标记照办）再运行：${again}`);
     return OWNER_EXIT;
   }
-  console.log(statusTable(result.jobs));
+  console.log(`${finishedLine(result.jobs)}\n${statusTable(result.jobs)}`);
   if (result.fresh.length) console.log(`另外，主人有新的动作，请先运行 xagents inbox：\n${result.fresh.map(describeAction).join('\n')}`);
   return result.jobs.some(j => j.state === 'failed' || j.state === 'lost') ? 1 : 0;
+}
+// 一句话结论放在表前面：负责人放后台等，醒来先看这一句就知道下一步。
+function finishedLine(jobs: Job[]) {
+  const names = { done: '做完', failed: '出错', lost: '失联', stopped: '被停下' } as const;
+  const parts = (Object.keys(names) as (keyof typeof names)[]).map(s => [names[s], jobs.filter(j => j.state === s).length] as const).filter(([, n]) => n).map(([name, n]) => `${name} ${n} 件`);
+  return `${jobs.length} 件都结束了：${parts.join('，')}。做完的接着 xagents verify；出错或失联的看任务文件夹里的日志。`;
 }
 async function waitTeam(id: string, io?: WaitIO) {
   const result = await waitForTeam(id, io);

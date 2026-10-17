@@ -85,9 +85,8 @@ test('cursor-sonnet 沿用 Cursor 的隔离模板，不新开模板', async t =>
   // 整个 ~/.grok 都禁读：没登录 Grok 时自检能凭“文件夹也读不到”确认挡住（2026-10-08）。
   assert.ok(file.filesystem.denyRead.includes('~/.grok') && file.filesystem.denyRead.includes('~/.ssh') && file.filesystem.denyRead.includes('~/.npmrc'));
   assert.ok(!file.filesystem.denyRead.includes('~/.cursor/cli-config.json'));
-  // 模板只有这两份；sandbox/windows 放的是 Windows 上装隔离用的脚本，不是模板。
-  assert.deepEqual((await readdir(join(root, 'sandbox'))).sort(), ['cursor.json', 'grok.json', 'windows']);
-  assert.deepEqual((await readdir(join(root, 'sandbox', 'windows'))).sort(), ['loopback-fence.ps1', 'setup.ps1']);
+  // 模板只有这两份（Windows 上装加固用的脚本 2026-10-18 随加固一起删了）。
+  assert.deepEqual((await readdir(join(root, 'sandbox'))).sort(), ['cursor.json', 'grok.json']);
 });
 test('四种命令使用指定安全参数、模型、输入输出和环境变量', async t => {
   const c = await context(t, false); process.env.XAGENTS_HOME = c.home;
@@ -103,9 +102,8 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   for (const feature of ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories']) {
     assert.ok(codex.args.some((v, i) => v === '--disable' && codex.args[i + 1] === feature));
   }
-  // Windows 上这里没做过自检（临时登记处是空的），走的是“没装加固”的那一路：权限表不带禁读名单。
-  const noHardening = process.platform === 'win32';
-  assert.ok(codex.args.includes('--ignore-user-config')); assert.ok(codex.args.includes(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, undefined, noHardening)));
+  // Windows 上用 Codex 自带的那一档，权限表不带禁读名单（codexPermissions 按系统自己分）。
+  assert.ok(codex.args.includes('--ignore-user-config')); assert.ok(codex.args.includes(codexPermissions(job('codex', true), { denyReadExtra: [] })));
   // Codex 的 :workspace 放开 $TMPDIR：指向任务的 tmp，并由启动前建好。
   const tmp = join(c.home, 'jobs', '0929-1000-test', 'tmp');
   assert.deepEqual(codex.env, { TMPDIR: tmp, ...(process.platform === 'win32' ? { TEMP: tmp, TMP: tmp } : {}) }); assert.ok((await stat(tmp)).isDirectory());
@@ -124,7 +122,7 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   // Codex 主进程本身也不能继承别家的钥匙（这些变量在 Codex 里比登录文件优先）；普通 Codex 不受影响。
   assert.deepEqual(ds.unset, KEY_VARS); assert.equal(codex.unset, undefined);
   for (const name of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN', 'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']) assert.ok(KEY_VARS.includes(name), name);
-  assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] }, undefined, false, undefined, noHardening)));
+  assert.ok(ds.args.includes('--ignore-user-config')); assert.ok(ds.args.includes(codexPermissions(job('deepseek', true, 'deepseek:high'), { denyReadExtra: [] })));
   // 主人的 Codex 接的是自定义接口：那一段原样带进启动参数，别的配置不带；钥匙变量只记名字，值不进命令（docs/design-scan.md 规则二）。
   const oldHome = process.env.CODEX_HOME, relayHome = join(c.temp, 'relay-codex');
   await mkdir(relayHome, { recursive: true });
@@ -148,11 +146,11 @@ test('四种命令使用指定安全参数、模型、输入输出和环境变�
   assert.equal(codex.pass, undefined);
   // 三种隔离都禁读终端配置文件和命令历史（主人常把钥匙写在里面，Grok 的登录式 bash 还会自动读），以及常见的登录凭据文件。
   for (const f of [...SHELL_FILES, ...CREDENTIAL_FILES]) {
-    assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, () => true).includes(`${JSON.stringify(join(homedir(), f))}="deny"`), f);
+    assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, false).includes(`${JSON.stringify(join(homedir(), f))}="deny"`), f);
     for (const who of ['grok', 'cursor-grok'] as Who[]) assert.ok((await sandbox(job(who), { denyReadExtra: [] })).filesystem.denyRead.includes(join(homedir(), f)), `${who} ${f}`);
   }
   // 三种隔离都禁读 DeepSeek 的登录文件夹。
-  assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, () => true).includes(`${JSON.stringify(join(c.home, 'deepseek'))}="deny"`));
+  assert.ok(codexPermissions(job('codex', true), { denyReadExtra: [] }, undefined, false, false).includes(`${JSON.stringify(join(c.home, 'deepseek'))}="deny"`));
   const grok = await command(job('grok'), '题目', { denyReadExtra: [] });
   assert.equal(Object.keys(grok.env).length, 13); assert.equal(Object.values(grok.env).filter(v => v === 'false').length, 10);
   // srt 用 CLAUDE_CODE_TMPDIR 给选手设 TMPDIR（不设就是公用的 /tmp/claude）。
@@ -207,25 +205,33 @@ test('Codex 权限表完整禁读、开口 tmp、合并项目双份路径并去�
   const { homedir } = await import('node:os');
   const p = { denyReadExtra: ['.data', 'secret-dir', '.data'] };
   for (const ro of [false, true]) {
-    // 第五个参数：把名单上的路径都当成本机存在的（Windows 上权限表只写存在的路径，这里要看的是完整名单）。
-    const j = job('codex', ro), table = codexPermissions(j, p, undefined, false, () => true);
+    // 第五个参数：按 macOS 算（Windows 上权限表什么都不加，见下面那条测试）。
+    const j = job('codex', ro), table = codexPermissions(j, p, undefined, false, false);
     assert.ok(table.startsWith(`permissions.xa={extends="${ro ? ':read-only' : ':workspace'}",filesystem={`));
     for (const entry of ['.ssh', '.codex', '.grok', '.cursor', '.aws', '.claude', '.config/gh', '.npmrc']) assert.ok(table.includes(`${JSON.stringify(join(homedir(), entry))}="deny"`), entry);
     assert.ok(table.includes(`${JSON.stringify(join(homedir(), '.codex/tmp'))}="read"`));
     // 钥匙串的两个文件夹（本用户的、系统的）都禁读。
     for (const dir of keychainDirs()) assert.ok(table.includes(`${JSON.stringify(dir)}="deny"`), dir);
     // 公用的 /tmp 只读，只有任务自己的 tmp 可写。
-    assert.equal(table.includes(`":slash_tmp"="read"`), process.platform !== 'win32'); assert.ok(table.includes(`":tmpdir"="read"`)); assert.ok(table.includes(`${JSON.stringify(jobTmpDir(j))}="write"`));
+    assert.ok(table.includes(`":slash_tmp"="read"`)); assert.ok(table.includes(`":tmpdir"="read"`)); assert.ok(table.includes(`${JSON.stringify(jobTmpDir(j))}="write"`));
     for (const base of [j.repo, j.worktree]) for (const extra of p.denyReadExtra) {
       assert.equal(table.split(`${JSON.stringify(join(base, extra))}="deny"`).length - 1, 1);
     }
   }
 });
 
+test('Windows 上 Codex 权限表什么都不加：只读和能改文件两档原样，联网开着时只多一句 enabled（docs/design-windows.md 第 12、14 节）', () => {
+  const j = job('codex'), p = { denyReadExtra: ['.data'], denyReadHome: ['.my-secrets'] };
+  assert.equal(codexPermissions(j, p, undefined, false, true), 'permissions.xa={extends=":workspace",filesystem={}}');
+  assert.equal(codexPermissions({ ...j, mode: 'read-only' }, p, undefined, false, true), 'permissions.xa={extends=":read-only",filesystem={}}');
+  assert.equal(codexPermissions(j, p, undefined, true, true), 'permissions.xa={extends=":workspace",filesystem={},network={enabled=true}}');
+  assert.ok(codexPermissions(j, p, undefined, false, false).includes('"deny"'), '别的系统上照旧带禁读名单');
+});
+
 test('Codex TOML 路径转义引号和反斜杠，保留空格中文，拒绝控制字符和越界路径', () => {
   const j = { ...job('codex'), repo: resolve('/仓库 空格"反\\斜'), worktree: resolve('/副本 空格"反\\斜') };
   const extra = '目录 空格"反\\斜';
-  const table = codexPermissions(j, { denyReadExtra: [extra] }, undefined, false, () => true);
+  const table = codexPermissions(j, { denyReadExtra: [extra] }, undefined, false, false);
   for (const root of [j.repo, j.worktree]) assert.ok(table.includes(`${JSON.stringify(join(root, extra))}="deny"`));
   for (const char of ['\n', '\r', '\t', '\0', '\x1f', '\x7f', '\x85']) {
     assert.throws(() => codexPermissions(j, { denyReadExtra: [`secret${char}/..hidden`] }), /控制字符/);
@@ -245,11 +251,10 @@ test('Codex 最终参数只换权限档，其余完全保留，绝不混用 -s �
   for (const ro of [false, true]) {
     const j = job('codex', ro);
     const actual = await command(j, '题目', p);
-    // Windows 上这里没做过自检（临时登记处是空的），所以走的是“没装加固”的那一路：免安装的隔离，权限表不带禁读名单。
-    const plain = process.platform === 'win32';
-    assert.deepEqual(actual.args, ['exec', '--ignore-user-config', ...(plain ? WINDOWS_PLAIN : []),
+    // Windows 上用 Codex 自带的、免安装的那种隔离，权限表不带禁读名单。
+    assert.deepEqual(actual.args, ['exec', '--ignore-user-config', ...(process.platform === 'win32' ? WINDOWS_PLAIN : []),
       '--disable', 'plugins', '--disable', 'apps', '--disable', 'remote_plugin', '--disable', 'computer_use', '--disable', 'browser_use', '--disable', 'browser_use_external', '--disable', 'in_app_browser', '--disable', 'hooks', '--disable', 'memories',
-      '-c', codexEnvPolicy(), '-m', j.model, '-c', 'model_reasoning_effort="high"', '-c', 'default_permissions="xa"', '-c', codexPermissions(j, p, undefined, false, undefined, plain),
+      '-c', codexEnvPolicy(), '-m', j.model, '-c', 'model_reasoning_effort="high"', '-c', 'default_permissions="xa"', '-c', codexPermissions(j, p, undefined, false),
       '-C', j.worktree, '--json', '-o', join(c.home, 'jobs', j.id, 'final.md'), '-']);
     assert.ok(!actual.args.includes('-s')); assert.ok(!actual.args.includes('--sandbox'));
     assert.ok(!actual.args.some(arg => arg.includes('sandbox_mode')));
@@ -347,7 +352,7 @@ test('设置里额外禁读的家目录位置，三家隔离都加上；写错�
   }
   process.env.XAGENTS_CODEX = resolve('/test/codex');
   const codex = await command(job('codex'), '题目', home);
-  // Windows 上权限表只写本机存在的路径，这个假位置不存在，所以那里不会出现在启动参数里（见 selfcheck-windows.test.ts）。
+  // Windows 上权限表什么都不加（Codex 自带的那一档带不了禁读名单），所以只在别的系统上查。
   if (process.platform !== 'win32') assert.ok(codex.args.some(a => a.includes(`${JSON.stringify(join(homedir(), '.my-secrets'))}="deny"`)));
   for (const bad of [['../escape'], ['/abs'], ['~/.x'], ['.'], [''], 'x', [1], ['a\nb']]) {
     await writeFile(join(c.home, 'config.json'), JSON.stringify({ denyReadHome: bad }));

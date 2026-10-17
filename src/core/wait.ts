@@ -59,12 +59,15 @@ export type TeamWaitResult =
   | { reason: 'settled'; team: Team; fresh: OwnerAction[] }
   | { reason: 'owner'; team: Team; fresh: OwnerAction[] };
 // 等指定的活结束，同时盯着主人的新动作：开始等之前已经在待办里的不算，之后新出现的（任何任务或小队上）立刻返回。
-// 活已经结束时，以“活结束”为准，顺带带回同时出现的新动作。
-export async function waitForJobs(id: string, io: WaitIO = real, pollMs = 2000): Promise<WaitResult> {
+// 活已经结束时，以“活结束”为准，顺带带回同时出现的新动作。没有时间上限：负责人放后台跑一条，做完再叫醒它。
+// 可以一次给几个任务号或批号，全部结束才返回（同一件活只算一次）。
+export async function waitForJobs(id: string | string[], io: WaitIO = real, pollMs = 2000): Promise<WaitResult> {
+  const ids = typeof id === 'string' ? [id] : id;
   const teams = io.teams ?? (() => Promise.resolve([] as Team[]));
   const known = new Set((await allOwnerActions(await io.list(), await teams(), await (io.chats?.() ?? Promise.resolve([])))).map(a => a.key));
   while (true) {
-    const jobs = await io.select(id);
+    const seen = new Set<string>(), jobs: Job[] = [];
+    for (const one of ids) for (const job of await io.select(one)) if (!seen.has(job.id)) { seen.add(job.id); jobs.push(job); }
     await io.refresh();
     const fresh = (await allOwnerActions(await io.list(), await teams(), await (io.chats?.() ?? Promise.resolve([])))).filter(a => !known.has(a.key));
     if (!jobs.some(active)) return { reason: 'finished', jobs, fresh };

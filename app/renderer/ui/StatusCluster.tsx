@@ -8,11 +8,11 @@ import { isWindows } from './platform.ts';
 const CHECK = { true: ['隔离正常', 'done'], false: ['隔离自检没过', 'failed'], null: ['还没自检', 'queued'] } as const;
 // 顶栏右边的状态块：看板数据里有几家额度就画几个环（中心是厂家图标，旁边写百分比；一家都没有时不画）+ 隔离自检小圆点。整块是一个按钮，点一下去“各家表现”；
 // 悬停整块看各家详情（厂家、各池百分比、数据时间）和自检原文；圆点上单独写自检原文。
+// Windows 上没有隔离自检（docs/design-windows.md 第 14 节）：不画圆点，提示里也不写自检。
 export function StatusCluster({ quota, selfcheck, onOpen, stop }: { quota: View['quota']; selfcheck: View['selfcheck']; onOpen: () => void; stop?: QuotaStop }) {
-  // Windows 上加固是可选的：没装、没过都照样能派活，小圆点不报警，只说明现在用的是哪一种保护。
-  const [text, tone] = isWindows && selfcheck.ok !== true ? ['用的是 Codex 自带的保护，没装加固', 'queued'] as const : CHECK[String(selfcheck.ok) as keyof typeof CHECK];
-  const tip = [...quota.map(q => `${q.name}${q.plan ? `（${q.plan}）` : ''}\n${quotaTip(q)}`), `${text}\n${selfcheck.note}`].join('\n\n');
-  return <button type="button" className="status" aria-label="各家额度和隔离自检，点开看各家表现" title={tip} onClick={onOpen}>
+  const [text, tone] = CHECK[String(selfcheck.ok) as keyof typeof CHECK];
+  const tip = [...quota.map(q => `${q.name}${q.plan ? `（${q.plan}）` : ''}\n${quotaTip(q)}`), ...(isWindows ? [] : [`${text}\n${selfcheck.note}`])].join('\n\n');
+  return <button type="button" className="status" aria-label={isWindows ? '各家额度，点开看各家表现' : '各家额度和隔离自检，点开看各家表现'} title={tip} onClick={onOpen}>
     {quota.map(q => {
       const top = topBar(q), used = top?.used ?? null;
       // 环旁写百分比，一眼能读；快用完时数字和环一起变色。
@@ -21,6 +21,6 @@ export function StatusCluster({ quota, selfcheck, onOpen, stop }: { quota: View[
         <span className="quota-pct" aria-hidden="true">{used == null ? '—' : `${top?.approx ? '<' : ''}${used}%`}</span>
       </span>;
     })}
-    <span className={'dot dot-' + tone} role="img" aria-label={text} title={selfcheck.note} />
+    {!isWindows && <span className={'dot dot-' + tone} role="img" aria-label={text} title={selfcheck.note} />}
   </button>;
 }

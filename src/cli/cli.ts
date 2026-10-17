@@ -14,7 +14,7 @@ import { table } from './format.ts';
 import { megabytes } from '../core/text.ts';
 import { INTRO_TEXT } from '../core/intro.ts';
 import { connect, connectArgument, connectStateNames, connectStatus, disconnect } from '../core/connect.ts';
-import { selfcheck } from '../core/selfcheck.ts';
+import { selfcheck, WINDOWS_NO_SELFCHECK } from '../core/selfcheck.ts';
 import { verify, skipVerify, checkFor } from '../core/verify.ts';
 import { decide, markHandled } from '../core/decide.ts';
 import { decisionMessage } from './decide.ts';
@@ -44,8 +44,10 @@ const help = () => `派活工作台：登记、派发和收集本机助手的任
   xagents connect   # 看各家 AI 的接入状态
   xagents connect <claude|codex|grok|cursor|dsh> [--undo]   # 接入；--undo 撤下（dsh 是 DeepSeek Harness）
   xagents login deepseek   # 主人自己登录 DeepSeek：按提示粘贴 API 钥匙（屏幕上不显示），由 Codex 单独保管，不影响 ChatGPT 登录
-  xagents guide
-    打印指挥手册全文，末尾附这台机器现在的情况（选手设置、额度、各家档案、手头的活）。来指挥的 AI 第一步先运行它
+  xagents guide [--all]
+    打印指挥手册精简版（必守规矩和章节目录），末尾附这台机器现在的情况（选手设置、额度、各家档案、手头的活）。来指挥的 AI 第一步先运行它；--all 打印全文
+  xagents guide <节号或标题里的字> [...]
+    只打印手册里的那几节，比如 xagents guide 7、xagents guide 验收
   xagents project add <名字> <仓库路径> [--label 显示名] [--worktree-root 相对路径] [--setup 命令] [--verify 命令] [--deny-read 路径] [--rules 文件]
   xagents project label <名字> <显示名>   # 只改应用里显示的项目名
   xagents project archive|unarchive <名字>   # 归档后看板已完成列和历史页“全部”不显示，记录和打分都留着；归档的项目不能派活
@@ -75,6 +77,8 @@ const help = () => `派活工作台：登记、派发和收集本机助手的任
   xagents status [任务号|批号|队号] [--all]
     有计时记录的任务会显示跑命令用时和步数；工具重叠只计一次，休眠不计入
   xagents wait|collect|stop <任务号|批号>
+  xagents wait <任务号|批号> [<任务号|批号> …]
+    一直等到给的活全部结束才返回（不设时间上限），适合放后台跑；期间主人有新动作会提前返回
     wait 的退出码：0 都做完了，1 有出错或失联，3 主人有新动作（留言、用这份、不要了、重做）要先处理
   xagents wait <队号>
     小队 wait 的退出码：0 已收场，3 主人有新动作要先处理，4 在等负责人
@@ -83,9 +87,7 @@ const help = () => `派活工作台：登记、派发和收集本机助手的任
   xagents slim [--dry-run] [--force]
     到期的旧日志移到废纸篓；--dry-run 只预览；--force 忽略自动清理开关，天数和条件仍按设置
   xagents selfcheck
-    检查关网时的隔离，需负责人在隔离外运行
-  xagents windows-setup [--remove]
-    只在 Windows 上用：一次装齐派活要用的隔离（系统会弹一次管理员确认框，由主人点）；--remove 撤掉平台自己加的那几条规则
+    检查关网时的隔离，需负责人在隔离外运行；Windows 上不做自检（选手用 Codex 自带的保护）
   xagents verify <任务号>
   xagents verify <任务号> --skip "为什么不用验收"
     能改文件的活，采用前要有通过的验收记录，或用 --skip 写明理由；只读的活不用
@@ -177,30 +179,22 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     if (cmd === 'guide') {
-      arity(rest, 0);
+      const p = parse(rest, [], ['all']);
       // 只有这条命令用到手册和档案，用到时再加载，别的命令启动时不背这些模块。
-      const { readGuide, guideAppendix } = await import('../core/guide.ts');
+      const { readGuide, guideAppendix, guideBrief, guideSections } = await import('../core/guide.ts');
       const manual = await readGuide();
+      // 按节取时只打印那几节，不带“这台机器现在的情况”，省得负责人重复读。
+      if (p.positional.length) { if (p.switches.has('all')) throw new Error('--all 打印全文，不能和章节一起用。'); console.log(guideSections(manual, p.positional)); return 0; }
       await reconcileSafely(); // 和 status 一样先修正失联的任务，手头的活才数得准
-      console.log(`${manual.trimEnd()}\n\n${await guideAppendix()}`);
+      console.log(`${(p.switches.has('all') ? manual : guideBrief(manual)).trimEnd()}\n\n${await guideAppendix()}`);
       return 0;
     }
     // 02b：自检、验收、决定、统计的命令接入。
     if (cmd === 'selfcheck') {
       arity(rest, 0);
+      if (process.platform === 'win32') { console.log(WINDOWS_NO_SELFCHECK); return 0; }
       const result = await selfcheck(); await reconcileSafely();
       console.log(`${result.ok ? '自检通过' : '自检没过'}：${result.note}`); return result.ok ? 0 : 1;
-    }
-    if (cmd === 'windows-setup') {
-      const remove = rest.length === 1 && rest[0] === '--remove';
-      if (!remove) arity(rest, 0);
-      if (process.platform !== 'win32') throw new Error('这条命令只在 Windows 上用；macOS 上的隔离不需要另外安装。');
-      const { windowsSetup } = await import('../core/selfcheck-windows.ts');
-      const { execute } = await import('../core/verify.ts');
-      const result = await windowsSetup(execute, remove);
-      for (const line of result.lines) console.log(line);
-      console.log(result.ok ? (remove ? '已撤掉。' : '装好了。接着运行 xagents selfcheck 看每一项。') : '没有全部完成，见上面各行。');
-      return result.ok ? 0 : 1;
     }
     if (cmd === 'verify') {
       const p = parse(rest, ['skip']); arity(p.positional, 1);
@@ -385,8 +379,9 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     if (cmd === '__run') { arity(rest, 1); await runWorker(rest[0]); return 0; }
     if (cmd === 'status') { const p = parse(rest, [], ['all']); arity(p.positional, 0, 1); await status(p.positional[0], p.switches.has('all')); return 0; }
     if (['wait', 'collect', 'stop'].includes(cmd)) {
-      const p = parse(rest); arity(p.positional, 1);
-      if (cmd === 'wait') return await wait(p.positional[0]);
+      const p = parse(rest);
+      if (cmd === 'wait') { arity(p.positional, 1, 50); return await wait(p.positional); }
+      arity(p.positional, 1);
       if (cmd === 'collect') await collect(p.positional[0]); else await stop(p.positional[0]); return 0;
     }
     if (cmd === 'clean') {

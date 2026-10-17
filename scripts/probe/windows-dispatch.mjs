@@ -1,7 +1,7 @@
-// 端到端：在一台什么都没装加固的机器上，用平台自己的命令真的派一件活，看它做完没有（docs/design-windows.md 第 12 节）。
+// 端到端：在一台什么都没另外装的机器上，用平台自己的命令真的派一件活，看它做完没有（docs/design-windows.md 第 12、14 节）。
 // 模型是本机起的假接口（只认 Responses 协议），钥匙是假的，登记处和 Codex 文件夹都是临时的：不碰真实的登录，不连真的接口。
 // 假模型让选手在副本里写一个文件，再说一句话收尾；所以“活做完了、文件在副本里”就说明：选手列得出来、接口那一段带上了、
-// 派活没被自检拦住、Codex 自带的隔离里命令跑得起来而且写得进副本。
+// Codex 自带的隔离里命令跑得起来而且写得进副本。
 // 用法：node scripts/probe/windows-dispatch.mjs <结果文件> -- <启动 xagents 的命令和参数…>
 //   从源码跑：… -- node src/cli/cli.ts        装好的应用：… -- <应用的程序> <应用里的 platform/bin/xagents>（环境里设 ELECTRON_RUN_AS_NODE=1）
 import { spawn } from 'node:child_process';
@@ -73,8 +73,6 @@ let ok = false;
 try {
   // “主人的 Codex”：接的是自定义接口（就是上面的假接口），钥匙交给 Codex 自己保管。
   await fs.writeFile(path.join(codexHome, 'config.toml'), `model_provider = "probe"\n\n[model_providers.probe]\nname = "Probe"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nrequires_openai_auth = true\n`);
-  // 主人的电脑上常见的一种状态：加固装过（管理员装一次的那种隔离已经给这个 Codex 文件夹装上了），但自检没通过，所以派活走的仍是“没装加固”的那一路。
-  if (windows && process.env.XA_DISPATCH_AFTER_SETUP) result.steps.setup = (await run(codex, ['sandbox', 'setup', '--elevated', '--current-user'], { timeout: 300_000 })).exit;
   const login = await run(codex, ['login', '--with-api-key', '-c', 'cli_auth_credentials_store="file"'], { input: 'sk-probe-not-a-real-key\n' });
   result.steps.login = login.exit;
   for (const args of [['init', '-q', '-b', 'main'], ['-c', 'user.name=probe', '-c', 'user.email=probe@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init']]) await run('git', args);

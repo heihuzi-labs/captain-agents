@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readIcon } from '../app/main/icons.ts';
-import { httpsLink, productionCsp, samePage, securePreferences, trustedSender } from '../app/main/security.ts';
+import { httpsLink, productionCsp, samePage, securePreferences, trustedSender, windowPartition } from '../app/main/security.ts';
 import { loadBounds, saveBounds } from '../app/main/window-state.ts';
 import { watchRegistry } from '../app/main/watch.ts';
 import { settingsActions, settingsPatch, teamActions, chatActions } from '../app/main/actions.ts';
@@ -106,6 +106,11 @@ test('图标协议拒绝路径穿越、编码、符号链接目录和文件，�
   await assert.rejects(readIcon('xa-icon://icons/escape.png', home));
   await rm(icons, { recursive: true }); await symlink(home, icons);
   await assert.rejects(readIcon('xa-icon://icons/outside.png', home));
+});
+
+test('窗口会话落盘：重启后“记在本机”的东西还在', () => {
+  // 不带 persist: 的会话只在内存里，群的已读、置顶、归档每次重启都丢（2026-10-17 主人发现）。
+  assert.match(windowPartition, /^persist:/);
 });
 
 test('安全白名单：拒绝外部进程、子 frame 和页面伪造，只允许 HTTPS 外链', async () => {

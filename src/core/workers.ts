@@ -129,10 +129,7 @@ export function codexLaunch(args: string[]): { file: string; args: string[] } {
   const file = codexPath();
   return /\.[cm]js$/.test(file) ? { file: process.execPath, args: [file, ...args] } : { file, args };
 }
-// Windows 上 Codex 有三种隔离做法，只有“管理员装一次、换专用账户来跑”的那种够得着底线（design-windows.md 4.1），启动时明写用它。
-// 不写的话，可写副本会被悄悄降成只读。
-export const WINDOWS_SANDBOX = ['-c', 'windows.sandbox="elevated"'];
-// 没装加固时（2026-10-13 起是缺省，docs/design-windows.md 第 12 节）：Codex 自带的、不用安装的那种隔离，权限表不带禁读名单。
+// Windows 上只用 Codex 自带的、不用安装的那种隔离（docs/design-windows.md 第 12、14 节），权限表不带禁读名单。
 // 流水线三台机器实测：什么都不装就能把活做完；隔离里的命令写得进副本和任务临时目录，写不进家目录；外网和本机端口不拦，钥匙文件不禁读。
 // 必须明写：什么做法都不写时，命令根本跑不起来。带着禁读名单它会直接拒绝。
 export const WINDOWS_PLAIN = ['-c', 'windows.sandbox="unelevated"'];
@@ -156,9 +153,8 @@ export async function command(job: Job, text: string, project: Isolated, runtime
     // 用户的 Codex 连的是哪个接口，原样带上（--ignore-user-config 会把它一起丢掉，接自定义接口的人就派不出活）。
     // 钥匙放在环境变量里的：只把配置里点名的那一个交给 Codex 主程序，并明写不给它跑的命令（docs/design-scan.md 规则二）。
     const endpoint = deepseek ? official : await codexEndpoint();
-    const hardened = !isWindows || await (await import('./selfcheck.ts')).windowsHardened();
     if (endpoint.envKey) pass = [endpoint.envKey];
-    args = ['exec', '--ignore-user-config', ...(isWindows ? (hardened ? WINDOWS_SANDBOX : WINDOWS_PLAIN) : []), ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : endpoint.args), '-c', codexEnvPolicy(deepseek ? KEY_VARS : pass), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network, undefined, !hardened), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
+    args = ['exec', '--ignore-user-config', ...(isWindows ? WINDOWS_PLAIN : []), ...disable.flatMap(n => ['--disable', n]), ...(deepseek ? deepseekArgs(env) : endpoint.args), '-c', codexEnvPolicy(deepseek ? KEY_VARS : pass), '-m', job.model, '-c', `model_reasoning_effort="${job.effort}"`, '-c', 'default_permissions="xa"', '-c', codexPermissions(job, project, tmp, network), '-C', job.worktree, '--json', '-o', join(dir, 'final.md'), '-'];
   } else {
     file = nodeRunner().file;
     // 替身模式仍传入完整参数；无需安装或执行真正的 srt。

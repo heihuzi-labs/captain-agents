@@ -62,7 +62,7 @@ xagents verify <任务号>
 
 `task.md` 是写给选手的题目，写清要做什么、别碰什么就行，可以参考 [docs/examples/task.md](docs/examples/task.md)。拍板、打分、清理这些后续命令，`xagents --help` 里都有。
 
-想让某个 AI 来当负责人，跟它说一句“先运行 `xagents guide`”就够了，它会读到完整的指挥手册和这台电脑现在的情况。嫌每次都要说，就运行 `xagents connect claude`（`codex`、`cursor` 同理，Grok 和 Claude 共用一份），把这句话写进它的常驻规则。给 Claude Code 用的技能在 [skill/SKILL.md](skill/SKILL.md)。
+想让某个 AI 来当负责人，跟它说一句“先运行 `xagents guide`”就够了，它会读到指挥手册的精简版（必守规矩和章节目录，细节按节再取）和这台电脑现在的情况。嫌每次都要说，就运行 `xagents connect claude`（`codex`、`cursor` 同理，Grok 和 Claude 共用一份），把这句话写进它的常驻规则。给 Claude Code 用的技能在 [skill/SKILL.md](skill/SKILL.md)。
 
 桌面应用：
 

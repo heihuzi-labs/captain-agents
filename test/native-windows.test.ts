@@ -49,15 +49,15 @@ test('别的系统上不加载这个模块，三件事都直接报清楚', { ski
 });
 
 // 平台自己不在后台起 PowerShell：杀毒软件会把它当可疑行为拦下来（docs/design-windows.md 第 13 节）。
-// 留下的只有主人自己点的加固那一套（selfcheck-windows.ts 起 sandbox/windows 下的脚本和隔离里的探针）。
-test('核心和桌面应用的后台里，只有加固那一套会启动 PowerShell', async () => {
+// 2026-10-18 加固移除后，一处都不剩（第 14 节）。
+test('核心和桌面应用的后台里，没有一处启动 PowerShell', async () => {
   const hits: string[] = [];
   for (const dir of ['src/core', 'src/cli', 'app/main']) {
     for (const name of await readdir(join(toolRoot, dir))) {
       if (name.endsWith('.ts') && /powershell\.exe/i.test(await readFile(join(toolRoot, dir, name), 'utf8'))) hits.push(`${dir}/${name}`);
     }
   }
-  assert.deepEqual(hits, ['src/core/selfcheck-windows.ts']);
+  assert.deepEqual(hits, []);
 });
 
 test('进程快照：读得到自己和刚起的子进程，父子关系和出生时间都对', { skip: onlyWindows }, async t => {

@@ -121,7 +121,8 @@ await fs.writeFile(path.join(codexHome, 'config.toml'), [
 
 const job = { mode: 'workspace-write', repo: worktree, worktree, id: 'probe' };
 const permissions = codexPermissions(job, { denyReadExtra: [] }, tmp, false);
-const sandboxFlag = windows ? ['-c', 'windows.sandbox="elevated"'] : [];
+// Windows 上和派活一样用 Codex 自带的那种隔离（src/core/workers.ts 的 WINDOWS_PLAIN），权限表也一样（Windows 上什么都不加）。
+const sandboxFlag = windows ? ['-c', 'windows.sandbox="unelevated"'] : [];
 // 和 src/core/workers.ts 里派 Codex 活的参数一字不差（探针另加的只有 extra）。
 const disable = ['plugins', 'apps', 'remote_plugin', 'computer_use', 'browser_use', 'browser_use_external', 'in_app_browser', 'hooks', 'memories'];
 const platformArgs = (extra = [], hidden = []) => ['exec', '--ignore-user-config', ...sandboxFlag, ...disable.flatMap(n => ['--disable', n]), ...extra,
@@ -162,26 +163,6 @@ try {
   const status = await run(codex, ['login', 'status'], { env: platformEnv() });
   result.loginStatus = { exit: status.exit, text: (status.stdout + status.stderr).replaceAll(fakeKey, '<假钥匙>').trim() };
   console.log(`[登录] 退出码 ${login.exit}；login status：${result.loginStatus.text}`);
-  if (windows) {
-    // 还没装“管理员装一次”的隔离时，Codex 自带的做法能不能直接用（docs/design-windows.md 第 12 节）：
-    // 明写免安装的做法 / 什么都不写；权限表带不带禁读名单。看活做不做得完、隔离里的命令能写哪、能不能上网。
-    const plain = codexPermissions(job, { denyReadExtra: [] }, tmp, false, undefined, true);
-    const bare = (flag, table) => ['exec', '--ignore-user-config', ...flag, ...disable.flatMap(n => ['--disable', n]), '-c', 'model_provider="probe"', '-c', provider(),
-      '-c', codexEnvPolicy(), '-m', 'gpt-6-astra', '-c', 'model_reasoning_effort="medium"', '-c', 'default_permissions="xa"', '-c', table, '-C', worktree, '--json', '-o', path.join(base, 'final.md'), '-'];
-    await probeCase('没装隔离：免安装的做法，权限表不带禁读', bare(['-c', 'windows.sandbox="unelevated"'], plain), platformEnv(), true);
-    await probeCase('没装隔离：什么做法都不写，权限表不带禁读', bare([], plain), platformEnv(), true);
-    await probeCase('没装隔离：免安装的做法，权限表带禁读', bare(['-c', 'windows.sandbox="unelevated"'], permissions), platformEnv(), true);
-    // 只读的活（审查、调研）：主人电脑上报“cannot enforce split writable root sets”。看是哪一种权限表引起的。
-    const un = ['-c', 'windows.sandbox="unelevated"'];
-    const plainRo = codexPermissions({ ...job, mode: 'read-only' }, { denyReadExtra: [] }, tmp, false, undefined, true);
-    await probeCase('没装隔离：只读的活，现在的权限表（只读 + 任务临时目录可写）', bare(un, plainRo), platformEnv(), true);
-    await probeCase('没装隔离：只读的活，权限表什么都不加', bare(un, 'permissions.xa={extends=":read-only",filesystem={}}'), platformEnv(), true);
-    await probeCase('没装隔离：能改文件的活，权限表什么都不加', bare(un, 'permissions.xa={extends=":workspace",filesystem={}}'), platformEnv(), true);
-    const setup = await run(codex, ['sandbox', 'setup', '--elevated', '--current-user'], { env: platformEnv(), timeout: 300_000 });
-    result.sandboxSetup = { exit: setup.exit, stderr: tail(setup.stderr, 300) };
-    console.log(`[装隔离] 退出码 ${setup.exit}`);
-  }
-
   await probeCase('现在的启动参数', platformArgs(), platformEnv(), true);
   await probeCase('带上接口那一段', platformArgs(['-c', 'model_provider="probe"', '-c', provider()]), platformEnv(), true);
   await probeCase('对照：读用户配置', controlArgs, platformEnv(), true);

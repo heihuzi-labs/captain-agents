@@ -62,7 +62,7 @@ xagents verify <job-id>
 
 `task.md` is the brief for the worker: what to do and what to leave alone. There's an example in [docs/examples/task.md](docs/examples/task.md) (in Chinese). The follow-up commands for deciding, scoring and cleaning up are all in `xagents --help`.
 
-To make an AI the lead, tell it to run `xagents guide` first; it gets the full commander's manual plus the current state of this machine. If you'd rather not repeat that, run `xagents connect claude` (same for `codex` and `cursor`; Grok shares Claude's file) to put that line into its persistent instructions. There's also a skill for Claude Code in [skill/SKILL.md](skill/SKILL.md).
+To make an AI the lead, tell it to run `xagents guide` first; it gets the commander's manual in brief (the must-follow rules and a chapter index; it fetches chapters as needed) plus the current state of this machine. If you'd rather not repeat that, run `xagents connect claude` (same for `codex` and `cursor`; Grok shares Claude's file) to put that line into its persistent instructions. There's also a skill for Claude Code in [skill/SKILL.md](skill/SKILL.md).
 
 The desktop app:
 

@@ -26,24 +26,22 @@ test('设置里的“位置”：打不开时写出原因', async () => {
   await waitFor(() => expect(within(group).getByRole('alert').textContent).toContain('没能打开：文件夹不在了'));
 });
 
-test('设置里的“加固”：先说清不装也能派活；没通过给“安装并检查”，通过了给“重新检查”，都只调一个不带参数的函数；失败写出原因', async () => {
-  const { IsolationSettings } = await import('../../app/renderer/components/Update.tsx');
+test('Windows 上没有加固（docs/design-windows.md 第 14 节）：设置 → 通用里没有“加固”一组；顶栏不画自检圆点，提示里也不写自检', async () => {
+  const { Settings } = await import('../../app/renderer/components/Settings.tsx');
+  const { StatusCluster } = await import('../../app/renderer/ui/index.ts');
+  const { fixtureView } = await import('./fixtures.tsx');
+  localStorage.setItem('xa.settings-page', 'general');
   window.xa = fixtureBridge();
-  const { rerender } = render(<IsolationSettings selfcheck={{ ok: null, note: '还没做过自检' }} />);
-  let group = await screen.findByRole('region', { name: '加固' });
-  expect(within(group).getByText(/^不装也能派活：选手用 Codex 自带的保护.*上不了网。$/)).toBeTruthy();
-  fireEvent.click(within(group).getByRole('button', { name: '安装并检查' }));
-  expect(window.xa.isolationFix).toHaveBeenCalledWith();
-  expect(within(group).getByText(/系统弹出确认框时请点“是”/)).toBeTruthy();
-  rerender(<IsolationSettings selfcheck={{ ok: true, note: '都被挡住，副本内可写' }} />);
-  group = await screen.findByRole('region', { name: '加固' });
-  await waitFor(() => expect(within(group).getByRole('button', { name: '重新检查' })).toBeTruthy());
-  expect(within(group).getByText('已装好，检查通过：都被挡住，副本内可写')).toBeTruthy();
+  try {
+    render(<Settings close={() => {}} view={fixtureView()} />);
+    await screen.findByRole('region', { name: '位置' });
+    expect(screen.queryByRole('region', { name: '加固' })).toBeNull();
+    expect(document.body.textContent).not.toContain('加固');
+  } finally { localStorage.clear(); }
   cleanup();
-  window.xa = fixtureBridge({ isolationFix: vi.fn(async () => { throw new Error('管理员确认被取消了'); }) });
-  render(<IsolationSettings selfcheck={{ ok: false, note: 'codex 外网 拿不准：ETIMEDOUT' }} />);
-  group = await screen.findByRole('region', { name: '加固' });
-  expect(within(group).getByText(/上次检查没通过，现在用的仍是 Codex 自带的保护：codex 外网 拿不准：ETIMEDOUT$/)).toBeTruthy();
-  fireEvent.click(within(group).getByRole('button', { name: '安装并检查' }));
-  await waitFor(() => expect(within(group).getByText('没能装好：管理员确认被取消了')).toBeTruthy());
+  const { container } = render(<StatusCluster quota={fixtureView().quota} selfcheck={{ ok: null, at: null, note: '还没做过自检' }} onOpen={() => {}} />);
+  const status = screen.getByRole('button');
+  expect(container.querySelector('.status .dot')).toBeNull();
+  expect(status.getAttribute('aria-label')).toBe('各家额度，点开看各家表现');
+  expect(status.title).not.toContain('自检');
 });

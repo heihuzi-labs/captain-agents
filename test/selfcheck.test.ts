@@ -4,23 +4,18 @@ import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { codexPath } from '../src/core/workers.ts';
-import { evaluate as evaluateOn, expectedProbes as expectedOn, permissionOutcome, networkOutcome, probeSource, readSelfcheck, ensureSelfcheck, globalTargets, tempTargets, globalBefore, cleanGlobal } from '../src/core/selfcheck.ts';
+import { evaluate, expectedProbes, permissionOutcome, networkOutcome, probeSource, readSelfcheck, ensureSelfcheck, globalTargets, tempTargets, globalBefore, cleanGlobal } from '../src/core/selfcheck.ts';
 import type { Isolation, IsolationResult } from '../src/core/selfcheck.ts';
 import { desktopView, context } from './helpers.ts';
 import { whos, isolationOf } from '../src/core/roster.ts';
 
 import { isWindows } from '../src/core/platform.ts';
-import { windowsExpectedProbes } from '../src/core/selfcheck-windows.ts';
 
-// 这个文件里大多数用例测的是 macOS 的判定规则和探针清单：明确按 macOS 的规则算，在哪种系统上跑结果都一样。
-const evaluate = (results: IsolationResult[], at?: string) => evaluateOn(results, at, false);
-const expectedProbes = (mode: Isolation) => expectedOn(mode, false);
+// 自检只在 macOS 上有（docs/design-windows.md 第 14 节）。判定规则和探针清单在哪种系统上算都一样；
+// 读缓存、派活前把关、真的跑自检这几条只属于 macOS，在 Windows 上跳过。
+const macOnly = isWindows ? 'Windows 上没有隔离自检（docs/design-windows.md 第 14 节）' : false;
 const mustAllow = (name: string) => name === 'worktree' || name === 'tmpdir';
-// 和自检缓存有关的用例（读缓存、派活前把关）要用“当前系统认的一份通过结果”。
-const currentPassing = (): IsolationResult[] => isWindows
-  ? [{ isolation: 'codex', probes: windowsExpectedProbes().map(name => ({ name, outcome: mustAllow(name) ? 'allowed' : 'denied', reason: '' })) }]
-  : passing();
-const current = (at?: string) => evaluateOn(currentPassing(), at);
+const current = (at?: string) => evaluate(passing(), at);
 const passing = (): IsolationResult[] => (['codex', 'grok', 'cursor'] as Isolation[]).map(isolation => ({ isolation, probes: expectedProbes(isolation).map(name => ({ name, outcome: mustAllow(name) ? 'allowed' : 'denied', reason: mustAllow(name) ? '操作成功' : 'EPERM' })) }));
 test('选手清单里每位选手用的隔离都在自检范围内，缺哪一种自检都不过', () => {
   for (const who of whos) {
@@ -63,7 +58,7 @@ test('自检必须各项齐全，副本可写；所有敏感文件读取都不�
   assert.equal(evaluate(passing().slice(1)).ok, false); assert.equal(evaluate([...passing(), passing()[0]]).ok, false);
   const broken = passing(); broken[2].error = '程序不存在'; assert.equal(evaluate(broken).ok, false);
 });
-test('缓存一天有效，过期重检；失败和损坏拦截，不能仅凭 ok:true 放行', async t => {
+test('缓存一天有效，过期重检；失败和损坏拦截，不能仅凭 ok:true 放行', { skip: macOnly }, async t => {
   const temp = await mkdtemp(join(tmpdir(), 'xagents-selfcheck-test-')), old = process.env.XAGENTS_HOME;
   process.env.XAGENTS_HOME = temp;
   t.after(async () => { if (old === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = old; await rm(temp, { recursive: true, force: true }); });
@@ -88,20 +83,29 @@ test('缓存一天有效，过期重检；失败和损坏拦截，不能仅凭 o
   assert.equal((await readSelfcheck()).ok, null); await ensureSelfcheck(checker, false); assert.equal(calls, 4);
   await writeFile(file, '{'); await assert.rejects(ensureSelfcheck(checker, false), /缓存损坏/);
 });
-test('隔离内的 CLI 自检不启动真实探针，保存失败且桌面视图不显示通过', async t => {
+test('隔离内的 CLI 自检不启动真实探针，保存失败且桌面视图不显示通过', { skip: macOnly }, async t => {
   const c = await context(t, false);
   const r = await c.cli(['selfcheck']); assert.equal(r.code, 1); assert.match(r.stdout, /需要负责人在外面跑/);
   const cache = JSON.parse(await readFile(join(c.home, 'cache/selfcheck.json'), 'utf8'));
   assert.equal(cache.ok, false); assert.equal(cache.results.length, 3); assert.ok(cache.results.every((r: any) => r.probes.length === 0));
   assert.equal((await desktopView(c.home)).selfcheck.ok, false);
 });
-// Windows 上自检不拦派活（docs/design-windows.md 第 12 节），这一条只属于别的系统。
-test('真实派发入口被失败自检挡住，尚未登记任务和副本', { skip: isWindows ? 'Windows 上自检不拦派活，没装加固就用 Codex 自带的做法' : false }, async t => {
+test('真实派发入口被失败自检挡住，尚未登记任务和副本', { skip: macOnly }, async t => {
   const c = await context(t); await c.add();
-  await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify(evaluateOn([])));
+  await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify(evaluate([])));
   // 只关选手替身来走真实派发入口；Codex 程序指到一个存在的文件（这台机器上不一定装了 Codex，没装会先被“没找到程序”挡下，走不到自检）。额度查询照样用替身，不许真的启动 Cursor、Grok 去查（2026-09-30 发现每跑一次就在 ~/.cursor/projects 留一个目录）。
   const r = await c.cli(['run', c.task, '--summary', '完成本次测试任务', '--who', 'codex:high'], { XAGENTS_FAKE_WORKER: undefined, XAGENTS_CODEX: process.execPath, XAGENTS_QUERY_EXEC: join(import.meta.dirname, 'fixtures/quota/query.ts'), XAGENTS_CODEX_SESSIONS: join(import.meta.dirname, 'fixtures/quota') });
   assert.equal(r.code, 1); assert.match(r.stderr, /隔离自检没过/); assert.equal((await c.jobs()).length, 0);
+});
+
+test('Windows 上不做自检：派活前不查、不跑，自检命令只说明一句（docs/design-windows.md 第 14 节）', async t => {
+  let calls = 0;
+  const checker = async () => { calls++; return evaluate([]); };
+  await ensureSelfcheck(checker, true); assert.equal(calls, 0);
+  if (!isWindows) return;
+  const c = await context(t, false);
+  const r = await c.cli(['selfcheck'], { XAGENTS_FAKE_WORKER: undefined });
+  assert.equal(r.code, 0, r.stderr); assert.match(r.stdout, /Windows 上不做隔离自检/);
 });
 
 test('网络必须直连和代理都拒绝；生成探针无需运行也能做语法检查', async t => {
@@ -117,27 +121,20 @@ test('网络必须直连和代理都拒绝；生成探针无需运行也能做�
   const r = await exec(process.execPath, ['--check', path], c.temp, c.env); assert.equal(r.code, 0, r.stderr);
 });
 
-test('旧自检缓存缺 npmrc 或该查的登录探针，即使 ok 为 true 也不能派活', async t => {
+test('旧自检缓存缺 npmrc 或该查的登录探针，即使 ok 为 true 也不能派活', { skip: macOnly }, async t => {
   const c = await context(t, false);
   const oldHome = process.env.XAGENTS_HOME; process.env.XAGENTS_HOME = c.home;
   t.after(() => { if (oldHome === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = oldHome; });
   await mkdir(join(c.home, 'cache'));
   // Codex 要查自己的登录文件；Grok、Cursor 只查别家的（自己的必须能读，否则启动不了）。
   for (const [isolation, login] of [['codex', 'login-codex'], ['grok', 'login-cursor'], ['cursor', 'login-grok'], ['grok', 'login-deepseek'], ['cursor', 'keychain'], ['grok', 'keychain-user']] as [Isolation, string][]) for (const name of ['npmrc', 'shell-files', 'credential-files', 'env-secret', login]) {
-    // 这张表是 macOS 的探针；Windows 上只有 Codex 一路，名字不在它清单里的跳过，另在下面补 Windows 才有的几项。
-    if (isWindows && (isolation !== 'codex' || !windowsExpectedProbes().includes(name))) continue;
-    const results = currentPassing(), result = results.find(r => r.isolation === isolation)!;
+    const results = passing(), result = results.find(r => r.isolation === isolation)!;
     result.probes = result.probes.filter(p => p.name !== name);
     await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 8, platform: process.platform, ok: true, at: new Date().toISOString(), results }));
     await assert.rejects(ensureSelfcheck(undefined, false), /缺少有效结果/);
   }
-  if (isWindows) for (const name of ['account', 'listen', 'pipe', 'startup-folder', 'tmp-root']) {
-    const results = currentPassing(); results[0].probes = results[0].probes.filter(p => p.name !== name);
-    await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ version: 8, platform: 'win32', ok: true, at: new Date().toISOString(), results }));
-    await assert.rejects(ensureSelfcheck(undefined, false), /缺少有效结果/);
-  }
   // 在另一种系统上做的自检结果不作数：要重新自检。
-  await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ ...current(), platform: isWindows ? 'darwin' : 'win32' }));
+  await writeFile(join(c.home, 'cache/selfcheck.json'), JSON.stringify({ ...current(), platform: 'win32' }));
   const other = await readSelfcheck();
   assert.equal(other.ok, null); assert.match(other.note, /另一种系统/);
 });

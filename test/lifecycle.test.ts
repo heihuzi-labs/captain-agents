@@ -44,7 +44,7 @@ test('四家同批派发到完成、共同起点、收集、diff、清理与记�
     if (j.who === 'codex') {
       // 权限里带着登记处下 DeepSeek 文件夹的禁读，要按派活时的登记处来算。
       const oldHome = process.env.XAGENTS_HOME; process.env.XAGENTS_HOME = c.home;
-      try { assert.ok(observed.args.includes(codexPermissions(j, { denyReadExtra: ['.data'] }, join(dir, 'tmp'), false, undefined, process.platform === 'win32'))); }
+      try { assert.ok(observed.args.includes(codexPermissions(j, { denyReadExtra: ['.data'] }, join(dir, 'tmp'), false))); }
       finally { if (oldHome === undefined) delete process.env.XAGENTS_HOME; else process.env.XAGENTS_HOME = oldHome; }
       assert.ok(!observed.args.includes('-s'));
       assert.ok(!observed.args.some((arg: string) => arg.includes('sandbox_mode')));
