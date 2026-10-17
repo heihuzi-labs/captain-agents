@@ -139,7 +139,7 @@ test('旧自检缓存缺 npmrc 或该查的登录探针，即使 ok 为 true 也
   assert.equal(other.ok, null); assert.match(other.note, /另一种系统/);
 });
 
-test('Codex 自检真实调用共用权限表，空 CODEX_HOME 仅给子进程，成功/失败/抛错都清理', async t => {
+test('Codex 自检真实调用共用权限表，空 CODEX_HOME 仅给子进程，成功/失败/抛错都清理', { skip: macOnly }, async t => {
   const { codexProbe } = await import('../src/core/selfcheck.ts');
   const { codexPermissions } = await import('../src/core/sandbox.ts');
   const { codexEnvPolicy, isSecretName } = await import('../src/core/env.ts');

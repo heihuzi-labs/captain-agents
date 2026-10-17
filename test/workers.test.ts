@@ -234,11 +234,11 @@ test('Codex TOML 路径转义引号和反斜杠，保留空格中文，拒绝控
   const table = codexPermissions(j, { denyReadExtra: [extra] }, undefined, false, false);
   for (const root of [j.repo, j.worktree]) assert.ok(table.includes(`${JSON.stringify(join(root, extra))}="deny"`));
   for (const char of ['\n', '\r', '\t', '\0', '\x1f', '\x7f', '\x85']) {
-    assert.throws(() => codexPermissions(j, { denyReadExtra: [`secret${char}/..hidden`] }), /控制字符/);
-    assert.throws(() => codexPermissions({ ...j, repo: `/repo${char}` }, { denyReadExtra: ['secret'] }), /控制字符/);
-    assert.throws(() => codexPermissions({ ...j, worktree: `/worktree${char}` }, { denyReadExtra: ['secret'] }), /控制字符/);
+    assert.throws(() => codexPermissions(j, { denyReadExtra: [`secret${char}/..hidden`] }, undefined, false, false), /控制字符/);
+    assert.throws(() => codexPermissions({ ...j, repo: `/repo${char}` }, { denyReadExtra: ['secret'] }, undefined, false, false), /控制字符/);
+    assert.throws(() => codexPermissions({ ...j, worktree: `/worktree${char}` }, { denyReadExtra: ['secret'] }, undefined, false, false), /控制字符/);
   }
-  for (const extra of ['../escape', '/absolute', '.', '', 'x/../../escape', '..\\escape']) assert.throws(() => codexPermissions(j, { denyReadExtra: [extra] }), /路径必须/);
+  for (const extra of ['../escape', '/absolute', '.', '', 'x/../../escape', '..\\escape']) assert.throws(() => codexPermissions(j, { denyReadExtra: [extra] }, undefined, false, false), /路径必须/);
 });
 
 test('Codex 最终参数只换权限档，其余完全保留，绝不混用 -s 或 sandbox_mode', async t => {
