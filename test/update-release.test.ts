@@ -44,7 +44,7 @@ test('传到共用下载桶：对不上清单不传，已有的不覆盖，传�
   const c = await context(t, false), priv = join(c.temp, 'priv.pem'), pub = join(c.temp, 'pub.txt');
   const zip = join(c.temp, 'captain-agents_0.3.0_macos-arm64.zip'), other = join(c.temp, 'other.zip'), notes = join(c.temp, 'notes.txt'), manifest = join(c.temp, 'latest.json');
   await generateUpdateKey(priv, pub); await writeFile(zip, 'real package'); await writeFile(other, 'another one'); await writeFile(notes, '说明');
-  await makeUpdate({ version: '0.3.0', minimumVersion: '0.2.0', packages: [{ platform: 'darwin-arm64', file: zip }], notes, baseUrls: ['https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/0.3.0/', 'https://updates.example.invalid/v0.3.0/'], privateKey: priv, out: manifest });
+  await makeUpdate({ version: '0.3.0', minimumVersion: '0.2.0', packages: [{ platform: 'darwin-arm64', file: zip }], notes, baseUrls: ['https://heihuzi.oss-cn-beijing.aliyuncs.com/captain-agents/stable/0.3.0/', 'https://updates.example.invalid/v0.3.0/'], privateKey: priv, out: manifest });
   const publicKey = (await readFile(pub, 'utf8')).trim(), key = 'captain-agents/stable/0.3.0/captain-agents_0.3.0_macos-arm64.zip';
   assert.equal(storeKey('0.3.0', 'darwin-arm64'), key); assert.equal(storeKey('0.3.0', 'win32-x64', 'beta'), 'captain-agents/beta/0.3.0/captain-agents_0.3.0_windows-x64.exe');
   assert.throws(() => storeKey('0.3.0', 'solaris-x64'), /平台/); assert.throws(() => storeKey('0.3.0', 'darwin-arm64', 'nightly'), /通道/);
@@ -52,7 +52,7 @@ test('传到共用下载桶：对不上清单不传，已有的不覆盖，传�
   const store = new Map<string, string>(), uploads: string[] = [];
   const deps = {
     remote: async (url: string) => store.has(url) ? sizeAndHash(store.get(url)!) : null,
-    upload: async (file: string, to: string) => { uploads.push(to); store.set(`https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/${to}`, file); },
+    upload: async (file: string, to: string) => { uploads.push(to); store.set(`https://heihuzi.oss-cn-beijing.aliyuncs.com/${to}`, file); },
   };
   const options = (file: string, extra = {}) => ({ manifest, publicKey, packages: [{ platform: 'darwin-arm64', file }], ...extra });
   await assert.rejects(publishStore(options(other), deps), /对不上，没有上传/);
@@ -66,7 +66,7 @@ test('传到共用下载桶：对不上清单不传，已有的不覆盖，传�
   store.set(first.items[0].url, other);
   await assert.rejects(publishStore(options(zip), deps), /不改不删/); assert.deepEqual(uploads, [key]);
   store.clear();
-  await assert.rejects(publishStore(options(zip), { ...deps, upload: async (_file: string, to: string) => { store.set(`https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/${to}`, other); } }), /不要给用户/);
+  await assert.rejects(publishStore(options(zip), { ...deps, upload: async (_file: string, to: string) => { store.set(`https://heihuzi.oss-cn-beijing.aliyuncs.com/${to}`, other); } }), /不要给用户/);
   for (const args of [[], ['--manifest', 'a'], ['--manifest', 'a', '--public-key', 'b'], ['--manifest', 'a', '--public-key', 'b', '--package', 'broken'], ['--what', 'x']]) assert.throws(() => parseArguments(args), /参数|格式/);
   assert.equal(parseArguments(['--dry-run', '--manifest', 'a', '--public-key', 'b', '--package', 'darwin-arm64=/x.zip', '--profile', 'p']).dryRun, true);
 });
@@ -107,7 +107,7 @@ test('桶地址不在新清单 urls 中时拒绝，连远端查询都不执行',
   await generateUpdateKey(privateKey, pub);
   const file = join(c.temp, 'wrong-name.zip'), notes = join(c.temp, 'notes'); await writeFile(file, 'zip'); await writeFile(notes, '说明');
   const packages = [{ platform: 'darwin-arm64', file }];
-  await makeUpdate({ version: '0.3.0', minimumVersion: '0.2.0', notes, privateKey, packages, baseUrls: ['https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/0.3.0/'], out: manifest });
+  await makeUpdate({ version: '0.3.0', minimumVersion: '0.2.0', notes, privateKey, packages, baseUrls: ['https://heihuzi.oss-cn-beijing.aliyuncs.com/captain-agents/stable/0.3.0/'], out: manifest });
   let calls = 0;
   await assert.rejects(publishStore({ manifest, packages, publicKey: (await readFile(pub, 'utf8')).trim() }, { remote: async () => { calls++; return null; }, upload: async () => { calls++; } }), /桶地址.*没有上传/);
   assert.equal(calls, 0);
@@ -235,7 +235,7 @@ test('Windows 发版：EXE 签进两份清单、桶路径是 exe、上传后原�
   const manifest = join(c.temp, 'latest-v2.json'), notes = join(c.temp, 'notes');
   await writeFile(file, 'signed installer bytes'); await writeFile(notes, 'Windows 更新');
   const options = { version: '0.3.0', minimumVersion: '0.1.0', notes, privateKey, packages: [{ platform: 'win32-x64', file }],
-    baseUrls: ['https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/0.3.0/', 'https://github.com/owner/repo/releases/download/v0.3.0/'],
+    baseUrls: ['https://heihuzi.oss-cn-beijing.aliyuncs.com/captain-agents/stable/0.3.0/', 'https://github.com/owner/repo/releases/download/v0.3.0/'],
     legacyBaseUrl: 'https://github.com/owner/repo/releases/download/v0.3.0/', out: manifest, legacyOut: join(c.temp, 'latest.json') };
   const feed = await makeUpdate(options), legacy = verifyLegacyFeed(await readFile(options.legacyOut), publicKey);
   assert.ok(legacy.packages['win32-x64'].url.endsWith('.exe')); assert.equal(legacy.packages['win32-x64'].sha256, feed.packages['win32-x64'].sha256);

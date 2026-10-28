@@ -11,6 +11,29 @@ import { context, until } from './helpers.ts';
 const verify = (bytes: Uint8Array) => verifyFeed(bytes, publicKey);
 const config = { feed: 'https://updates.example.invalid/latest.json', hosts: ['cdn.example.invalid'], version: '0.1.0' };
 
+test('只按验签通过的清单授权新存储地址，换源无需重新编译客户端', async t => {
+  const c = await context(t, false), address = 'https://new-storage.example.invalid/releases/app.zip';
+  const selected = { ...pkg, urls: [address] }, calls: string[] = [];
+  let bytes = signed(feed({ packages: { 'darwin-arm64': selected } }));
+  const client = updateClient({ ...config, fetch: async url => {
+    calls.push(url.href);
+    return response([url.href === config.feed ? bytes : data]);
+  } });
+  await assert.rejects(client.download(selected, join(c.temp, 'before'), () => {}), /名单/);
+  assert.deepEqual(calls, []);
+  const envelope = JSON.parse(bytes.toString());
+  envelope.signature = Buffer.alloc(64).toString('base64');
+  bytes = Buffer.from(JSON.stringify(envelope));
+  await assert.rejects(client.feed(verify), /签名/);
+  await assert.rejects(client.download(selected, join(c.temp, 'bad'), () => {}), /名单/);
+  bytes = signed(feed({ packages: { 'darwin-arm64': selected } }));
+  await client.feed(verify);
+  const file = await client.download(selected, join(c.temp, 'good'), () => {});
+  assert.deepEqual(await readFile(file), data);
+  await assert.rejects(client.download({ ...selected, urls: [address + '?other'] }, join(c.temp, 'unlisted'), () => {}), /名单/);
+  assert.deepEqual(calls, [config.feed, config.feed, address]);
+});
+
 test('流式下载、大小和 SHA-256 核对、固定请求头、允许跳转、残留清理', async t => {
   const c = await context(t, false), directory = join(c.temp, 'updates');
   await cleanPartialDownloads(directory); await writeFile(join(directory, 'old.zip.part'), '半份'); await writeFile(join(directory, 'keep.log'), '保留');

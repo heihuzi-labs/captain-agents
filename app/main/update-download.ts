@@ -37,6 +37,9 @@ export type DownloadClock = { now(): number; setTimeout(callback: () => void, ms
 const realClock: DownloadClock = { now: () => performance.now(), setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>) };
 export function updateClient(options: { feed: string; hosts: string[]; version: string; fetch?: UpdateFetch; timeoutMs?: number; clock?: DownloadClock }) {
   const feeds = feedUrls(options.feed), hosts = updateHosts(options.feed, options.hosts), fetch = options.fetch ?? httpsFetch, clock = options.clock ?? realClock;
+  // Only a successfully verified feed may authorize a new storage URL. Never
+  // learn hosts from redirects, failed signatures, or an arbitrary download call.
+  const signedAssets = new Set<string>();
   if (!validVersion(options.version)) throw new Error('当前应用版本号不对。');
   const headers = { 'User-Agent': `Xagents/${options.version}`, Accept: '*/*', 'Accept-Encoding': 'identity' };
   async function consume(address: string, limit: number, chunk: (data: Uint8Array, received: number) => Promise<void>, download?: { fallback: boolean }) {
@@ -73,7 +76,7 @@ export function updateClient(options: { feed: string; hosts: string[]; version: 
       let url = httpsUrl(address);
       stalled(); // 等待连接和响应头也不能无限挂住；跳转不重置等待预算。
       for (let redirects = 0; ; redirects++) {
-        if (!hosts.has(url.host)) throw new Error('更新地址不在允许的主机名单里。');
+        if (!hosts.has(url.host) && !(download && signedAssets.has(url.href))) throw new Error('更新地址不在允许的主机名单里。');
         const pending = fetch(url, { headers: { ...headers }, signal: abort.signal }).then(value => {
           if (abort.signal.aborted) { value.close(); throw abort.signal.reason; }
           return value;
@@ -121,7 +124,11 @@ export function updateClient(options: { feed: string; hosts: string[]; version: 
         try {
           const chunks: Buffer[] = [];
           await consume(address, MAX_FEED_SIZE, async data => { chunks.push(Buffer.from(data)); });
-          return verify(Buffer.concat(chunks));
+          const verified = verify(Buffer.concat(chunks));
+          const urls = Object.values(verified.packages).flatMap(pkg => pkg.urls.map(address => httpsUrl(address).href));
+          signedAssets.clear();
+          for (const url of urls) signedAssets.add(url);
+          return verified;
         } catch (error) { if (index === feeds.length - 1) throw error; }
       }
       throw new Error('清单地址须有 1–4 个。');

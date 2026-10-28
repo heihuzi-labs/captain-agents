@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { compareVersions, verifyFeed } from '../../app/main/update-feed.ts';
 
 // 存放约定：<应用英文名>/<通道>/<版本号>/<应用英文名>_<版本号>_<系统>-<架构>，Windows 用 .exe，其余用 .zip。
-const APP = 'captain-agents', BUCKET = 'heihuzi-prod-tokyo-downloads', REGION = 'ap-northeast-1';
+const APP = 'captain-agents', BUCKET = 'heihuzi', REGION = 'cn-beijing';
 const SYSTEMS = { darwin: 'macos', win32: 'windows', linux: 'linux' };
 
 export function storeKey(version, platform, channel = 'stable') {
