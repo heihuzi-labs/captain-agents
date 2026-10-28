@@ -68,7 +68,9 @@ async function readRemoteFeed(url) {
 // 只有通道的 latest-v2.json 可以覆盖，安装包始终保留 --ignore-existing。
 function uploadToStore(file, key, options) {
   const overwrite = options.overwrite === true && /^captain-agents\/(stable|beta)\/latest-v2\.json$/.test(key);
-  const args = ['ossutil', 'cp', file, `oss://${BUCKET}/${key}`, overwrite ? '-f' : '--ignore-existing', '--region', REGION, ...(options.profile ? ['--profile', options.profile] : [])];
+  // Select the aliyun account before the ossutil subcommand; its own --profile
+  // flag refers to a different credential store.
+  const args = [...(options.profile ? ['--profile', options.profile] : []), 'ossutil', 'cp', file, `oss://${BUCKET}/${key}`, overwrite ? '-f' : '--ignore-existing', '--region', REGION];
   return new Promise((done, fail) => {
     const child = spawn('aliyun', args, { stdio: ['ignore', 'inherit', 'inherit'] });
     child.on('error', () => fail(new Error('没找到阿里云命令行（aliyun），没有上传。')));
