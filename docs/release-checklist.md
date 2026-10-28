@@ -33,33 +33,29 @@ npm run update:key -- /自己的离线密钥目录/update-private.pem /自己的
 - **私钥丢失就不能给已发布客户端签它认识的新清单；私钥泄露，攻击者就可能签客户端认可的恶意更新。** 应停止受影响的发布入口并通知用户。
 - **公钥已经编进发出去的应用，换钥后旧应用永远验不过新清单，只能让用户手动重装。** 现在没有在线轮换钥匙、远程吊销或双公钥过渡机制。不要把重新运行生成脚本当成普通发版步骤。
 
-## 更新发在哪儿：共用下载桶优先，发布页兜底（主人 2026-10-12 定）
+## 更新入口与存储（2026-10-29）
 
-清单和安装包都放两处：主人各应用共用的公开下载桶（阿里云国际站东京区域的 `heihuzi-prod-tokyo-downloads`），和公开仓库 `heihuzi-labs/captain-agents` 的 GitHub 发布页。应用先问桶，问不到或太慢再问发布页（规则见[设计文档](design-update.md)第 4.7 节）。编进应用的三个值如下，现在统一写在 `release/config.json` 里，流水线打包时从那里读（本机 `npm run install-app` 不带这些值，装出来的是不带在线更新的开发版）：
+客户端固定读取 `https://download.heihuzi.ai/captain-agents/stable/latest-v2.json`，GitHub 的同名发布资产作为清单备用入口。实际文件位置来自验签后的 `packages.*.urls`；不把桶名和区域编进客户端。默认下载主机名单只用于固定入口及 GitHub 跳转；新存储只授权清单列出的精确 URL，非法签名不会新增授权。
 
 | 变量 | 值 |
 |---|---|
-| `XA_UPDATE_FEED` | `https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/latest-v2.json,https://github.com/heihuzi-labs/captain-agents/releases/latest/download/latest-v2.json`（先桶后发布页，逗号分隔） |
+| `XA_UPDATE_FEED` | `https://download.heihuzi.ai/captain-agents/stable/latest-v2.json,https://github.com/heihuzi-labs/captain-agents/releases/latest/download/latest-v2.json` |
 | `XA_UPDATE_HOSTS` | `release-assets.githubusercontent.com,objects.githubusercontent.com` |
-| `XA_UPDATE_PUBLIC_KEY` | `sJBh/Cd2G8sUFBOKF99n+LLJHfpzImZsXsrepIPK6XQ=`（正式公钥，2026-10-11 生成；公钥可以公开） |
+| `XA_UPDATE_PUBLIC_KEY` | `sJBh/Cd2G8sUFBOKF99n+LLJHfpzImZsXsrepIPK6XQ=` |
 
-每个版本要放的文件：
+发布脚本当前上传北京 `oss://heihuzi/captain-agents/stable/`，profile `heihuzi-cn`，region `cn-beijing`。三个平台的安装文件在版本目录中只新增、不覆盖；文件大小和 SHA-256 全部从公网复核后，才更新清单。公开的仅限安装包和已签名清单。
 
-| 文件 | 放在哪 | 谁用 |
-|---|---|---|
-| `captain-agents_<版本号>_macos-arm64.zip` | 桶的 `captain-agents/stable/<版本号>/`，和发布页（同名、同一份） | 所有版本的应用、网页下载 |
-| `captain-agents_<版本号>_macos-x64.zip` | 同上 | Intel Mac |
-| `captain-agents_<版本号>_windows-x64.exe` | 同上 | Windows x64 安装及应用内更新（代码已补，待 Windows 流水线验收） |
-| `latest-v2.json` | 桶的 `captain-agents/stable/latest-v2.json`，和发布页（逐字节相同） | 0.2.2 起的应用 |
-| `latest.json` | 只放发布页 | 已经发出去的 0.2.0、0.2.1（它们只认发布页，改不了） |
+0.3.2 是一次过渡版本：签名清单中保留东京和 GitHub 的旧客户端可用地址，并在旧东京 `captain-agents/stable/latest-v2.json` 同步同一清单。旧版会跳过不认识的北京地址，从旧来源完成这次升级。保留这些旧入口直到旧客户端不再需要，不能直接删掉。
 
-- 安装包文件名按桶的约定起：Mac 用 `captain-agents_<版本号>_macos-<架构>.zip`，Windows 用 `captain-agents_<版本号>_windows-x64.exe`。发布页也用同名文件，两处地址只差前缀。
-- 标签一律 `v` 加版本号。发布页的下载前缀是 `https://github.com/heihuzi-labs/captain-agents/releases/download/v<版本号>/`，桶的是 `https://heihuzi-prod-tokyo-downloads.oss-ap-northeast-1.aliyuncs.com/captain-agents/stable/<版本号>/`。
-- 发布页的跳转主机是实测的（2026-10-11）：`…/releases/latest/download/<文件>` 先跳到 `…/releases/download/<标签>/<文件>`（还在 `github.com`），再跳到 `release-assets.githubusercontent.com`；清单两次跳转、安装包一次，都在应用允许的 5 次以内。`objects.githubusercontent.com` 是 GitHub 以前用的文件主机，写进名单是留个余地：名单编进了发出去的应用，GitHub 哪天换回去，名单里没有它，老用户就收不到更新。桶的主机是清单地址的主机，自动在名单里，不用再写。装什么不靠主机把关，靠清单签名和安装包的大小、哈希、应用签名。
-- 桶里的规矩和各应用一致：整桶公开可读，只放能公开的安装包和清单，密钥、源码、内部资料不许放；版本目录传上去以后不改不删，安装包有问题就发更高的版本号；只用脚本传，不手工往桶里放文件。桶里唯一会被覆盖的文件是 `latest-v2.json`，脚本只允许换成版本不更低的清单。
-- 发布页上先建**草稿**，把安装包和两份清单都传上去，核对无误后再点发布。草稿不算“最新版本”，发布的一瞬间固定入口才指到新清单。不要标成“预发布”：预发布不算最新版本，用户收不到。
-- 发布页上只能有这一种发布，而且两份清单都要有：缺了 `latest.json`，0.2.0、0.2.1 检查更新会报错；缺了 `latest-v2.json`，新版本在桶问不到时也会报错。
-- 已知的限制：应用下载不走系统代理。桶和发布页都连不上的网络环境下检查和下载会失败（应用照常能用，只是提示没能检查更新）。
+更新发布步骤：
+
+1. 流水线构建并核对三种原生安装包，产生 `latest-v2.json` 和兼容 `latest.json`。
+2. `npm run update:store` 验签后上传北京桶，完整回读。过渡版本的东京镜像也必须存在并核对；GitHub 保留同一份资产。
+3. 固定域名在 DMIT `dmit-lax` 的 `/opt/heihuzi-download-control/captain-agents/stable/` 提供清单；备份旧清单后用临时文件加改名更新，公网回读必须逐字节一致。固定域名由 Caddy 提供，版本下载路径返回 302 到北京桶；网页 `/apps/.../files/...` 的登录检查和计数保留。
+4. 北京桶、旧东京入口和 GitHub 的 `latest-v2.json` 保持同一版本和签名。旧版 `latest.json` 继续保留在 GitHub。
+5. 后续更换存储仅改发布配置、服务端跳转及重新签署的清单，无需重新构建客户端或更换公钥。固定入口的清单必须随每次发版一起更新，否则已有客户端会一直看到旧版。
+
+签名决定可信文件，HTTPS 决定传输保护；仍校验文件大小、SHA-256 和应用签名。无论来源地址如何变化，这些检查不得省略。应用下载仍不使用系统代理。
 
 ## 苹果签名和公证
 
@@ -92,7 +88,7 @@ npm run update:key -- /自己的离线密钥目录/update-private.pem /自己的
 | 13 | 负责人 | 从公网实测：拿上一版应用的副本，`node test/e2e/update-real.ts <应用> <新版本号> - - - <输出目录>`；每种芯片各测一次（英特尔版在苹果芯片的 Mac 上会经 Rosetta 运行） | 原位置换成新版，和发布页上的包解出来的应用一致 |
 | 14 | 负责人 | 在本文件末尾记一条发版记录 | |
 
-第 11、12 步的命令（每种安装包一个 `--package`）：
+第 11、12 步的命令（每种安装包一个 `--package`，完成后按上文同步固定域名及旧入口）：
 
 ```bash
 npm run update:store -- \
@@ -101,7 +97,7 @@ npm run update:store -- \
   --package 'darwin-arm64=<目录>/captain-agents_<版本号>_macos-arm64.zip' \
   --package 'darwin-x64=<目录>/captain-agents_<版本号>_macos-x64.zip' \
   --package 'win32-x64=<目录>/captain-agents_<版本号>_windows-x64.exe' \
-  --profile '<本机阿里云命令行的登记名>'
+  --profile heihuzi-cn
 ```
 
 为什么是这个顺序：发布页一公开，0.2.0、0.2.1 和“桶问不到”的新版本就能看到新版，这时清单里排第一的桶地址可能还没有文件，应用会直接换到发布页去下，不受影响。新版本先问的是桶里的清单，它最后才换；它一换，桶和发布页两处的安装包都已经齐了。中途停在任何一步，用户看到的要么还是上一版，要么是能下到的新版。
