@@ -19,6 +19,7 @@ import type { Effort, Who } from './roster.ts';
 export type ChatMember = { who: Who; effort: Effort; fast?: true; readOnly?: true; job?: string };
 export type Chat = {
   id: string; project: string; repo: string; title: string;
+  sourceRef?: string | null;          // 创建时的来源分支；null 表示 detached HEAD，旧群缺省沿用 main
   base: string;                       // 开群时的起点提交
   branch: string; worktree: string;   // 群共用的分支和副本（平台建、平台删，选手的活不拥有它）
   members: ChatMember[];
@@ -176,7 +177,8 @@ export async function createChat(options: CreateChatOptions): Promise<Chat> {
   });
   if (settings.archivedProjects.includes(project.name)) throw new Error('这个项目已归档，请先取消归档再开群。');
   for (const member of members) checkChoice(settings.workers, member);
-  const base = (await git(project.repo, ['rev-parse', '--verify', 'refs/heads/main^{commit}'])).trim();
+  const sourceRef = (await git(project.repo, ['symbolic-ref', '-q', 'HEAD'], [0, 1])).trim() || null;
+  const base = (await git(project.repo, ['rev-parse', '--verify', `${sourceRef ?? 'HEAD'}^{commit}`])).trim();
   const suffix = project.name.replace(/[^a-zA-Z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
   const prefix = `${stamp()}-${suffix}`;
   await mkdir(chatsDir(), { recursive: true });
@@ -188,7 +190,7 @@ export async function createChat(options: CreateChatOptions): Promise<Chat> {
   let chat: Chat | undefined, added = false;
   try {
     chat = { id, project: project.name, repo: project.repo, title: options.title?.trim() ?? project.label ?? project.name,
-      base, branch: `xa/chat-${id}`, worktree: await worktreePath(project, `chat-${id}`), members,
+      base, sourceRef, branch: `xa/chat-${id}`, worktree: await worktreePath(project, `chat-${id}`), members,
       hopLimit: options.hopLimit ?? HOP_LIMIT, state: 'open', created: new Date().toISOString(), queue: [],
       ...(settings.networkAllowed ? { network: true } : {}) };
     await addWorktree(chat); added = true;
