@@ -368,7 +368,7 @@ export async function startTeam(file: string, options: TeamStartOptions): Promis
     const shown = dirty.slice(0, 5).join('、') + (dirty.length > 5 ? ` 等 ${dirty.length} 个` : '');
     throw new Error(`主目录有 ${dirty.length} 个文件没提交（${shown}），选手的副本看不到这些改动。先把要给选手的东西提交（比如骨架和共同约定，提交到分支并用 --base 指向它）；确认这些改动和这件活无关，再加 --dirty-ok 派活。`);
   }
-  const base = (await git(project.repo, ['rev-parse', '--verify', '--end-of-options', `${options.base || 'main'}^{commit}`])).trim();
+  const base = (await git(project.repo, ['rev-parse', '--verify', '--end-of-options', `${options.base || 'HEAD'}^{commit}`])).trim();
   let task: string;
   try { task = (await readFile(resolve(file), 'utf8')).trim(); }
   catch (e) { if (hasCode(e, 'ENOENT')) throw new Error(`找不到题目文件 ${file}。请确认路径后重试。`); throw e; }

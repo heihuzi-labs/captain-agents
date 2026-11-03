@@ -137,7 +137,9 @@ async function finishBusy(chat: Chat) {
 // 否则不动副本，在群里说明落后了多少、为什么没同步（同一个主线提交只说一次），由负责人处理。
 export async function syncWithMain(chat: Chat) {
   try {
-    const main = (await git(chat.repo, ['rev-parse', '--verify', 'refs/heads/main^{commit}'])).trim();
+    // 固定跟踪建群时的来源分支，不随用户后来切换分支而改变。
+    const source = chat.sourceRef === undefined ? 'refs/heads/main' : chat.sourceRef;
+    const main = source === null ? chat.base : (await git(chat.repo, ['rev-parse', '--verify', `${source}^{commit}`])).trim();
     const behind = Number((await git(chat.worktree, ['rev-list', '--count', `HEAD..${main}`])).trim());
     if (!behind) { if (chat.behind) await updateChat(chat.id, c => { delete c.behind; }); return; }
     const dirty = (await git(chat.worktree, ['status', '--porcelain'])).trim() !== '';

@@ -66,7 +66,7 @@ export async function dispatch(file: string, options: RunOptions, start: typeof 
     const shown = dirty.slice(0, 5).join('、') + (dirty.length > 5 ? ` 等 ${dirty.length} 个` : '');
     throw new Error(`主目录有 ${dirty.length} 个文件没提交（${shown}），选手的副本看不到这些改动。先把要给选手的东西提交（比如骨架和共同约定，提交到分支并用 --base 指向它）；确认这些改动和这件活无关，再加 --dirty-ok 派活。`);
   }
-  const base = (await git(project.repo, ['rev-parse', '--verify', '--end-of-options', `${options.base || 'main'}^{commit}`])).trim();
+  const base = (await git(project.repo, ['rev-parse', '--verify', '--end-of-options', `${options.base || 'HEAD'}^{commit}`])).trim();
   // 现成副本只能借用已登记的群副本，不能借这个入口扩大可写路径。
   const chat = options.chat ? await readChat(options.chat.id) : undefined;
   if (!!options.worktree !== !!chat) throw new Error('使用群副本时必须同时指定 worktree 和 chat。');

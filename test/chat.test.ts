@@ -119,3 +119,17 @@ test('改群名：去掉首尾空白，只改名字；空的、太长、带控�
   for (const bad of ['', '   ', 'x'.repeat(101), 'a\nb', 5 as unknown as string]) await assert.rejects(renameChat('chat-one', bad), /群名请写/);
   await assert.rejects(renameChat('nope', '名字'), /找不到/);
 });
+
+ test('建群使用当前分支并支持没有 main 和 detached HEAD', async t => {
+  const { git } = await import('../src/core/worktree.ts');
+  const c = await chatContext(t, true);
+  await c.add([]);
+  await git(c.repo, ['branch', '-m', 'company/test']);
+  const chat = await createChat({project: '测试', members: ['codex:high']});
+  assert.equal(chat.base, c.base);
+  assert.equal(chat.sourceRef, 'refs/heads/company/test');
+  await git(c.repo, ['checkout', '--detach', 'HEAD']);
+  const detached = await createChat({project: '测试', members: ['codex:high']});
+  assert.equal(detached.base, c.base);
+  assert.equal(detached.sourceRef, null);
+ });

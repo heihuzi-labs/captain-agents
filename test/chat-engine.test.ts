@@ -220,6 +220,7 @@ describe('项目群聊推进', { concurrency: 1 }, () => {
 
   test('成员动手前群副本自动跟上主线：干净就快进；有没提交的改动就不动，只在群里说一次', async t => {
     const c = await setup(t, { grok: ['第一轮完成', '第二轮完成', '第三轮完成', '第四轮完成'] });
+    await git(c.repo, ['branch', '-m', 'company/current']);
     const chat = await c.open();
     const advance = async (name: string) => {
       await writeFile(join(c.repo, name), name);
